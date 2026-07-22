@@ -214,3 +214,38 @@ class InventoryFileKind(StrEnum):
     SNAPSHOT = "SNAPSHOT"
     MANIFEST = "MANIFEST"
     OTHER = "OTHER"
+
+
+class StatementKind(StrEnum):
+    """Tipo de un CanonicalStatement dentro de un CanonicalParagraph."""
+
+    IF = "IF"
+    EVALUATE = "EVALUATE"
+    MOVE = "MOVE"
+    SET = "SET"
+    COMPUTE = "COMPUTE"
+    GO_TO = "GO_TO"
+    PERFORM = "PERFORM"
+    EXEC_SQL = "EXEC_SQL"
+    OTHER = "OTHER"
+
+
+class LocationKind(StrEnum):
+    """Confiabilidad de la ubicacion fuente (source_file/line) de un elemento
+    canonico. Distingue una ubicacion fisica real de una posicion dentro del
+    stream ya expandido por COPY, cuya atribucion a un archivo fisico no
+    puede demostrarse sin un preprocesador propio (fuera de alcance V1)."""
+
+    EXACT = "EXACT"
+    PREPROCESSED_STREAM = "PREPROCESSED_STREAM"
+    UNKNOWN = "UNKNOWN"
+
+
+class BranchKind(StrEnum):
+    """Rama de control representada por un CanonicalStatement hijo
+    (parent_statement_id) dentro de un IF o EVALUATE aplanado."""
+
+    THEN = "THEN"
+    ELSE = "ELSE"
+    WHEN = "WHEN"
+    WHEN_OTHER = "WHEN_OTHER"

@@ -19,6 +19,7 @@ from .canonical import (
     CanonicalParagraph,
     CanonicalProgram,
     CanonicalSqlAccess,
+    CanonicalStatement,
 )
 from .context_package import (
     ApplicableParameterRow,
@@ -45,6 +46,7 @@ from .enums import (
     ApplicabilityStatus,
     AttributionScope,
     BatchContextStatus,
+    BranchKind,
     CandidateStatus,
     ClaimField,
     CompletenessStatus,
@@ -54,12 +56,14 @@ from .enums import (
     GuardrailVerdict,
     InclusionReason,
     InventoryFileKind,
+    LocationKind,
     NodeLabel,
     PipelineStage,
     RelationshipType,
     Severity,
     SourceFormat,
     StageStatus,
+    StatementKind,
     TableAccessOperation,
     TableEffectOperation,
 )
@@ -88,6 +92,7 @@ __all__ = [
     "ApplicabilityStatus",
     "AttributionScope",
     "BatchContextStatus",
+    "BranchKind",
     "CandidateStatus",
     "ClaimField",
     "CompletenessStatus",
@@ -97,12 +102,14 @@ __all__ = [
     "GuardrailVerdict",
     "InclusionReason",
     "InventoryFileKind",
+    "LocationKind",
     "NodeLabel",
     "PipelineStage",
     "RelationshipType",
     "Severity",
     "SourceFormat",
     "StageStatus",
+    "StatementKind",
     "TableAccessOperation",
     "TableEffectOperation",
     # manifest
@@ -124,6 +131,7 @@ __all__ = [
     "CanonicalParagraph",
     "CanonicalProgram",
     "CanonicalSqlAccess",
+    "CanonicalStatement",
     # dependencies
     "ParagraphDependency",
     # semantic graph
