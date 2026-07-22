@@ -12,6 +12,8 @@ license = { text = "Proprietary" }
 dependencies = [
     "pydantic>=2.6,<3",
     "pydantic-settings>=2.2,<3",
+    "lxml>=5.2,<6",
+    "typer>=0.12,<1",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +51,10 @@ plugins = ["pydantic.mypy"]
 init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
+
+[[tool.mypy.overrides]]
+module = "lxml.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

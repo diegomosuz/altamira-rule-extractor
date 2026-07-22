@@ -1,0 +1,301 @@
+"""PipelineRunner minimo: secuencia RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED.
+
+No es un framework generico de pipelines: es una funcion lineal que
+ejecuta exactamente estas cuatro etapas, persiste RunState atomicamente
+en cada transicion, y aplica una idempotencia explicita y acotada:
+
+- RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
+  SUCCEEDED, no se vuelve a copiar ni a hashear (y `source_zip` se
+  ignora). Si el run_id es nuevo pero ya existe un `input/package.zip`
+  sin RunState asociado, se rechaza para no sobrescribir una ejecucion
+  ajena.
+- VALIDATED: no persiste artefacto propio (solo alimenta a las etapas
+  siguientes), por lo que recalcularla en cada llamada es deliberado y
+  no tiene efectos secundarios.
+- EXTRACTED: si `work/extracted` ya existe y quedo SUCCEEDED, no se
+  vuelve a extraer. Si una ejecucion previa quedo a medias, se limpian
+  los temporales `work/extracted.tmp-*` antes de reintentar.
+- INVENTORIED: si `artifacts/01-inventory.json` ya existe, se valida
+  antes de reutilizarlo; si esta corrupto se reconstruye.
+
+En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
+registro en RunState.stages, que se reemplaza en los reintentos.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import secrets
+import shutil
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
+
+from ..config import Settings
+from ..contracts.enums import PipelineStage, StageStatus
+from ..contracts.inventory import Inventory
+from ..contracts.run_state import RunState, StageExecution
+from .artifact_store import atomic_write_json
+from .errors import ExtractionError, PackageValidationError, PipelineError, RunConflictError
+from .inventory_builder import build_inventory
+from .package_validator import ValidatedPackage, validate_package
+from .safe_extractor import extract_package
+
+_COPY_CHUNK_SIZE = 1024 * 1024
+
+
+def generate_run_id() -> str:
+    """run_id con precision de microsegundo + sufijo aleatorio (evita colisiones)."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    return f"{timestamp}-{secrets.token_hex(4)}"
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _upsert_stage(state: RunState, execution: StageExecution) -> None:
+    stages = list(state.stages)
+    for index, existing in enumerate(stages):
+        if existing.stage == execution.stage:
+            stages[index] = execution
+            state.stages = stages
+            return
+    stages.append(execution)
+    state.stages = stages
+
+
+def _stage_succeeded(state: RunState, stage: PipelineStage) -> bool:
+    return any(s.stage == stage and s.status == StageStatus.SUCCEEDED for s in state.stages)
+
+
+def _mark_failed(
+    state: RunState, run_json_path: Path, stage: PipelineStage, started_at: datetime, error: str
+) -> RunState:
+    finished_at = _now()
+    _upsert_stage(
+        state,
+        StageExecution(
+            stage=stage,
+            status=StageStatus.FAILED,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=(finished_at - started_at).total_seconds(),
+            error=error,
+        ),
+    )
+    state.current_stage = PipelineStage.FAILED
+    state.updated_at = finished_at
+    atomic_write_json(run_json_path, state)
+    return state
+
+
+def _mark_succeeded(
+    state: RunState,
+    run_json_path: Path,
+    stage: PipelineStage,
+    started_at: datetime,
+    warnings: list[str] | None = None,
+) -> RunState:
+    finished_at = _now()
+    _upsert_stage(
+        state,
+        StageExecution(
+            stage=stage,
+            status=StageStatus.SUCCEEDED,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=(finished_at - started_at).total_seconds(),
+            warnings=warnings or [],
+        ),
+    )
+    state.current_stage = stage
+    state.updated_at = finished_at
+    atomic_write_json(run_json_path, state)
+    return state
+
+
+def _load_or_init_state(run_json_path: Path, run_id: str, package_filename: str) -> RunState:
+    if run_json_path.is_file():
+        return RunState.model_validate_json(run_json_path.read_text(encoding="utf-8"))
+
+    now = _now()
+    return RunState(
+        run_id=run_id,
+        package_filename=package_filename,
+        current_stage=PipelineStage.RECEIVED,
+        stages=[],
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _copy_and_hash(source: Path, destination: Path) -> str:
+    """Copia `source` a `destination` calculando el SHA-256 de los bytes escritos.
+
+    El hash se deriva de lo que realmente se persiste (no de una lectura
+    posterior del origen): protege contra que el archivo externo cambie
+    durante la copia.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=".package.", suffix=".zip.tmp", dir=str(destination.parent)
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with source.open("rb") as src, os.fdopen(fd, "wb") as dst:
+            while True:
+                chunk = src.read(_COPY_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                dst.write(chunk)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.replace(tmp_path, destination)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    return digest.hexdigest()
+
+
+def _run_received(
+    state: RunState, source_zip: Path, input_zip_path: Path, run_json_path: Path
+) -> RunState:
+    if _stage_succeeded(state, PipelineStage.RECEIVED) and input_zip_path.is_file():
+        return state  # ya recibido: source_zip se ignora deliberadamente.
+
+    is_fresh_run = len(state.stages) == 0
+    if input_zip_path.exists():
+        if is_fresh_run:
+            raise RunConflictError(
+                f"{input_zip_path} ya existe pero no hay RunState previo para este run_id; "
+                "no se sobrescribe una ejecucion ajena"
+            )
+        input_zip_path.unlink()  # residuo de un intento RECEIVED fallido: se limpia y reintenta.
+
+    started_at = _now()
+    try:
+        package_hash = _copy_and_hash(source_zip, input_zip_path)
+    except OSError as exc:
+        return _mark_failed(state, run_json_path, PipelineStage.RECEIVED, started_at, str(exc))
+
+    state.source_package_hash = package_hash
+    return _mark_succeeded(state, run_json_path, PipelineStage.RECEIVED, started_at)
+
+
+def _run_validated(
+    state: RunState, input_zip_path: Path, settings: Settings, run_json_path: Path
+) -> tuple[RunState, ValidatedPackage | None]:
+    started_at = _now()
+    try:
+        validated = validate_package(input_zip_path, settings)
+    except PackageValidationError as exc:
+        state = _mark_failed(state, run_json_path, PipelineStage.VALIDATED, started_at, str(exc))
+        return state, None
+
+    state = _mark_succeeded(state, run_json_path, PipelineStage.VALIDATED, started_at)
+    return state, validated
+
+
+def _run_extracted(
+    state: RunState,
+    input_zip_path: Path,
+    work_dir: Path,
+    extracted_dir: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    if _stage_succeeded(state, PipelineStage.EXTRACTED) and extracted_dir.is_dir():
+        return state
+
+    if work_dir.is_dir():
+        # work_dir puede no existir aun (primer intento) o, en un fallo previo
+        # ajeno a esta etapa, existir como algo que no es un directorio; en
+        # ambos casos no hay residuos propios de EXTRACTED que limpiar.
+        for stray in work_dir.glob("extracted.tmp-*"):
+            shutil.rmtree(stray, ignore_errors=True)
+        if extracted_dir.exists():
+            shutil.rmtree(extracted_dir)
+
+    started_at = _now()
+    try:
+        extract_package(input_zip_path, work_dir, settings)
+    except ExtractionError as exc:
+        return _mark_failed(state, run_json_path, PipelineStage.EXTRACTED, started_at, str(exc))
+
+    return _mark_succeeded(state, run_json_path, PipelineStage.EXTRACTED, started_at)
+
+
+def _run_inventoried(
+    state: RunState,
+    extracted_dir: Path,
+    inventory_path: Path,
+    validated: ValidatedPackage | None,
+    run_json_path: Path,
+) -> RunState:
+    if inventory_path.is_file():
+        try:
+            existing = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
+        except ValueError:
+            existing = None
+        if existing is not None and existing.run_id == state.run_id:
+            if _stage_succeeded(state, PipelineStage.INVENTORIED):
+                return state
+            return _mark_succeeded(state, run_json_path, PipelineStage.INVENTORIED, _now())
+        inventory_path.unlink()  # inventario previo invalido o de otro run: se descarta.
+
+    if validated is None:
+        # VALIDATED fallo o no se ejecuto en esta llamada: no hay Manifest disponible.
+        raise PipelineError("no se puede construir el inventario sin un ValidatedPackage")
+
+    started_at = _now()
+    try:
+        inventory = build_inventory(
+            extracted_dir, state.run_id, state.source_package_hash or "", validated.manifest
+        )
+        atomic_write_json(inventory_path, inventory)
+    except OSError as exc:
+        return _mark_failed(state, run_json_path, PipelineStage.INVENTORIED, started_at, str(exc))
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.INVENTORIED, started_at, warnings=inventory.warnings
+    )
+
+
+def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
+    """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED para `source_zip`.
+
+    Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
+    una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
+    ignora y se continua desde el estado persistido (reanudacion minima).
+    """
+    if run_id is None:
+        run_id = generate_run_id()
+
+    run_dir = settings.runs_dir / run_id
+    run_json_path = run_dir / "run.json"
+    input_zip_path = run_dir / "input" / "package.zip"
+    work_dir = run_dir / "work"
+    extracted_dir = work_dir / "extracted"
+    inventory_path = run_dir / "artifacts" / "01-inventory.json"
+
+    state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
+
+    state = _run_received(state, source_zip, input_zip_path, run_json_path)
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    state, validated = _run_validated(state, input_zip_path, settings, run_json_path)
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    state = _run_extracted(state, input_zip_path, work_dir, extracted_dir, settings, run_json_path)
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_inventoried(state, extracted_dir, inventory_path, validated, run_json_path)
