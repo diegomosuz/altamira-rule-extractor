@@ -1,0 +1,29 @@
+version: "1.0"
+
+terms:
+  - key: requested_amount
+    functional_name: "importe solicitado"
+    definition: "Monto monetario solicitado para la operación."
+    entity_type: "monetary_amount"
+    authoritative_source: "V1 controlled glossary"
+    source_kind: "CURATED_CONFIG"
+    match:
+      semantic_tags: [amount]
+
+  - key: applicable_daily_limit
+    functional_name: "límite diario aplicable"
+    definition: "Umbral diario utilizado para validar la operación."
+    entity_type: "monetary_threshold"
+    authoritative_source: "V1 controlled glossary"
+    source_kind: "CURATED_CONFIG"
+    match:
+      semantic_tags: [amount_threshold]
+
+  - key: result_code
+    functional_name: "código de resultado"
+    definition: "Código técnico que representa el resultado de la validación."
+    entity_type: "result_code"
+    authoritative_source: "V1 controlled glossary"
+    source_kind: "CURATED_CONFIG"
+    match:
+      semantic_tags: [return_code]

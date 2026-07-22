@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local/schemas/semantic-graph.schema.json",
+  "title": "SemanticGraph",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_package_hash",
+    "nodes",
+    "relationships",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "source_package_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "labels",
+          "properties"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": [
+                "Country",
+                "Application",
+                "Operation",
+                "Program",
+                "Paragraph",
+                "DataItem",
+                "Decision",
+                "Table",
+                "ParameterTable",
+                "ParameterEntry",
+                "BatchJob",
+                "DomainTerm"
+              ]
+            }
+          },
+          "properties": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "from_id",
+          "to_id",
+          "properties"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "HAS_APPLICATION",
+              "HAS_OPERATION",
+              "EXECUTES_VIA",
+              "CONTAINS",
+              "HAS_DECISION",
+              "LEADS_TO",
+              "USES",
+              "READS",
+              "WRITES",
+              "UPDATES",
+              "INSERTS",
+              "HAS_ENTRY",
+              "PRECEDED_BY",
+              "TRIGGERS",
+              "HAS_DOMAIN_TERM",
+              "DATA_DEPENDS_ON",
+              "CONTROL_DEPENDS_ON"
+            ]
+          },
+          "from_id": {
+            "type": "string"
+          },
+          "to_id": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

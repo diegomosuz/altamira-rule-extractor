@@ -1,0 +1,623 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local/schemas/context-package.schema.json",
+  "title": "ContextPackage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate",
+    "scope",
+    "code_slice",
+    "data_context",
+    "decision",
+    "effects",
+    "batch_context",
+    "domain_glossary",
+    "evidence",
+    "completeness"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "decision_id",
+        "detector_id",
+        "detector_version",
+        "detector_score",
+        "status"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detector_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detector_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detector_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "status": {
+          "const": "DETECTED_CANDIDATE"
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "country",
+        "application",
+        "operation",
+        "program",
+        "program_version",
+        "paragraph",
+        "source_file",
+        "line_start",
+        "line_end",
+        "source_package_hash"
+      ],
+      "properties": {
+        "country": {
+          "type": "string"
+        },
+        "application": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "logical_name",
+            "description"
+          ],
+          "properties": {
+            "logical_name": {
+              "type": "string"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "program": {
+          "type": "string"
+        },
+        "program_version": {
+          "type": "string"
+        },
+        "paragraph": {
+          "type": "string"
+        },
+        "source_file": {
+          "type": "string"
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_package_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "code_slice": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paragraph_id",
+          "paragraph",
+          "source_file",
+          "source_text",
+          "line_start",
+          "line_end",
+          "inclusion_reason",
+          "evidence_ids"
+        ],
+        "properties": {
+          "paragraph_id": {
+            "type": "string"
+          },
+          "paragraph": {
+            "type": "string"
+          },
+          "source_file": {
+            "type": "string"
+          },
+          "source_text": {
+            "type": "string"
+          },
+          "line_start": {
+            "type": "integer"
+          },
+          "line_end": {
+            "type": "integer"
+          },
+          "inclusion_reason": {
+            "enum": [
+              "CANDIDATE",
+              "DATA_DEPENDENCY",
+              "CONTROL_DEPENDENCY",
+              "BOTH"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "data_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parameter_tables",
+        "transactional_tables_read"
+      ],
+      "properties": {
+        "parameter_tables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "snapshot_date",
+              "predicates",
+              "applicability_status",
+              "applicable_rows",
+              "context_rows",
+              "evidence_ids"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "snapshot_date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              },
+              "predicates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resolved_predicates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "unresolved_predicates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "applicability_status": {
+                "enum": [
+                  "EXACT",
+                  "PARTIAL",
+                  "UNRESOLVED",
+                  "NOT_APPLICABLE"
+                ]
+              },
+              "applicable_rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "values",
+                    "approved_for_rule_text"
+                  ],
+                  "properties": {
+                    "values": {
+                      "type": "object"
+                    },
+                    "approved_for_rule_text": {
+                      "const": true
+                    }
+                  }
+                }
+              },
+              "context_rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "values",
+                    "approved_for_rule_text"
+                  ],
+                  "properties": {
+                    "values": {
+                      "type": "object"
+                    },
+                    "approved_for_rule_text": {
+                      "const": false
+                    }
+                  }
+                }
+              },
+              "evidence_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "transactional_tables_read": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "evidence_ids"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "evidence_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expression",
+        "normalized_expression",
+        "operands",
+        "rule_type",
+        "outcome_code",
+        "evidence_ids"
+      ],
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "normalized_expression": {
+          "type": "string"
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule_type": {
+          "type": "string"
+        },
+        "outcome_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "return_codes",
+        "table_effects"
+      ],
+      "properties": {
+        "return_codes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "approved_for_rule_text",
+              "evidence_ids"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "approved_for_rule_text": {
+                "type": "boolean"
+              },
+              "evidence_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "table_effects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "table",
+              "operation",
+              "attribution_scope",
+              "approved_for_rule_text",
+              "evidence_ids"
+            ],
+            "properties": {
+              "table": {
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "WRITES",
+                  "UPDATES",
+                  "INSERTS"
+                ]
+              },
+              "attribution_scope": {
+                "enum": [
+                  "DIRECT",
+                  "DEPENDENCY_SLICE",
+                  "PROGRAM_CONTEXT"
+                ]
+              },
+              "approved_for_rule_text": {
+                "type": "boolean"
+              },
+              "evidence_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "batch_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "downstream_jobs"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE"
+          ]
+        },
+        "downstream_jobs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "domain_glossary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "technical_name",
+          "semantic_tag",
+          "domain_term_id",
+          "functional_name",
+          "definition",
+          "entity_type",
+          "source_kind",
+          "authoritative_source",
+          "confidence",
+          "evidence_ids"
+        ],
+        "properties": {
+          "technical_name": {
+            "type": "string"
+          },
+          "semantic_tag": {
+            "type": "string"
+          },
+          "domain_term_id": {
+            "type": "string"
+          },
+          "functional_name": {
+            "type": "string"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "authoritative_source": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_id",
+          "kind",
+          "source_file",
+          "line_start",
+          "line_end",
+          "source_package_hash"
+        ],
+        "properties": {
+          "evidence_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "source_file": {
+            "type": "string"
+          },
+          "line_start": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line_end": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_package_hash": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "D1",
+        "D2",
+        "D3",
+        "D4",
+        "D5",
+        "D6",
+        "D7"
+      ],
+      "properties": {
+        "D1": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        },
+        "D2": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        },
+        "D3": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        },
+        "D4": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        },
+        "D5": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        },
+        "D6": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        },
+        "D7": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "NOT_AVAILABLE",
+            "ERROR"
+          ]
+        }
+      }
+    }
+  }
+}

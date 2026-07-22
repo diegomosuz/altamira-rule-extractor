@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="altamira-package">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="country">
+          <xs:complexType>
+            <xs:attribute name="code" type="xs:string" use="required"/>
+            <xs:attribute name="name" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="application">
+          <xs:complexType>
+            <xs:attribute name="name" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="operation">
+          <xs:complexType>
+            <xs:attribute name="logical-name" type="xs:string" use="required"/>
+            <xs:attribute name="description" type="xs:string" use="optional"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="implementation">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="entry-program" type="xs:string" minOccurs="1" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="version" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="source">
+          <xs:complexType>
+            <xs:attribute name="format" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="AUTO"/>
+                  <xs:enumeration value="FIXED"/>
+                  <xs:enumeration value="FREE"/>
+                  <xs:enumeration value="TANDEM"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="encoding" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="parameter-tables" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="table" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="name" type="xs:string" use="required"/>
+                  <xs:attribute name="ddl" type="xs:string" use="optional"/>
+                  <xs:attribute name="snapshot" type="xs:string" use="optional"/>
+                  <xs:attribute name="snapshot-date" type="xs:date" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="schema-version" type="xs:string" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

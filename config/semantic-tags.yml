@@ -1,0 +1,48 @@
+version: "1.0"
+
+allowed_tags:
+  - return_code
+  - sqlcode
+  - amount
+  - amount_threshold
+  - account_id
+  - customer_id
+  - operation_type
+  - customer_segment
+  - status
+  - status_flag
+  - date
+  - currency
+  - rate
+  - percentage
+  - counter
+  - generic_code
+  - unknown
+
+rules:
+  - id: return-code-name
+    tag: return_code
+    name_regex: "(?i).*(COD|CODE).*(RET|RETURN|RESP).*"
+    base_confidence: 0.75
+  - id: sqlcode-exact
+    tag: sqlcode
+    name_regex: "(?i)^SQLCODE$"
+    base_confidence: 1.0
+  - id: amount-name
+    tag: amount
+    name_regex: "(?i).*(IMPORTE|MONTO|AMOUNT).*"
+    requires_numeric_pic: true
+    base_confidence: 0.80
+  - id: threshold-name
+    tag: amount_threshold
+    name_regex: "(?i).*(LIMITE|TOPE|THRESHOLD).*"
+    requires_numeric_pic: true
+    base_confidence: 0.85
+  - id: operation-type
+    tag: operation_type
+    name_regex: "(?i).*(TIPO).*(OPER|OP).*"
+    base_confidence: 0.75
+  - id: customer-segment
+    tag: customer_segment
+    name_regex: "(?i).*(SEGMENTO|SEGMENT).*"
+    base_confidence: 0.80
