@@ -19,6 +19,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "pytest>=8.2",
+    "jsonschema>=4.18",
 ]
 
 [tool.setuptools.packages.find]
@@ -42,6 +43,12 @@ strict = true
 warn_unused_ignores = true
 namespace_packages = true
 explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
