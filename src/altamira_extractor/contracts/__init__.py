@@ -59,6 +59,7 @@ from .enums import (
     InventoryFileKind,
     LocationKind,
     NodeLabel,
+    ParseSupportStatus,
     PipelineStage,
     RelationshipType,
     Severity,
@@ -82,6 +83,16 @@ from .manifest import (
 )
 from .rule_draft import Claim, RuleDraft
 from .run_state import RunState, StageExecution
+from .semantic_enrichment import (
+    DataItemDomainTermMapping,
+    DataItemSemanticTag,
+    DomainTermRecord,
+    ParameterColumnDefinition,
+    ParameterEntryRecord,
+    ParameterTableRecord,
+    SemanticEnrichmentArtifact,
+    SemanticTagRuleMatch,
+)
 from .semantic_graph import GraphNode, GraphRelationship, SemanticGraph
 
 __all__ = [
@@ -107,6 +118,7 @@ __all__ = [
     "InventoryFileKind",
     "LocationKind",
     "NodeLabel",
+    "ParseSupportStatus",
     "PipelineStage",
     "RelationshipType",
     "Severity",
@@ -140,6 +152,15 @@ __all__ = [
     "DependencyArtifact",
     "DependencyEvidence",
     "ParagraphDependency",
+    # semantic enrichment
+    "DataItemDomainTermMapping",
+    "DataItemSemanticTag",
+    "DomainTermRecord",
+    "ParameterColumnDefinition",
+    "ParameterEntryRecord",
+    "ParameterTableRecord",
+    "SemanticEnrichmentArtifact",
+    "SemanticTagRuleMatch",
     # semantic graph
     "GraphNode",
     "GraphRelationship",

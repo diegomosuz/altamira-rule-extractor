@@ -95,7 +95,10 @@ def test_dependencies_built_produces_control_and_data_edges(tmp_path: Path) -> N
 
     state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.DEPENDENCIES_BUILT
+    # El pipeline ahora continua hasta SEMANTIC_ENRICHMENT_BUILT (Prompt 7);
+    # esta prueba solo verifica que DEPENDENCIES_BUILT en si mismo quedo
+    # SUCCEEDED con el artefacto correcto, no que sea la etapa final.
+    assert state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
     dependencies_executions = [
         s for s in state.stages if s.stage == PipelineStage.DEPENDENCIES_BUILT
     ]
@@ -135,7 +138,7 @@ def test_second_run_reuses_dependencies_artifact(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
 
     first_state = run_ingestion(zip_path, settings)
-    assert first_state.current_stage == PipelineStage.DEPENDENCIES_BUILT
+    assert first_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
 
     dependencies_path = (
         settings.runs_dir / first_state.run_id / "artifacts" / "03-dependencies.json"
@@ -150,7 +153,7 @@ def test_second_run_reuses_dependencies_artifact(tmp_path: Path) -> None:
     settings_missing_jar = _settings(tmp_path, parser_jar_path=tmp_path / "does-not-exist.jar")
     second_state = run_ingestion(zip_path, settings_missing_jar, run_id=first_state.run_id)
 
-    assert second_state.current_stage == PipelineStage.DEPENDENCIES_BUILT
+    assert second_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
     dependencies_executions = [
         s for s in second_state.stages if s.stage == PipelineStage.DEPENDENCIES_BUILT
     ]

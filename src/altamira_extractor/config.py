@@ -57,6 +57,14 @@ def _default_parser_jar_path() -> Path:
     return _discover_repo_root() / "parser" / "target" / "altamira-cobol-parser.jar"
 
 
+def _default_semantic_tags_path() -> Path:
+    return _discover_repo_root() / "config" / "semantic-tags.yml"
+
+
+def _default_domain_glossary_path() -> Path:
+    return _discover_repo_root() / "config" / "domain-glossary.example.yml"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -95,6 +103,12 @@ class Settings(BaseSettings):
     java_bin: str = Field(default="java")
     parser_jar_path: Path = Field(default_factory=_default_parser_jar_path)
     parser_timeout_seconds: float = Field(default=120.0, gt=0)
+
+    # Configuracion de parametria/semantic tagging (etapa
+    # SEMANTIC_ENRICHMENT_BUILT, ver pipeline/semantic_enrichment_stage.py).
+    semantic_tags_path: Path = Field(default_factory=_default_semantic_tags_path)
+    domain_glossary_path: Path = Field(default_factory=_default_domain_glossary_path)
+    max_parameter_entries_per_table: int = Field(default=10_000, gt=0)
 
 
 def load_settings() -> Settings:

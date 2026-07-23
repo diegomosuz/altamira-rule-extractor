@@ -59,3 +59,22 @@ class DependencyBuildError(PipelineError):
     source_package_hash). Fatal para la etapa completa: no hay reintento
     parcial posible cuando el prerequisito mismo esta roto.
     """
+
+
+class SemanticConfigError(PipelineError):
+    """`config/semantic-tags.yml` o `config/domain-glossary.example.yml`
+    ausentes, con YAML mal formado, con estructura invalida (campos
+    extra, regex invalida, confidence fuera de rango, rule_id/
+    functional_key/domain_term_id duplicado, un semantic_tag asignado a
+    mas de un DomainTerm) son errores de configuracion controlada: nunca
+    se degradan a warning ni a un resultado parcial silencioso.
+    """
+
+
+class SemanticEnrichmentBuildError(PipelineError):
+    """Precondicion de SEMANTIC_ENRICHMENT_BUILT incumplida: DEPENDENCIES_BUILT
+    no esta realmente completo, falta/invalida un CanonicalProgram, o un
+    DDL/CSV declarado en Manifest.parameter_tables no se puede verificar
+    con integridad (path ausente, fuera de work/extracted, hash
+    inconsistente con Inventory). Fatal para la etapa completa.
+    """

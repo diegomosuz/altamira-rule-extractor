@@ -1,8 +1,8 @@
 """PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
--> PARSED -> DEPENDENCIES_BUILT.
+-> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas seis etapas, persiste RunState atomicamente
+ejecuta exactamente estas siete etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -26,6 +26,11 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   PARSED este realmente completo y que cada CanonicalProgram siga siendo
   consistente antes de reutilizar o reconstruir por completo
   `artifacts/03-dependencies.json` (ver ese modulo).
+- SEMANTIC_ENRICHMENT_BUILT: tampoco se salta por `RunState`; delega en
+  `semantic_enrichment_stage.run_semantic_enrichment_stage`, que revalida
+  DEPENDENCIES_BUILT, CanonicalProgram, y la integridad de cada DDL/CSV
+  declarado en Manifest antes de reutilizar o reconstruir por completo
+  `artifacts/03b-semantic-enrichment.json` (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -55,12 +60,14 @@ from .errors import (
     ParserUnavailableError,
     PipelineError,
     RunConflictError,
+    SemanticEnrichmentBuildError,
 )
 from .inventory_builder import build_inventory
 from .package_validator import ValidatedPackage, validate_package
 from .parsed_stage import run_parsed_stage
 from .parser_client import ProLeapParserClient
 from .safe_extractor import extract_package
+from .semantic_enrichment_stage import run_semantic_enrichment_stage
 
 _COPY_CHUNK_SIZE = 1024 * 1024
 
@@ -377,9 +384,53 @@ def _run_dependencies_built(
     )
 
 
+def _run_semantic_enrichment_built(
+    state: RunState,
+    inventory_path: Path,
+    extracted_dir: Path,
+    canonical_dir: Path,
+    semantic_enrichment_path: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta SEMANTIC_ENRICHMENT_BUILT (ParameterLoader + SemanticTagger +
+    DomainTermMapper, Prompt 7 del runbook): nunca se salta por completo en
+    base a `RunState`. `run_semantic_enrichment_stage` siempre revalida las
+    precondiciones (DEPENDENCIES_BUILT realmente completo, CanonicalProgram
+    validos, DDL/CSV declarados integros) y reutiliza
+    `artifacts/03b-semantic-enrichment.json` solo si el resultado
+    recomputado es identico al existente; en caso contrario lo reconstruye
+    entero (ver semantic_enrichment_stage.py)."""
+    started_at = _now()
+    inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
+    try:
+        warnings = run_semantic_enrichment_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            inventory=inventory,
+            extracted_dir=extracted_dir,
+            canonical_dir=canonical_dir,
+            settings=settings,
+            semantic_enrichment_path=semantic_enrichment_path,
+        )
+    except SemanticEnrichmentBuildError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.SEMANTIC_ENRICHMENT_BUILT, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state,
+        run_json_path,
+        PipelineStage.SEMANTIC_ENRICHMENT_BUILT,
+        started_at,
+        warnings=warnings,
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
-    -> DEPENDENCIES_BUILT para `source_zip`.
+    -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -396,6 +447,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     inventory_path = run_dir / "artifacts" / "01-inventory.json"
     canonical_dir = run_dir / "artifacts" / "02-canonical"
     dependencies_path = run_dir / "artifacts" / "03-dependencies.json"
+    semantic_enrichment_path = run_dir / "artifacts" / "03b-semantic-enrichment.json"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -421,6 +473,18 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_dependencies_built(
+    state = _run_dependencies_built(
         state, inventory_path, canonical_dir, dependencies_path, run_json_path
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_semantic_enrichment_built(
+        state,
+        inventory_path,
+        extracted_dir,
+        canonical_dir,
+        semantic_enrichment_path,
+        settings,
+        run_json_path,
     )

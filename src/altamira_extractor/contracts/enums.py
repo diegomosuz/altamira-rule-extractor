@@ -1,7 +1,12 @@
 """Enums compartidos por los contratos tipados del pipeline.
 
 Los valores replican exactamente CLAUDE.md y los JSON Schemas
-existentes (schemas/*.json) — no son un diseno libre.
+existentes (schemas/*.json) — no son un diseno libre. Excepcion
+documentada: `PipelineStage.SEMANTIC_ENRICHMENT_BUILT` no esta en la
+lista original de CLAUDE.md (ese documento no reserva un estado para el
+Prompt 7 del runbook); se agrega por decision explicita del usuario para
+representar ParameterLoader/SemanticTagger/DomainTermMapper como una
+etapa propia entre DEPENDENCIES_BUILT y SEMANTIC_GRAPH_BUILT.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ class PipelineStage(StrEnum):
     INVENTORIED = "INVENTORIED"
     PARSED = "PARSED"
     DEPENDENCIES_BUILT = "DEPENDENCIES_BUILT"
+    SEMANTIC_ENRICHMENT_BUILT = "SEMANTIC_ENRICHMENT_BUILT"
     SEMANTIC_GRAPH_BUILT = "SEMANTIC_GRAPH_BUILT"
     SEMANTIC_GRAPH_LOADED = "SEMANTIC_GRAPH_LOADED"
     GRAPH_VALIDATED = "GRAPH_VALIDATED"
@@ -271,3 +277,14 @@ class BranchKind(StrEnum):
     ELSE = "ELSE"
     WHEN = "WHEN"
     WHEN_OTHER = "WHEN_OTHER"
+
+
+class ParseSupportStatus(StrEnum):
+    """Nivel de soporte al interpretar DDL/CSV de parametria
+    (docs/SUPPORTED_COMPLEXITY_STRATEGY.md): SUPPORTED = evidencia completa;
+    PARTIAL = evidencia parcial con warning; UNSUPPORTED = sin evidencia
+    utilizable, nunca se inventa contenido."""
+
+    SUPPORTED = "SUPPORTED"
+    PARTIAL = "PARTIAL"
+    UNSUPPORTED = "UNSUPPORTED"
