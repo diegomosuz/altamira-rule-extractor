@@ -78,3 +78,16 @@ class SemanticEnrichmentBuildError(PipelineError):
     con integridad (path ausente, fuera de work/extracted, hash
     inconsistente con Inventory). Fatal para la etapa completa.
     """
+
+
+class SemanticGraphBuildError(PipelineError):
+    """Precondicion de SEMANTIC_GRAPH_BUILT incumplida: SEMANTIC_ENRICHMENT_BUILT
+    no esta realmente completo, falta/invalida un CanonicalProgram, o
+    `03-dependencies.json`/`03b-semantic-enrichment.json` no validan, no
+    coinciden en run_id/source_package_hash con el run actual, o alguna de
+    sus referencias (from_paragraph_id/to_paragraph_id, data_item_id) no
+    resuelve contra el universo de Program/Paragraph/DataItem reconstruido
+    desde los CanonicalProgram actuales. Fatal para la etapa completa: una
+    referencia huerfana indica artefactos desincronizados, no ambiguedad
+    legitima que se pueda tratar con un warning.
+    """

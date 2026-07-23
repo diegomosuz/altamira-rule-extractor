@@ -28,8 +28,9 @@ from ..contracts.enums import InventoryFileKind, PipelineStage, StageStatus
 from ..contracts.inventory import Inventory
 from ..contracts.run_state import StageExecution
 from .artifact_store import atomic_write_json
-from .dependency_builder import ProgramIdentity, ProgramInput, build_dependencies, paragraph_id
+from .dependency_builder import ProgramInput, build_dependencies
 from .errors import DependencyBuildError
+from .identifiers import ProgramIdentity, paragraph_id
 
 
 def _verify_parsed_precondition(stages: list[StageExecution]) -> None:

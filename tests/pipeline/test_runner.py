@@ -1,17 +1,19 @@
-"""Tests de runner: orquestacion RECEIVED..SEMANTIC_ENRICHMENT_BUILT, hash
-e idempotencia.
+"""Tests de runner: orquestacion RECEIVED..SEMANTIC_GRAPH_BUILT, hash e
+idempotencia.
 
 La mayoria de estos tests ejercitan RECEIVED..INVENTORIED y la plomeria de
-RunState alrededor de PARSED/DEPENDENCIES_BUILT/SEMANTIC_ENRICHMENT_BUILT
-(transiciones, StageExecution, idempotencia a nivel de etapa); por eso las
-tres etapas se stubean por defecto para no depender de un JAR, un binario
-`java`, ni YAML reales aqui. El comportamiento real de PARSED esta
-cubierto en test_parser_client.py/test_parsed_stage.py; el de
-DEPENDENCIES_BUILT en test_dependency_builder.py/test_dependencies_stage.py;
-el de SEMANTIC_ENRICHMENT_BUILT en test_ddl_parser.py/test_csv_loader.py/
+RunState alrededor de PARSED/DEPENDENCIES_BUILT/SEMANTIC_ENRICHMENT_BUILT/
+SEMANTIC_GRAPH_BUILT (transiciones, StageExecution, idempotencia a nivel
+de etapa); por eso las cuatro etapas se stubean por defecto para no
+depender de un JAR, un binario `java`, ni YAML/artefactos reales aqui. El
+comportamiento real de PARSED esta cubierto en
+test_parser_client.py/test_parsed_stage.py; el de DEPENDENCIES_BUILT en
+test_dependency_builder.py/test_dependencies_stage.py; el de
+SEMANTIC_ENRICHMENT_BUILT en test_ddl_parser.py/test_csv_loader.py/
 test_semantic_tagger.py/test_domain_term_mapper.py/
-test_semantic_enrichment_stage.py; la integracion con el JAR real esta en
-tests/parser_integration/."""
+test_semantic_enrichment_stage.py; el de SEMANTIC_GRAPH_BUILT en
+test_semantic_graph_builder.py/test_semantic_graph_stage.py; la
+integracion con el JAR real esta en tests/parser_integration/."""
 
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ from altamira_extractor.pipeline.errors import (
     ParserUnavailableError,
     RunConflictError,
     SemanticEnrichmentBuildError,
+    SemanticGraphBuildError,
 )
 from altamira_extractor.pipeline.parsed_stage import ParsedStageOutcome
 from altamira_extractor.pipeline.runner import _copy_and_hash, run_ingestion
@@ -64,14 +67,23 @@ def _stub_semantic_enrichment_stage_success(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
-def test_full_happy_path_reaches_semantic_enrichment_built(
+@pytest.fixture(autouse=True)
+def _stub_semantic_graph_stage_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runner_module,
+        "run_semantic_graph_stage",
+        lambda **kwargs: [],
+    )
+
+
+def test_full_happy_path_reaches_semantic_graph_built(
     tmp_path: Path, settings: Settings
 ) -> None:
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
 
     state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     stage_names = [s.stage for s in state.stages]
     assert stage_names == [
         PipelineStage.RECEIVED,
@@ -81,6 +93,7 @@ def test_full_happy_path_reaches_semantic_enrichment_built(
         PipelineStage.PARSED,
         PipelineStage.DEPENDENCIES_BUILT,
         PipelineStage.SEMANTIC_ENRICHMENT_BUILT,
+        PipelineStage.SEMANTIC_GRAPH_BUILT,
     ]
     assert all(s.status == StageStatus.SUCCEEDED for s in state.stages)
 
@@ -129,7 +142,7 @@ def test_preexisting_run_id_ignores_new_source_and_does_not_overwrite(
 
     assert input_zip_path.read_bytes() == original_bytes
     assert second_state.source_package_hash == state.source_package_hash
-    assert len(second_state.stages) == 7
+    assert len(second_state.stages) == 8
 
 
 def test_no_duplicate_stage_executions_across_reruns(tmp_path: Path, settings: Settings) -> None:
@@ -140,7 +153,7 @@ def test_no_duplicate_stage_executions_across_reruns(tmp_path: Path, settings: S
     state_again = run_ingestion(zip_path, settings, run_id=run_id)
 
     stages_seen = [s.stage for s in state_again.stages]
-    assert len(stages_seen) == len(set(stages_seen)) == 7
+    assert len(stages_seen) == len(set(stages_seen)) == 8
 
 
 def test_received_rejects_foreign_directory_without_run_state(
@@ -216,11 +229,11 @@ def test_corrupt_inventory_is_rebuilt_instead_of_reused(
 
     rebuilt_state = run_ingestion(zip_path, settings, run_id=state.run_id)
 
-    assert rebuilt_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert rebuilt_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     assert inventory.run_id == state.run_id
     stage_names = [s.stage for s in rebuilt_state.stages]
-    assert len(stage_names) == len(set(stage_names)) == 7
+    assert len(stage_names) == len(set(stage_names)) == 8
     inventoried_stage = next(
         s for s in rebuilt_state.stages if s.stage == PipelineStage.INVENTORIED
     )
@@ -277,7 +290,7 @@ def test_parsed_warnings_propagate_to_stage_execution(
 
     # PARSED tuvo exito (con warnings) y las etapas siguientes (stubeadas)
     # tambien: el pipeline avanza mas alla de PARSED.
-    assert state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     parsed_stage_execution = next(s for s in state.stages if s.stage == PipelineStage.PARSED)
     assert parsed_stage_execution.warnings == ["aviso de ejemplo"]
 
@@ -303,9 +316,9 @@ def test_retry_after_parsed_failure_does_not_duplicate_stage_execution(
         second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert second_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     stage_names = [s.stage for s in second_state.stages]
-    assert len(stage_names) == len(set(stage_names)) == 7
+    assert len(stage_names) == len(set(stage_names)) == 8
     parsed_executions = [s for s in second_state.stages if s.stage == PipelineStage.PARSED]
     assert len(parsed_executions) == 1
     assert parsed_executions[0].status == StageStatus.SUCCEEDED
@@ -344,7 +357,7 @@ def test_dependencies_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_dependencies_built_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     dependencies_execution = next(
         s for s in state.stages if s.stage == PipelineStage.DEPENDENCIES_BUILT
     )
@@ -367,9 +380,9 @@ def test_retry_after_dependencies_built_failure_does_not_duplicate_stage_executi
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert second_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     stage_names = [s.stage for s in second_state.stages]
-    assert len(stage_names) == len(set(stage_names)) == 7
+    assert len(stage_names) == len(set(stage_names)) == 8
     dependencies_executions = [
         s for s in second_state.stages if s.stage == PipelineStage.DEPENDENCIES_BUILT
     ]
@@ -395,6 +408,7 @@ def test_semantic_enrichment_built_failure_marks_run_failed_with_error(
     )
     assert execution.status == StageStatus.FAILED
     assert "YAML" in (execution.error or "")
+    assert not any(s.stage == PipelineStage.SEMANTIC_GRAPH_BUILT for s in state.stages)
 
 
 def test_semantic_enrichment_built_warnings_propagate_to_stage_execution(
@@ -409,7 +423,7 @@ def test_semantic_enrichment_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_enrichment_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     execution = next(
         s for s in state.stages if s.stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
     )
@@ -432,11 +446,72 @@ def test_retry_after_semantic_enrichment_built_failure_does_not_duplicate_stage_
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert second_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     stage_names = [s.stage for s in second_state.stages]
-    assert len(stage_names) == len(set(stage_names)) == 7
+    assert len(stage_names) == len(set(stage_names)) == 8
     executions = [
         s for s in second_state.stages if s.stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    ]
+    assert len(executions) == 1
+    assert executions[0].status == StageStatus.SUCCEEDED
+
+
+def test_semantic_graph_built_failure_marks_run_failed_with_error(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    def _fail(**kwargs: object) -> list[str]:
+        raise SemanticGraphBuildError("referencia huerfana en DependencyArtifact")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner_module, "run_semantic_graph_stage", _fail)
+        state = run_ingestion(zip_path, settings)
+
+    assert state.current_stage == PipelineStage.FAILED
+    execution = next(s for s in state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_BUILT)
+    assert execution.status == StageStatus.FAILED
+    assert "huerfana" in (execution.error or "")
+
+
+def test_semantic_graph_built_warnings_propagate_to_stage_execution(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    def _succeed_with_warnings(**kwargs: object) -> list[str]:
+        return ["referencia SQL no calificada es ambigua"]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner_module, "run_semantic_graph_stage", _succeed_with_warnings)
+        state = run_ingestion(zip_path, settings)
+
+    assert state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
+    execution = next(s for s in state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_BUILT)
+    assert execution.warnings == ["referencia SQL no calificada es ambigua"]
+
+
+def test_retry_after_semantic_graph_built_failure_does_not_duplicate_stage_execution(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+    run_id = "semantic-graph-retry"
+
+    def _fail(**kwargs: object) -> list[str]:
+        raise SemanticGraphBuildError("fallo simulado")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner_module, "run_semantic_graph_stage", _fail)
+        first_state = run_ingestion(zip_path, settings, run_id=run_id)
+
+    second_state = run_ingestion(zip_path, settings, run_id=run_id)
+
+    assert first_state.current_stage == PipelineStage.FAILED
+    assert second_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
+    stage_names = [s.stage for s in second_state.stages]
+    assert len(stage_names) == len(set(stage_names)) == 8
+    executions = [
+        s for s in second_state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     ]
     assert len(executions) == 1
     assert executions[0].status == StageStatus.SUCCEEDED

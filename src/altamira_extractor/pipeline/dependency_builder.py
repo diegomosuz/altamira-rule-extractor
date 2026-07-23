@@ -26,6 +26,18 @@ from ..contracts.canonical import (
 )
 from ..contracts.dependencies import DependencyEvidence, ParagraphDependency, _dependency_sort_key
 from ..contracts.enums import DependencyEvidenceRole, DependencyType, StatementKind
+from .identifiers import ProgramIdentity, normalize_identifier, paragraph_id
+
+__all__ = [
+    "ProgramIdentity",
+    "ProgramInput",
+    "VariableResolution",
+    "VariableResolutionFailure",
+    "build_dependencies",
+    "normalize_identifier",
+    "paragraph_id",
+    "resolve_variable",
+]
 
 _CONTROL_STATEMENT_KINDS = (StatementKind.GO_TO, StatementKind.PERFORM)
 
@@ -38,34 +50,6 @@ _DATA_UNIQUE_NAME_DERIVATION_RULE = "PARAGRAPH_WRITE_READ_UNIQUE_NAME_MATCH"
 
 _DerivationRule = Literal["QUALIFIED", "SIMPLE_NAME"]
 _FailureReason = Literal["AMBIGUOUS", "UNRESOLVED"]
-
-
-def normalize_identifier(name: str) -> str:
-    """Normalizacion determinista para comparar identificadores COBOL
-    (case-insensitive). El valor normalizado nunca se persiste: solo se
-    usa para resolver: la identidad final usa el valor real ya emparejado
-    (CanonicalParagraph.name / CanonicalDataItem.qualified_name)."""
-    return name.strip().upper()
-
-
-@dataclass(frozen=True)
-class ProgramIdentity:
-    """Componentes de identidad versionada (CLAUDE.md) que no viven en
-    CanonicalProgram: provienen del Manifest embebido en Inventory."""
-
-    country_code: str
-    logical_name: str
-    version: str
-
-    def program_id(self, *, program_name: str, source_hash: str) -> str:
-        return (
-            f"program::{self.country_code}::{self.logical_name}::{program_name}::"
-            f"{self.version}::{source_hash[:12]}"
-        )
-
-
-def paragraph_id(program_id: str, paragraph_name: str) -> str:
-    return f"{program_id}::paragraph::{normalize_identifier(paragraph_name)}"
 
 
 @dataclass(frozen=True)

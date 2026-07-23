@@ -113,10 +113,10 @@ def test_parsed_stage_processes_cbl_cob_bom_and_duplicate_basenames(tmp_path: Pa
 
     state = run_ingestion(zip_path, settings)
 
-    # El pipeline ahora continua hasta SEMANTIC_ENRICHMENT_BUILT (Prompt 7);
+    # El pipeline ahora continua hasta SEMANTIC_GRAPH_BUILT (Prompt 8);
     # esta prueba solo verifica que PARSED en si mismo quedo SUCCEEDED con
     # los artefactos correctos, no que sea la etapa final.
-    assert state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     parsed_executions = [s for s in state.stages if s.stage == PipelineStage.PARSED]
     assert len(parsed_executions) == 1
     assert parsed_executions[0].status == StageStatus.SUCCEEDED
@@ -145,7 +145,7 @@ def test_second_run_is_idempotent_without_reinvoking_jar(tmp_path: Path) -> None
     settings = _settings(tmp_path)
 
     first_state = run_ingestion(zip_path, settings)
-    assert first_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert first_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
 
     canonical_dir = settings.runs_dir / first_state.run_id / "artifacts" / "02-canonical"
     artifact_snapshot = {path: path.read_bytes() for path in canonical_dir.rglob("*.json")}
@@ -161,7 +161,7 @@ def test_second_run_is_idempotent_without_reinvoking_jar(tmp_path: Path) -> None
     settings_missing_jar = _settings(tmp_path, parser_jar_path=tmp_path / "does-not-exist.jar")
     second_state = run_ingestion(zip_path, settings_missing_jar, run_id=first_state.run_id)
 
-    assert second_state.current_stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
+    assert second_state.current_stage == PipelineStage.SEMANTIC_GRAPH_BUILT
     parsed_executions = [s for s in second_state.stages if s.stage == PipelineStage.PARSED]
     assert len(parsed_executions) == 1
     assert parsed_executions[0].status == StageStatus.SUCCEEDED

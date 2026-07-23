@@ -48,9 +48,11 @@ from .artifact_store import atomic_write_json
 from .csv_loader import load_csv_snapshot, normalize_csv_header
 from .ddl_parser import parse_ddl_for_table
 from .dependencies_stage import _load_and_validate_canonical_programs
-from .dependency_builder import ProgramIdentity, normalize_identifier
 from .domain_term_mapper import load_domain_glossary, map_data_item_tags_to_domain_terms
 from .errors import DependencyBuildError, SemanticEnrichmentBuildError
+from .identifiers import ProgramIdentity, normalize_identifier
+from .identifiers import parameter_table_id as _compute_parameter_table_id
+from .identifiers import table_id as _compute_table_id
 from .parser_client import _is_contained
 from .semantic_tagger import load_semantic_tags_config, tag_data_items
 
@@ -67,18 +69,6 @@ def _verify_dependencies_built_precondition(stages: list[StageExecution]) -> Non
             f"DEPENDENCIES_BUILT no esta SUCCEEDED (status={matches[0].status.value}); no "
             "se puede construir el enriquecimiento semantico sobre dependencias incompletas"
         )
-
-
-def _table_id(country_code: str, table_name: str) -> str:
-    return f"table::{country_code}::DEFAULT::{normalize_identifier(table_name)}"
-
-
-def _parameter_table_id(
-    table_id_value: str, snapshot_date: date | None, snapshot_hash: str | None
-) -> str:
-    date_part = snapshot_date.isoformat() if snapshot_date else "unknown"
-    hash_part = snapshot_hash[:12] if snapshot_hash else "unknown"
-    return f"parameter::{table_id_value}::{date_part}::{hash_part}"
 
 
 def _verify_and_read_declared_file(
@@ -127,7 +117,7 @@ def _process_parameter_table(
     warnings: list[str],
 ) -> ParameterTableRecord:
     table_label = declared_name
-    table_id_value = _table_id(country_code, declared_name)
+    table_id_value = _compute_table_id(country_code, declared_name)
 
     columns: list[ParameterColumnDefinition] = []
     ddl_hash: str | None = None
@@ -178,7 +168,7 @@ def _process_parameter_table(
             file_label=f"{table_label} (snapshot)",
         )
         snapshot_file = next(f for f in inventory.files if f.relative_path == declared_snapshot)
-        parameter_table_id_value = _parameter_table_id(
+        parameter_table_id_value = _compute_parameter_table_id(
             table_id_value, declared_snapshot_date, snapshot_hash
         )
         if snapshot_file.detected_encoding is None:
@@ -199,7 +189,7 @@ def _process_parameter_table(
             snapshot_status = csv_result.support_status
             csv_headers = csv_result.original_headers
     else:
-        parameter_table_id_value = _parameter_table_id(
+        parameter_table_id_value = _compute_parameter_table_id(
             table_id_value, declared_snapshot_date, None
         )
 

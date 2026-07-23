@@ -1,8 +1,9 @@
 """PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
--> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT.
+-> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT ->
+SEMANTIC_GRAPH_BUILT.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas siete etapas, persiste RunState atomicamente
+ejecuta exactamente estas ocho etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -31,6 +32,12 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   DEPENDENCIES_BUILT, CanonicalProgram, y la integridad de cada DDL/CSV
   declarado en Manifest antes de reutilizar o reconstruir por completo
   `artifacts/03b-semantic-enrichment.json` (ver ese modulo).
+- SEMANTIC_GRAPH_BUILT: tampoco se salta por `RunState`; delega en
+  `semantic_graph_stage.run_semantic_graph_stage`, que revalida
+  SEMANTIC_ENRICHMENT_BUILT, CanonicalProgram, y que `03-dependencies.json`/
+  `03b-semantic-enrichment.json` sigan siendo consistentes con el run
+  actual antes de reutilizar o reconstruir por completo
+  `artifacts/04-semantic-graph.json` (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -61,6 +68,7 @@ from .errors import (
     PipelineError,
     RunConflictError,
     SemanticEnrichmentBuildError,
+    SemanticGraphBuildError,
 )
 from .inventory_builder import build_inventory
 from .package_validator import ValidatedPackage, validate_package
@@ -68,6 +76,7 @@ from .parsed_stage import run_parsed_stage
 from .parser_client import ProLeapParserClient
 from .safe_extractor import extract_package
 from .semantic_enrichment_stage import run_semantic_enrichment_stage
+from .semantic_graph_stage import run_semantic_graph_stage
 
 _COPY_CHUNK_SIZE = 1024 * 1024
 
@@ -428,9 +437,51 @@ def _run_semantic_enrichment_built(
     )
 
 
+def _run_semantic_graph_built(
+    state: RunState,
+    inventory_path: Path,
+    canonical_dir: Path,
+    dependencies_path: Path,
+    semantic_enrichment_path: Path,
+    semantic_graph_path: Path,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta SEMANTIC_GRAPH_BUILT (SemanticGraphBuilder, Prompt 8 del
+    runbook): nunca se salta por completo en base a `RunState`.
+    `run_semantic_graph_stage` siempre revalida las precondiciones
+    (SEMANTIC_ENRICHMENT_BUILT realmente completo, CanonicalProgram
+    validos, `03-dependencies.json`/`03b-semantic-enrichment.json`
+    consistentes con el run actual) y reutiliza
+    `artifacts/04-semantic-graph.json` solo si el resultado recomputado es
+    identico al existente; en caso contrario lo reconstruye entero (ver
+    semantic_graph_stage.py)."""
+    started_at = _now()
+    inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
+    try:
+        warnings = run_semantic_graph_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            inventory=inventory,
+            canonical_dir=canonical_dir,
+            dependencies_path=dependencies_path,
+            semantic_enrichment_path=semantic_enrichment_path,
+            semantic_graph_path=semantic_graph_path,
+        )
+    except SemanticGraphBuildError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.SEMANTIC_GRAPH_BUILT, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.SEMANTIC_GRAPH_BUILT, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
-    -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT para `source_zip`.
+    -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT -> SEMANTIC_GRAPH_BUILT
+    para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -448,6 +499,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     canonical_dir = run_dir / "artifacts" / "02-canonical"
     dependencies_path = run_dir / "artifacts" / "03-dependencies.json"
     semantic_enrichment_path = run_dir / "artifacts" / "03b-semantic-enrichment.json"
+    semantic_graph_path = run_dir / "artifacts" / "04-semantic-graph.json"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -479,12 +531,24 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_semantic_enrichment_built(
+    state = _run_semantic_enrichment_built(
         state,
         inventory_path,
         extracted_dir,
         canonical_dir,
         semantic_enrichment_path,
         settings,
+        run_json_path,
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_semantic_graph_built(
+        state,
+        inventory_path,
+        canonical_dir,
+        dependencies_path,
+        semantic_enrichment_path,
+        semantic_graph_path,
         run_json_path,
     )

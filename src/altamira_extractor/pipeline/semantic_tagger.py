@@ -24,8 +24,8 @@ from pydantic import Field
 from ..contracts.base import AltamiraBaseModel
 from ..contracts.canonical import CanonicalProgram
 from ..contracts.semantic_enrichment import DataItemSemanticTag, SemanticTagRuleMatch
-from .dependency_builder import ProgramIdentity, normalize_identifier
 from .errors import SemanticConfigError
+from .identifiers import ProgramIdentity, data_item_id
 from .yaml_utils import read_yaml_config
 
 _NUMERIC_PIC_CHARS = frozenset("9SVP()+-.,0123456789")
@@ -158,9 +158,7 @@ def tag_data_items(
 
         results.append(
             DataItemSemanticTag(
-                data_item_id=(
-                    f"{program_id}::data::{normalize_identifier(item.qualified_name)}"
-                ),
+                data_item_id=data_item_id(program_id, item.qualified_name),
                 program_id=program_id,
                 source_file=item.source_file,
                 original_name=item.name,

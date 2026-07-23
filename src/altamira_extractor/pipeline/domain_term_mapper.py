@@ -23,8 +23,8 @@ from ..contracts.semantic_enrichment import (
     DataItemSemanticTag,
     DomainTermRecord,
 )
-from .dependency_builder import normalize_identifier
 from .errors import SemanticConfigError
+from .identifiers import normalize_identifier
 from .yaml_utils import read_yaml_config
 
 _MAPPING_DERIVATION_RULE = "SEMANTIC_TAG_GLOSSARY_MATCH"
