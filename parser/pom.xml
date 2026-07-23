@@ -11,18 +11,111 @@
 
   <name>altamira-extractor-parser</name>
   <description>
-    Modulo Maven del wrapper de parsing COBOL (ProLeap). En esta etapa de
-    bootstrap no incluye todavia la dependencia de ProLeap ni logica de
-    parseo: solo la estructura del modulo, Java 17 y un smoke test.
+    Wrapper Java sobre ProLeap COBOL Parser. Produce un JAR ejecutable
+    (parser/target/altamira-cobol-parser.jar) que parsea un programa COBOL
+    y emite JSON compatible con el contrato Pydantic CanonicalProgram
+    (src/altamira_extractor/contracts/canonical.py). Ver
+    .claude/rules/java-parser.md.
   </description>
 
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <junit.version>5.10.2</junit.version>
+    <!--
+      ProLeap COBOL Parser no esta publicado en Maven Central (verificado
+      con `mvn dependency:get` real contra repo.maven.apache.org antes de
+      elegir JitPack). Se resuelve via JitPack usando el commit SHA exacto
+      del tag v2.4.0 del repositorio uwol/proleap-cobol-parser (preferido
+      sobre el tag movil "2.4.0" por inmutabilidad), confirmado con
+      GitHub API: https://api.github.com/repos/uwol/proleap-cobol-parser/tags
+    -->
+    <proleap.version>b045d8093aab535a21deee4b4da4f3133d30d028</proleap.version>
+    <jackson.version>2.17.2</jackson.version>
+    <!-- CVE-2021-44228 y relacionados: ProLeap arrastra log4j-core 2.8.2
+         transitivamente. Se fuerza una version parcheada. -->
+    <log4j.version>2.20.0</log4j.version>
+    <guava.version>33.3.1-jre</guava.version>
+    <plexus-utils.version>3.5.1</plexus-utils.version>
   </properties>
 
+  <repositories>
+    <!-- Unicamente para resolver ProLeap (no publicado en Maven Central).
+         Riesgo de disponibilidad de build: JitPack es infraestructura de
+         terceros que compila bajo demanda desde GitHub; si JitPack cae o
+         el commit deja de estar disponible, `mvn package` falla hasta que
+         se mitigue (vendorizar el JAR o migrar a un fork publicado en
+         Central). No se agrega ninguna otra infraestructura para mitigar
+         esto ahora. -->
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
+    </repository>
+  </repositories>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-api</artifactId>
+        <version>${log4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-core</artifactId>
+        <version>${log4j.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
+    <dependency>
+      <groupId>com.github.uwol</groupId>
+      <artifactId>proleap-cobol-parser</artifactId>
+      <version>${proleap.version}</version>
+      <exclusions>
+        <!-- Herramienta de generacion de gramaticas ANTLR4 (icu4j, maven
+             2.2.1 embebido, plexus, sisu/guice, junit 3.8.1): no se usa en
+             runtime, solo antlr4-runtime (que se mantiene). Reduce
+             significativamente el tamano del JAR sombreado. -->
+        <exclusion>
+          <groupId>org.antlr</groupId>
+          <artifactId>antlr4-maven-plugin</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.antlr</groupId>
+          <artifactId>antlr4</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <!-- ProLeap usa com.google.common.base.Strings (io.proleap.cobol.preprocessor.sub.CobolLine)
+         pero no declara Guava como dependencia en su propio pom.xml (verificado
+         contra el pom.xml real del tag v2.4.0). Antes de excluir org.antlr:antlr4
+         arriba, Guava llegaba de casualidad via su cadena transitiva
+         (antlr4-maven-plugin -> ... ); al excluirla, `java -jar` fallaba en
+         runtime con NoClassDefFoundError (detectado con un smoke test real, no
+         en teoria). Se declara aqui explicitamente en vez de revertir esa
+         exclusion. -->
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>${guava.version}</version>
+    </dependency>
+    <!-- ProLeap usa org.codehaus.plexus.util.StringUtils para resolver
+         COPY ... REPLACING (io.proleap.cobol.preprocessor.sub.document.impl.CobolReplacementMapping),
+         igual de no-declarado en su pom.xml que Guava; llegaba antes via la
+         misma cadena transitiva excluida (antlr4-maven-plugin -> ...).
+         Detectado con un test real de COPY REPLACING, no en teoria. -->
+    <dependency>
+      <groupId>org.codehaus.plexus</groupId>
+      <artifactId>plexus-utils</artifactId>
+      <version>${plexus-utils.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -32,12 +125,49 @@
   </dependencies>
 
   <build>
-    <finalName>parser-cli</finalName>
+    <finalName>altamira-cobol-parser</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.3</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <!-- Por defecto el plugin escribe dependency-reduced-pom.xml junto
+                   a pom.xml (raiz del modulo); se redirige a target/ para no
+                   ensuciar el arbol fuente en cada build. -->
+              <dependencyReducedPomLocation>
+                ${project.build.directory}/dependency-reduced-pom.xml
+              </dependencyReducedPomLocation>
+              <transformers>
+                <transformer
+                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.altamira.extractor.parser.cli.Main</mainClass>
+                </transformer>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

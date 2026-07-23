@@ -1,0 +1,2 @@
+       01 WS-OUTER-RECORD.
+           COPY CPYINNER.

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fuerza TODO el logging (incluido el propio de ProLeap, que por defecto
+  usa log4j2 apuntando a stdout) hacia stderr. Requisito del CLI: stdout
+  queda completamente vacio; el JSON solo se escribe en el archivo de
+  salida, y los mensajes operativos (propios y de ProLeap) van por stderr.
+-->
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Stderr" target="SYSTEM_ERR">
+      <PatternLayout pattern="%msg%n"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Root level="INFO">
+      <AppenderRef ref="Stderr"/>
+    </Root>
+  </Loggers>
+</Configuration>
