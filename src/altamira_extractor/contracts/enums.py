@@ -143,6 +143,15 @@ class DependencyType(StrEnum):
     CONTROL_DEPENDS_ON = "CONTROL_DEPENDS_ON"
 
 
+class DependencyEvidenceRole(StrEnum):
+    """Rol de un CanonicalStatement dentro de la evidencia de una
+    ParagraphDependency (DEPENDENCIES_BUILT)."""
+
+    WRITER = "WRITER"
+    READER = "READER"
+    CONTROL = "CONTROL"
+
+
 class InclusionReason(StrEnum):
     """Motivo de inclusion de un paragraph en el code slice (D2)."""
 

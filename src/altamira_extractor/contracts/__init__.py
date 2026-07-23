@@ -41,7 +41,7 @@ from .context_package import (
     TableEffect,
     TransactionalTableRead,
 )
-from .dependencies import ParagraphDependency
+from .dependencies import DependencyArtifact, DependencyEvidence, ParagraphDependency
 from .enums import (
     ApplicabilityStatus,
     AttributionScope,
@@ -50,6 +50,7 @@ from .enums import (
     CandidateStatus,
     ClaimField,
     CompletenessStatus,
+    DependencyEvidenceRole,
     DependencyType,
     EvidenceValidationStatus,
     FunctionalReviewStatus,
@@ -97,6 +98,7 @@ __all__ = [
     "CandidateStatus",
     "ClaimField",
     "CompletenessStatus",
+    "DependencyEvidenceRole",
     "DependencyType",
     "EvidenceValidationStatus",
     "FunctionalReviewStatus",
@@ -135,6 +137,8 @@ __all__ = [
     "CanonicalSqlAccess",
     "CanonicalStatement",
     # dependencies
+    "DependencyArtifact",
+    "DependencyEvidence",
     "ParagraphDependency",
     # semantic graph
     "GraphNode",

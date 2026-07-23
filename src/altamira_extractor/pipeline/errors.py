@@ -49,3 +49,13 @@ class ParserContractViolationError(PipelineError):
     source_package_hash, contencion de paths). Fatal a nivel de etapa
     PARSED completa, igual que ParserUnavailableError.
     """
+
+
+class DependencyBuildError(PipelineError):
+    """Precondicion de DEPENDENCIES_BUILT incumplida: PARSED no esta
+    realmente completo (StageExecution ausente/duplicada/no SUCCEEDED),
+    falta un CanonicalProgram esperado segun Inventory, o alguno no valida
+    o es inconsistente con Inventory/RunState (source_file, source_hash,
+    source_package_hash). Fatal para la etapa completa: no hay reintento
+    parcial posible cuando el prerequisito mismo esta roto.
+    """

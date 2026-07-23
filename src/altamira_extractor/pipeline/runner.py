@@ -1,7 +1,8 @@
-"""PipelineRunner minimo: secuencia RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED.
+"""PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
+-> PARSED -> DEPENDENCIES_BUILT.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas cinco etapas, persiste RunState atomicamente
+ejecuta exactamente estas seis etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -20,6 +21,11 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
 - PARSED: nunca se salta solo porque `RunState` diga SUCCEEDED; delega en
   `parsed_stage.run_parsed_stage`, que revalida cada artefacto canonico
   contra Inventory antes de reutilizarlo o reprocesarlo (ver ese modulo).
+- DEPENDENCIES_BUILT: tampoco se salta por `RunState`; delega en
+  `dependencies_stage.run_dependencies_built_stage`, que revalida que
+  PARSED este realmente completo y que cada CanonicalProgram siga siendo
+  consistente antes de reutilizar o reconstruir por completo
+  `artifacts/03-dependencies.json` (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -40,7 +46,9 @@ from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.inventory import Inventory
 from ..contracts.run_state import RunState, StageExecution
 from .artifact_store import atomic_write_json
+from .dependencies_stage import run_dependencies_built_stage
 from .errors import (
+    DependencyBuildError,
     ExtractionError,
     PackageValidationError,
     ParserContractViolationError,
@@ -335,9 +343,43 @@ def _run_parsed(
     )
 
 
+def _run_dependencies_built(
+    state: RunState,
+    inventory_path: Path,
+    canonical_dir: Path,
+    dependencies_path: Path,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta DEPENDENCIES_BUILT: nunca se salta por completo en base a
+    `RunState`. `run_dependencies_built_stage` siempre revalida las
+    precondiciones (PARSED realmente completo, CanonicalProgram validos y
+    consistentes) y reutiliza `artifacts/03-dependencies.json` solo si
+    sigue siendo consistente con los artefactos actuales; en caso
+    contrario lo reconstruye entero (ver dependencies_stage.py)."""
+    started_at = _now()
+    inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
+    try:
+        warnings = run_dependencies_built_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            inventory=inventory,
+            canonical_dir=canonical_dir,
+            dependencies_path=dependencies_path,
+        )
+    except DependencyBuildError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.DEPENDENCIES_BUILT, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.DEPENDENCIES_BUILT, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
-    para `source_zip`.
+    -> DEPENDENCIES_BUILT para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -353,6 +395,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     extracted_dir = work_dir / "extracted"
     inventory_path = run_dir / "artifacts" / "01-inventory.json"
     canonical_dir = run_dir / "artifacts" / "02-canonical"
+    dependencies_path = run_dir / "artifacts" / "03-dependencies.json"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -372,6 +415,12 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_parsed(
+    state = _run_parsed(
         state, run_dir, extracted_dir, canonical_dir, inventory_path, settings, run_json_path
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_dependencies_built(
+        state, inventory_path, canonical_dir, dependencies_path, run_json_path
     )
