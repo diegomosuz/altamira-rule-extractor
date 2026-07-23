@@ -39,6 +39,7 @@ def valid_manifest_xml(
     *,
     ddl_path: str | None = DEFAULT_MANIFEST_DDL,
     snapshot_path: str | None = DEFAULT_MANIFEST_SNAPSHOT,
+    source_encoding: str = "UTF-8",
 ) -> bytes:
     parameter_tables = ""
     if ddl_path or snapshot_path:
@@ -60,7 +61,7 @@ def valid_manifest_xml(
   <implementation version="3.2">
     <entry-program>ARTRFPROP01</entry-program>
   </implementation>
-  <source format="FIXED" encoding="CP037"/>{parameter_tables}
+  <source format="FIXED" encoding="{source_encoding}"/>{parameter_tables}
 </altamira-package>
 """.encode()
 

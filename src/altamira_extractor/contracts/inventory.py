@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field
 
 from .base import AltamiraBaseModel, RelativePath, Sha256Hex
-from .enums import InventoryFileKind
+from .enums import InventoryFileKind, TextEncoding
 from .manifest import Manifest
 
 
@@ -16,6 +16,11 @@ class InventoryFile(AltamiraBaseModel):
     kind: InventoryFileKind
     size_bytes: int = Field(ge=0)
     sha256: Sha256Hex
+    # Encoding real detectado deterministicamente (ver encoding_detector.py).
+    # None cuando no pudo resolverse sin inventar un valor (nunca se asume
+    # UTF-8 por defecto); inventarios previos sin este campo lo leen como
+    # None por compatibilidad (Pydantic v2 aplica el default en el parseo).
+    detected_encoding: TextEncoding | None = None
 
 
 class Inventory(AltamiraBaseModel):

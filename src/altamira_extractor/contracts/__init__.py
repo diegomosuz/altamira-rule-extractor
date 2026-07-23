@@ -66,6 +66,7 @@ from .enums import (
     StatementKind,
     TableAccessOperation,
     TableEffectOperation,
+    TextEncoding,
 )
 from .guardrail import GuardrailReport, GuardrailViolation
 from .inventory import Inventory, InventoryFile
@@ -112,6 +113,7 @@ __all__ = [
     "StatementKind",
     "TableAccessOperation",
     "TableEffectOperation",
+    "TextEncoding",
     # manifest
     "Manifest",
     "ManifestApplication",

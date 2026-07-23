@@ -204,6 +204,19 @@ class SourceFormat(StrEnum):
     TANDEM = "TANDEM"
 
 
+class TextEncoding(StrEnum):
+    """Encoding real detectado por archivo durante INVENTORIED.
+
+    Distinto de `manifest.source.encoding` (valor declarado globalmente por
+    el paquete, que puede ser `AUTO`): este es el resultado de una deteccion
+    deterministica por archivo (ver `pipeline/encoding_detector.py`), nunca
+    un valor inventado."""
+
+    UTF_8 = "UTF-8"
+    WINDOWS_1252 = "WINDOWS-1252"
+    ISO_8859_1 = "ISO-8859-1"
+
+
 class InventoryFileKind(StrEnum):
     """Clasificacion de cada archivo descubierto en el paquete (Inventory)."""
 
