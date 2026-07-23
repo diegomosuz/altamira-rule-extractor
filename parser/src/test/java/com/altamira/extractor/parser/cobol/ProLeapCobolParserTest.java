@@ -131,6 +131,53 @@ class ProLeapCobolParserTest {
     }
 
     @Test
+    void autoDetectsFixedWithUtf8Bom() throws Exception {
+        // Files.readAllLines no descarta el BOM: sin el fix acotado en
+        // resolveAutoFormat, este archivo (FIXED estructuralmente valido)
+        // seria rechazado solo porque la linea 1 arranca con U+FEFF.
+        var result = parser.parse(
+                Fixtures.path("auto-fixed-utf8-bom.cbl"), RequestedFormat.AUTO, List.of(),
+                StandardCharsets.UTF_8);
+        assertEquals(SourceFormat.FIXED, result.resolvedFormat());
+        assertEquals("BOMUTF1", result.programUnit().getIdentificationDivision()
+                .getProgramIdParagraph().getName());
+    }
+
+    @Test
+    void autoDetectsFixedWithoutUtf8BomEquivalently() throws Exception {
+        // Mismo contenido que auto-fixed-utf8-bom.cbl, sin el BOM: debe
+        // resolver exactamente igual (FIXED, mismo PROGRAM-ID).
+        var result = parser.parse(
+                Fixtures.path("auto-fixed-utf8-no-bom.cbl"), RequestedFormat.AUTO, List.of(),
+                StandardCharsets.UTF_8);
+        assertEquals(SourceFormat.FIXED, result.resolvedFormat());
+        assertEquals("BOMUTF1", result.programUnit().getIdentificationDivision()
+                .getProgramIdParagraph().getName());
+    }
+
+    @Test
+    void autoStillRejectsIncompatibleContentAfterBom() {
+        // El BOM solo se ignora al evaluar la linea 1; una linea posterior
+        // que viola el layout fixed-format (codigo en columna 1) sigue
+        // rechazando AUTO igual que sin BOM.
+        CobolParseException exception = assertThrows(CobolParseException.class, () -> parser.parse(
+                Fixtures.path("auto-bom-incompatible.cbl"), RequestedFormat.AUTO, List.of(),
+                StandardCharsets.UTF_8));
+        assertTrue(exception.getMessage().contains("AUTO"));
+    }
+
+    @Test
+    void autoRejectsBomOnlyCommentsFile() {
+        // BOM seguido unicamente de comentarios: sigue sin haber ninguna
+        // linea de codigo significativa, AUTO debe fallar igual que
+        // auto-comments-only.cbl (sin BOM).
+        CobolParseException exception = assertThrows(CobolParseException.class, () -> parser.parse(
+                Fixtures.path("auto-bom-comments-only.cbl"), RequestedFormat.AUTO, List.of(),
+                StandardCharsets.UTF_8));
+        assertTrue(exception.getMessage().contains("AUTO"));
+    }
+
+    @Test
     void resolvesCopyFromCopybookDir() throws Exception {
         var result = parser.parse(
                 Fixtures.path("copy-main.cbl"), RequestedFormat.FIXED, List.of(Fixtures.copybookDir()),

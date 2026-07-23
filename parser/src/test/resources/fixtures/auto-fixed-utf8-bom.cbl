@@ -1,0 +1,13 @@
+﻿       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BOMUTF1.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-NOMBRE PIC X(20) VALUE 'JOSE'.
+       01 WS-LIMITE PIC 9(7)V99 VALUE 1000.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY WS-NOMBRE.
+           IF WS-LIMITE > 500
+               DISPLAY 'OK'
+           END-IF.
+           GOBACK.

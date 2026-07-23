@@ -1,7 +1,7 @@
-"""PipelineRunner minimo: secuencia RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED.
+"""PipelineRunner minimo: secuencia RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas cuatro etapas, persiste RunState atomicamente
+ejecuta exactamente estas cinco etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -17,6 +17,9 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   los temporales `work/extracted.tmp-*` antes de reintentar.
 - INVENTORIED: si `artifacts/01-inventory.json` ya existe, se valida
   antes de reutilizarlo; si esta corrupto se reconstruye.
+- PARSED: nunca se salta solo porque `RunState` diga SUCCEEDED; delega en
+  `parsed_stage.run_parsed_stage`, que revalida cada artefacto canonico
+  contra Inventory antes de reutilizarlo o reprocesarlo (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -37,9 +40,18 @@ from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.inventory import Inventory
 from ..contracts.run_state import RunState, StageExecution
 from .artifact_store import atomic_write_json
-from .errors import ExtractionError, PackageValidationError, PipelineError, RunConflictError
+from .errors import (
+    ExtractionError,
+    PackageValidationError,
+    ParserContractViolationError,
+    ParserUnavailableError,
+    PipelineError,
+    RunConflictError,
+)
 from .inventory_builder import build_inventory
 from .package_validator import ValidatedPackage, validate_package
+from .parsed_stage import run_parsed_stage
+from .parser_client import ProLeapParserClient
 from .safe_extractor import extract_package
 
 _COPY_CHUNK_SIZE = 1024 * 1024
@@ -167,7 +179,13 @@ def _run_received(
     state: RunState, source_zip: Path, input_zip_path: Path, run_json_path: Path
 ) -> RunState:
     if _stage_succeeded(state, PipelineStage.RECEIVED) and input_zip_path.is_file():
-        return state  # ya recibido: source_zip se ignora deliberadamente.
+        # ya recibido: source_zip se ignora deliberadamente. Se corrige
+        # current_stage (podria venir en FAILED de un intento previo que
+        # fallo en una etapa POSTERIOR, p. ej. PARSED): de lo contrario el
+        # chequeo de "current_stage == FAILED" en run_ingestion cortaria
+        # la reanudacion antes de volver a intentar las etapas siguientes.
+        state.current_stage = PipelineStage.RECEIVED
+        return state
 
     is_fresh_run = len(state.stages) == 0
     if input_zip_path.exists():
@@ -211,6 +229,7 @@ def _run_extracted(
     run_json_path: Path,
 ) -> RunState:
     if _stage_succeeded(state, PipelineStage.EXTRACTED) and extracted_dir.is_dir():
+        state.current_stage = PipelineStage.EXTRACTED  # ver comentario en _run_received.
         return state
 
     if work_dir.is_dir():
@@ -245,6 +264,7 @@ def _run_inventoried(
             existing = None
         if existing is not None and existing.run_id == state.run_id:
             if _stage_succeeded(state, PipelineStage.INVENTORIED):
+                state.current_stage = PipelineStage.INVENTORIED  # ver _run_received.
                 return state
             return _mark_succeeded(state, run_json_path, PipelineStage.INVENTORIED, _now())
         inventory_path.unlink()  # inventario previo invalido o de otro run: se descarta.
@@ -267,8 +287,57 @@ def _run_inventoried(
     )
 
 
+def _run_parsed(
+    state: RunState,
+    run_dir: Path,
+    extracted_dir: Path,
+    canonical_dir: Path,
+    inventory_path: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta PARSED: invoca el parser Java sobre cada programa COBOL del
+    inventario y persiste `artifacts/02-canonical/`.
+
+    Nunca se salta por completo en base a `RunState`: `run_parsed_stage`
+    siempre revalida cada artefacto contra Inventory antes de decidir si
+    reutilizarlo o reprocesarlo (ver docstring de ese modulo)."""
+    started_at = _now()
+    inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
+    client = ProLeapParserClient(
+        java_bin=settings.java_bin,
+        jar_path=settings.parser_jar_path,
+        timeout_seconds=settings.parser_timeout_seconds,
+    )
+    try:
+        outcome = run_parsed_stage(
+            run_root=run_dir,
+            extracted_dir=extracted_dir,
+            canonical_dir=canonical_dir,
+            inventory=inventory,
+            source_package_hash=state.source_package_hash or "",
+            client=client,
+        )
+    except (ParserUnavailableError, ParserContractViolationError) as exc:
+        return _mark_failed(state, run_json_path, PipelineStage.PARSED, started_at, str(exc))
+
+    if not outcome.succeeded:
+        return _mark_failed(
+            state,
+            run_json_path,
+            PipelineStage.PARSED,
+            started_at,
+            outcome.error or "PARSED fallo sin detalle",
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.PARSED, started_at, warnings=outcome.warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
-    """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED para `source_zip`.
+    """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
+    para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -283,6 +352,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     work_dir = run_dir / "work"
     extracted_dir = work_dir / "extracted"
     inventory_path = run_dir / "artifacts" / "01-inventory.json"
+    canonical_dir = run_dir / "artifacts" / "02-canonical"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -298,4 +368,10 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_inventoried(state, extracted_dir, inventory_path, validated, run_json_path)
+    state = _run_inventoried(state, extracted_dir, inventory_path, validated, run_json_path)
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_parsed(
+        state, run_dir, extracted_dir, canonical_dir, inventory_path, settings, run_json_path
+    )

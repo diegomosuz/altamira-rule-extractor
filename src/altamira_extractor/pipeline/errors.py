@@ -30,3 +30,22 @@ class ExtractionError(PipelineError):
 
 class RunConflictError(PipelineError):
     """Se intento reutilizar un run_id con un estado incompatible."""
+
+
+class ParserUnavailableError(PipelineError):
+    """El JAR del parser o el runtime Java no estan disponibles.
+
+    Fatal a nivel de etapa PARSED completa: aborta antes de procesar
+    cualquier programa (o interrumpe el resto de la cola), nunca se marca
+    como fallo recuperable de un programa individual.
+    """
+
+
+class ParserContractViolationError(PipelineError):
+    """El parser Java (o los datos de origen) violaron el contrato
+    documentado: exit code fatal (2/4/5), stdout inesperado, exit 0 sin
+    archivo de salida, JSON invalido, o una verificacion cruzada contra
+    Inventory/RunState no coincide (source_file, source_hash,
+    source_package_hash, contencion de paths). Fatal a nivel de etapa
+    PARSED completa, igual que ParserUnavailableError.
+    """

@@ -224,6 +224,18 @@ public final class ProLeapCobolParser {
      * sola, motivo de rechazo ni de aceptacion: una linea de comentario
      * larga se ignora igual que una corta; una linea de codigo que ya
      * viola el layout se rechaza aunque sea corta.
+     *
+     * <p><b>BOM UTF-8:</b> {@code Files.readAllLines} no descarta un BOM
+     * inicial (el caracter U+FEFF queda como parte del contenido de la
+     * primera linea), lo que desplaza en uno sus columnas y hacia rechazar
+     * como incompatible un archivo FIXED estructuralmente valido
+     * (verificado empiricamente: ProLeap si tolera el BOM en su propio
+     * preprocesador bajo {@code --format FIXED}/{@code TANDEM} explicito,
+     * que no pasa por este metodo). Por eso, unicamente al evaluar la
+     * primera linea para esta deteccion estructural, se ignora un BOM
+     * inicial si esta presente; no se modifica {@code rawLines} en si
+     * (otros usos, como la deteccion de COPY, siguen viendo la linea
+     * original), ni los bytes que ProLeap recibe del archivo real.
      */
     // Paquete-visible (no private) unicamente para que ProLeapCobolParserTest
     // pueda verificar la decision del heuristico en aislamiento, sin depender
@@ -233,8 +245,9 @@ public final class ProLeapCobolParser {
             throws CobolParseException {
         boolean hasValidCodeLine = false;
         int lineNumber = 0;
-        for (String line : rawLines) {
+        for (String rawLine : rawLines) {
             lineNumber++;
+            String line = lineNumber == 1 ? stripLeadingUtf8BomForAutoDetection(rawLine) : rawLine;
             if (isIgnorableForAutoDetection(line)) {
                 continue;
             }
@@ -263,6 +276,18 @@ public final class ProLeapCobolParser {
                         + "desde columna 8, sin tabs). Nunca selecciona FREE ni TANDEM. Especifique "
                         + "--format explicitamente si el resultado es incorrecto.");
         return SourceFormat.FIXED;
+    }
+
+    private static final char UTF8_BOM_CHAR = 0xFEFF;
+
+    /**
+     * Descarta un BOM UTF-8 inicial (U+FEFF) solo para la evaluacion
+     * estructural de la primera linea dentro de {@link #resolveAutoFormat}.
+     * No muta la lista {@code rawLines} original ni afecta ningun otro
+     * consumidor de esas lineas.
+     */
+    private static String stripLeadingUtf8BomForAutoDetection(String line) {
+        return !line.isEmpty() && line.charAt(0) == UTF8_BOM_CHAR ? line.substring(1) : line;
     }
 
     /** Lineas vacias, solo-espacios, o comentarios (fixed u free) no aportan ni quitan evidencia. */

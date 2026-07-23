@@ -53,6 +53,10 @@ def _default_manifest_xsd_path() -> Path:
     return _discover_repo_root() / "schemas" / "manifest.xsd"
 
 
+def _default_parser_jar_path() -> Path:
+    return _discover_repo_root() / "parser" / "target" / "altamira-cobol-parser.jar"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -86,6 +90,11 @@ class Settings(BaseSettings):
     max_total_uncompressed_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
     max_compression_ratio: float = Field(default=100.0, gt=0)
     allowed_extensions: frozenset[str] = Field(default_factory=lambda: DEFAULT_ALLOWED_EXTENSIONS)
+
+    # Integracion con el parser Java (etapa PARSED, ver pipeline/parser_client.py).
+    java_bin: str = Field(default="java")
+    parser_jar_path: Path = Field(default_factory=_default_parser_jar_path)
+    parser_timeout_seconds: float = Field(default=120.0, gt=0)
 
 
 def load_settings() -> Settings:
