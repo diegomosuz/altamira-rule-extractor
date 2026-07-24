@@ -116,6 +116,7 @@ from .errors import (
     GraphLoadError,
     GraphValidationError,
     GuardrailError,
+    MarkdownRenderError,
     PackageValidationError,
     ParserContractViolationError,
     ParserUnavailableError,
@@ -132,6 +133,7 @@ from .package_validator import ValidatedPackage, validate_package
 from .parsed_stage import run_parsed_stage
 from .parser_client import ProLeapParserClient
 from .rule_drafts_generated_stage import run_rule_drafts_generated_stage
+from .rules_rendered_stage import run_rules_rendered_stage
 from .safe_extractor import extract_package
 from .semantic_enrichment_stage import run_semantic_enrichment_stage
 from .semantic_graph_load_stage import run_semantic_graph_load_stage
@@ -738,11 +740,42 @@ def _run_guardrails_applied(
     )
 
 
+def _run_rules_rendered(
+    state: RunState,
+    guardrail_dir: Path,
+    rules_dir: Path,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta la transicion GUARDRAILS_APPLIED -> COMPLETED (Prompt 13a):
+    delega en `rules_rendered_stage.run_rules_rendered_stage`, que
+    renderiza cada `GuardrailCandidateArtifact.final_rule_draft` a
+    Markdown y persiste `artifacts/10-rules/`. No agrega un
+    `PipelineStage` nuevo: el resultado se registra como
+    `StageExecution(stage=COMPLETED, ...)`, simetrico a cualquier otra
+    etapa real (ver docstring de `rules_rendered_stage.py`)."""
+    started_at = _now()
+    try:
+        warnings = run_rules_rendered_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            guardrail_dir=guardrail_dir,
+            rules_dir=rules_dir,
+        )
+    except MarkdownRenderError as exc:
+        return _mark_failed(state, run_json_path, PipelineStage.COMPLETED, started_at, str(exc))
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.COMPLETED, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
     -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT -> SEMANTIC_GRAPH_BUILT
     -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED -> CANDIDATES_DETECTED ->
-    CONTEXTS_BUILT para `source_zip`.
+    CONTEXTS_BUILT -> RULE_DRAFTS_GENERATED -> GUARDRAILS_APPLIED ->
+    COMPLETED para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -766,6 +799,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     context_dir = run_dir / "artifacts" / "07-context"
     rule_draft_dir = run_dir / "artifacts" / "08-rule-drafts"
     guardrail_dir = run_dir / "artifacts" / "09-guardrails"
+    rules_dir = run_dir / "artifacts" / "10-rules"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -860,6 +894,10 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_guardrails_applied(
+    state = _run_guardrails_applied(
         state, context_dir, rule_draft_dir, guardrail_dir, settings, run_json_path
     )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_rules_rendered(state, guardrail_dir, rules_dir, run_json_path)

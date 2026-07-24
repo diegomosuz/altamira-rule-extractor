@@ -57,7 +57,7 @@ from altamira_extractor.pipeline.runner import _copy_and_hash, run_ingestion
 
 from .conftest import build_valid_package_zip
 
-_TOTAL_STAGE_COUNT = 14
+_TOTAL_STAGE_COUNT = 15
 
 
 @pytest.fixture(autouse=True)
@@ -152,12 +152,21 @@ def _stub_guardrails_applied_stage_success(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
-def test_full_happy_path_reaches_guardrails_applied(tmp_path: Path, settings: Settings) -> None:
+@pytest.fixture(autouse=True)
+def _stub_rules_rendered_stage_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runner_module,
+        "run_rules_rendered_stage",
+        lambda **kwargs: [],
+    )
+
+
+def test_full_happy_path_reaches_completed(tmp_path: Path, settings: Settings) -> None:
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
 
     state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in state.stages]
     assert stage_names == [
         PipelineStage.RECEIVED,
@@ -174,6 +183,7 @@ def test_full_happy_path_reaches_guardrails_applied(tmp_path: Path, settings: Se
         PipelineStage.CONTEXTS_BUILT,
         PipelineStage.RULE_DRAFTS_GENERATED,
         PipelineStage.GUARDRAILS_APPLIED,
+        PipelineStage.COMPLETED,
     ]
     assert all(s.status == StageStatus.SUCCEEDED for s in state.stages)
 
@@ -309,7 +319,7 @@ def test_corrupt_inventory_is_rebuilt_instead_of_reused(
 
     rebuilt_state = run_ingestion(zip_path, settings, run_id=state.run_id)
 
-    assert rebuilt_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert rebuilt_state.current_stage == PipelineStage.COMPLETED
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     assert inventory.run_id == state.run_id
     stage_names = [s.stage for s in rebuilt_state.stages]
@@ -370,7 +380,7 @@ def test_parsed_warnings_propagate_to_stage_execution(
 
     # PARSED tuvo exito (con warnings) y las etapas siguientes (stubeadas)
     # tambien: el pipeline avanza mas alla de PARSED.
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     parsed_stage_execution = next(s for s in state.stages if s.stage == PipelineStage.PARSED)
     assert parsed_stage_execution.warnings == ["aviso de ejemplo"]
 
@@ -396,7 +406,7 @@ def test_retry_after_parsed_failure_does_not_duplicate_stage_execution(
         second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     parsed_executions = [s for s in second_state.stages if s.stage == PipelineStage.PARSED]
@@ -437,7 +447,7 @@ def test_dependencies_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_dependencies_built_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     dependencies_execution = next(
         s for s in state.stages if s.stage == PipelineStage.DEPENDENCIES_BUILT
     )
@@ -460,7 +470,7 @@ def test_retry_after_dependencies_built_failure_does_not_duplicate_stage_executi
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     dependencies_executions = [
@@ -503,7 +513,7 @@ def test_semantic_enrichment_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_enrichment_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(
         s for s in state.stages if s.stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
     )
@@ -526,7 +536,7 @@ def test_retry_after_semantic_enrichment_built_failure_does_not_duplicate_stage_
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -567,7 +577,7 @@ def test_semantic_graph_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_graph_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_BUILT)
     assert execution.warnings == ["referencia SQL no calificada es ambigua"]
 
@@ -588,7 +598,7 @@ def test_retry_after_semantic_graph_built_failure_does_not_duplicate_stage_execu
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -631,7 +641,7 @@ def test_semantic_graph_loaded_summary_propagates_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_graph_load_stage", _succeed)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_LOADED)
     assert execution.warnings == [
         "cargados 42 nodos / 17 relaciones (Neo4j 5.24.0, database 'neo4j')"
@@ -654,7 +664,7 @@ def test_retry_after_semantic_graph_loaded_failure_does_not_duplicate_stage_exec
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -695,7 +705,7 @@ def test_graph_validated_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_graph_validated_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.GRAPH_VALIDATED)
     assert execution.warnings == ["SOME_WARNING: aviso no bloqueante (entity::1)"]
 
@@ -716,7 +726,7 @@ def test_retry_after_graph_validated_failure_does_not_duplicate_stage_execution(
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [s for s in second_state.stages if s.stage == PipelineStage.GRAPH_VALIDATED]
@@ -755,7 +765,7 @@ def test_candidates_detected_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_candidates_detected_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.CANDIDATES_DETECTED)
     assert execution.warnings == ["detectados 3 candidato(s)"]
 
@@ -776,7 +786,7 @@ def test_retry_after_candidates_detected_failure_does_not_duplicate_stage_execut
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [s for s in second_state.stages if s.stage == PipelineStage.CANDIDATES_DETECTED]
@@ -815,7 +825,7 @@ def test_contexts_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_contexts_built_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.CONTEXTS_BUILT)
     assert execution.warnings == ["3 contexto(s)"]
 
@@ -836,7 +846,7 @@ def test_retry_after_contexts_built_failure_does_not_duplicate_stage_execution(
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [s for s in second_state.stages if s.stage == PipelineStage.CONTEXTS_BUILT]
@@ -875,7 +885,7 @@ def test_rule_drafts_generated_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_rule_drafts_generated_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.RULE_DRAFTS_GENERATED)
     assert execution.warnings == ["2 draft(s)"]
 
@@ -896,7 +906,7 @@ def test_retry_after_rule_drafts_generated_failure_does_not_duplicate_stage_exec
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -936,7 +946,7 @@ def test_guardrails_applied_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_guardrails_applied_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert state.current_stage == PipelineStage.COMPLETED
     execution = next(s for s in state.stages if s.stage == PipelineStage.GUARDRAILS_APPLIED)
     assert execution.warnings == ["2 guardrail(s)"]
 
@@ -957,7 +967,7 @@ def test_retry_after_guardrails_applied_failure_does_not_duplicate_stage_executi
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GUARDRAILS_APPLIED
+    assert second_state.current_stage == PipelineStage.COMPLETED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [s for s in second_state.stages if s.stage == PipelineStage.GUARDRAILS_APPLIED]

@@ -298,3 +298,22 @@ class GuardrailError(PipelineError):
     la respuesta, el prompt efectivo completo, el ContextPackage, el
     RuleDraft completo ni credenciales.
     """
+
+
+class MarkdownRenderError(PipelineError):
+    """Precondicion de la transicion GUARDRAILS_APPLIED -> COMPLETED
+    incumplida (Prompt 13a), o fallo durante el renderizado/persistencia
+    de `artifacts/10-rules/`: GUARDRAILS_APPLIED no completo (ausente,
+    duplicada o no SUCCEEDED), `guardrail-manifest.json` ausente/invalido/
+    con `source_package_hash` inconsistente, algun archivo declarado en
+    `records` ausente/no es un archivo regular/es un symlink, un archivo
+    o subdirectorio no referenciado presente en `artifacts/09-guardrails/`
+    o `artifacts/10-rules/`, un hash de artefacto o de Markdown
+    inconsistente, un `relative_filename` que no coincide con
+    `sha256(candidate_id)+".md"`, o un fallo de escritura/intercambio/
+    restauracion del directorio `10-rules/`. Fatal para la etapa
+    completa: MarkdownRenderer nunca invoca al modelo, nunca reejecuta
+    DeterministicGuardrail y nunca lee Neo4j ni ContextPackage. El
+    mensaje nunca incluye el contenido completo de un RuleDraft/claims/
+    evidence_paths, paths absolutos ni stacktrace.
+    """

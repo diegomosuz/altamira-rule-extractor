@@ -88,6 +88,7 @@ from .manifest import (
 )
 from .rule_draft import Claim, RuleDraft
 from .rule_draft_manifest import RuleDraftDirectoryManifest, RuleDraftRecord
+from .rules_manifest import RulesDirectoryManifest, RulesRecord
 from .run_state import RunState, StageExecution
 from .semantic_enrichment import (
     DataItemDomainTermMapping,
@@ -216,4 +217,7 @@ __all__ = [
     # guardrail manifest
     "GuardrailDirectoryManifest",
     "GuardrailRecord",
+    # rules manifest
+    "RulesDirectoryManifest",
+    "RulesRecord",
 ]
