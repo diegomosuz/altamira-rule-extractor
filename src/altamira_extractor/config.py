@@ -82,6 +82,14 @@ def _default_context_package_schema_path() -> Path:
     return _discover_repo_root() / "schemas" / "context-package.schema.json"
 
 
+def _default_rule_draft_schema_path() -> Path:
+    return _discover_repo_root() / "schemas" / "rule-draft.schema.json"
+
+
+def _default_prompt_path(filename: str) -> Path:
+    return _discover_repo_root() / "prompts" / filename
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -234,6 +242,32 @@ class Settings(BaseSettings):
     pwc_genai_api_key: SecretStr | None = Field(default=None, validation_alias="PWC_GENAI_API_KEY")
     pwc_genai_base_url: str | None = Field(default=None, validation_alias="PWC_GENAI_BASE_URL")
     pwc_genai_model: str | None = Field(default=None, validation_alias="PWC_GENAI_MODEL")
+
+    # RULE_DRAFTS_GENERATED / GUARDRAILS_APPLIED (Prompt 12). Maximo dos
+    # reparaciones (CLAUDE.md): a diferencia de timeout/retries del
+    # cliente HTTP (Prompt 11, deferidos a resolve_llm_profile), este es
+    # un limite arquitectonico duro, se valida aqui mismo (igual que
+    # llm_temperature).
+    llm_repair_attempts: int = Field(default=2, ge=0, le=2, validation_alias="LLM_REPAIR_ATTEMPTS")
+
+    rule_writer_system_prompt_path: Path = Field(
+        default_factory=lambda: _default_prompt_path("rule_writer_system.md")
+    )
+    rule_writer_user_prompt_path: Path = Field(
+        default_factory=lambda: _default_prompt_path("rule_writer_user.md")
+    )
+    rule_repair_system_prompt_path: Path = Field(
+        default_factory=lambda: _default_prompt_path("rule_repair_system.md")
+    )
+    rule_repair_user_prompt_path: Path = Field(
+        default_factory=lambda: _default_prompt_path("rule_repair_user.md")
+    )
+    rule_draft_schema_path: Path = Field(default_factory=_default_rule_draft_schema_path)
+
+    # Tamano maximo del ContextPackage serializado enviado al modelo
+    # (caracteres de to_stable_json()). Nunca se trunca en silencio:
+    # exceder este limite es un error fatal antes de llamar al proveedor.
+    max_context_package_json_chars: int = Field(default=200_000, ge=1)
 
 
 def load_settings() -> Settings:

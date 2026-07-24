@@ -17,6 +17,7 @@ import pytest
 from altamira_extractor.config import Settings
 from altamira_extractor.contracts.canonical import CanonicalProgram
 from altamira_extractor.contracts.enums import PipelineStage, StageStatus
+from altamira_extractor.contracts.run_state import RunState
 from altamira_extractor.pipeline.runner import run_ingestion
 
 from ..pipeline.conftest import write_zip
@@ -29,6 +30,24 @@ FIXTURES_DIR = REPO_ROOT / "parser" / "src" / "test" / "resources" / "fixtures"
 def _require_jar() -> None:
     if not JAR_PATH.is_file():
         pytest.fail(f"{JAR_PATH} no existe. Ejecute primero: mvn -q -f parser/pom.xml package")
+
+
+def _assert_reached_contexts_built_then_failed_without_llm(state: RunState) -> None:
+    """El pipeline ahora continua hasta GUARDRAILS_APPLIED (Prompt 12),
+    pero estos tests no configuran un proveedor LLM real (nunca se
+    invoca un proveedor real en la suite por defecto): la corrida
+    completa termina FAILED en RULE_DRAFTS_GENERATED por falta de
+    configuracion. CONTEXTS_BUILT en si mismo debe haber tenido exito
+    real (Neo4j real)."""
+    assert state.current_stage == PipelineStage.FAILED
+    contexts_built_execution = next(
+        s for s in state.stages if s.stage == PipelineStage.CONTEXTS_BUILT
+    )
+    assert contexts_built_execution.status == StageStatus.SUCCEEDED
+    rule_drafts_execution = next(
+        s for s in state.stages if s.stage == PipelineStage.RULE_DRAFTS_GENERATED
+    )
+    assert rule_drafts_execution.status == StageStatus.FAILED
 
 
 def _settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -113,10 +132,11 @@ def test_parsed_stage_processes_cbl_cob_bom_and_duplicate_basenames(tmp_path: Pa
 
     state = run_ingestion(zip_path, settings)
 
-    # El pipeline ahora continua hasta CONTEXTS_BUILT (Prompt 10b);
-    # esta prueba solo verifica que PARSED en si mismo quedo SUCCEEDED con
-    # los artefactos correctos, no que sea la etapa final.
-    assert state.current_stage == PipelineStage.CONTEXTS_BUILT
+    # Esta prueba solo verifica que PARSED en si mismo quedo SUCCEEDED
+    # con los artefactos correctos, no que la corrida completa termine
+    # con exito (ver helper: sin LLM configurado, la corrida completa
+    # termina FAILED en RULE_DRAFTS_GENERATED).
+    _assert_reached_contexts_built_then_failed_without_llm(state)
     parsed_executions = [s for s in state.stages if s.stage == PipelineStage.PARSED]
     assert len(parsed_executions) == 1
     assert parsed_executions[0].status == StageStatus.SUCCEEDED
@@ -145,7 +165,7 @@ def test_second_run_is_idempotent_without_reinvoking_jar(tmp_path: Path) -> None
     settings = _settings(tmp_path)
 
     first_state = run_ingestion(zip_path, settings)
-    assert first_state.current_stage == PipelineStage.CONTEXTS_BUILT
+    _assert_reached_contexts_built_then_failed_without_llm(first_state)
 
     canonical_dir = settings.runs_dir / first_state.run_id / "artifacts" / "02-canonical"
     artifact_snapshot = {path: path.read_bytes() for path in canonical_dir.rglob("*.json")}
@@ -161,7 +181,7 @@ def test_second_run_is_idempotent_without_reinvoking_jar(tmp_path: Path) -> None
     settings_missing_jar = _settings(tmp_path, parser_jar_path=tmp_path / "does-not-exist.jar")
     second_state = run_ingestion(zip_path, settings_missing_jar, run_id=first_state.run_id)
 
-    assert second_state.current_stage == PipelineStage.CONTEXTS_BUILT
+    _assert_reached_contexts_built_then_failed_without_llm(second_state)
     parsed_executions = [s for s in second_state.stages if s.stage == PipelineStage.PARSED]
     assert len(parsed_executions) == 1
     assert parsed_executions[0].status == StageStatus.SUCCEEDED

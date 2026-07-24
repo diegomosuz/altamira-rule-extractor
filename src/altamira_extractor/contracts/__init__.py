@@ -73,6 +73,8 @@ from .enums import (
     TextEncoding,
 )
 from .guardrail import GuardrailReport, GuardrailViolation
+from .guardrail_candidate import GuardrailCandidateArtifact, RepairAttemptRecord
+from .guardrail_manifest import GuardrailDirectoryManifest, GuardrailRecord
 from .invariants import InvariantArtifact, InvariantViolation
 from .inventory import Inventory, InventoryFile
 from .manifest import (
@@ -85,6 +87,7 @@ from .manifest import (
     ManifestSource,
 )
 from .rule_draft import Claim, RuleDraft
+from .rule_draft_manifest import RuleDraftDirectoryManifest, RuleDraftRecord
 from .run_state import RunState, StageExecution
 from .semantic_enrichment import (
     DataItemDomainTermMapping,
@@ -201,7 +204,16 @@ __all__ = [
     # rule draft
     "Claim",
     "RuleDraft",
+    # rule draft manifest
+    "RuleDraftDirectoryManifest",
+    "RuleDraftRecord",
     # guardrail
     "GuardrailReport",
     "GuardrailViolation",
+    # guardrail candidate wrapper
+    "GuardrailCandidateArtifact",
+    "RepairAttemptRecord",
+    # guardrail manifest
+    "GuardrailDirectoryManifest",
+    "GuardrailRecord",
 ]

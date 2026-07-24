@@ -250,3 +250,51 @@ class ContextBuildError(PipelineError):
     completa: ContextPackageBuilder nunca repara drift, nunca reejecuta
     Q0/CandidateDetector ni `invariants.cypher`.
     """
+
+
+class PromptTemplateError(PipelineError):
+    """Una plantilla de `prompts/` esta ausente, no es un archivo
+    regular, esta vacia, tiene un numero de placeholders `{{...}}`
+    distinto del esperado, o falta un placeholder a sustituir. Traducida
+    siempre por el llamador (`RuleDraftGenerationError`/`GuardrailError`)
+    antes de propagarse fuera de la etapa."""
+
+
+class RuleDraftGenerationError(PipelineError):
+    """Precondicion de RULE_DRAFTS_GENERATED incumplida, o fallo durante
+    la generacion/persistencia de `artifacts/08-rule-drafts/`:
+    CONTEXTS_BUILT no completo, `context-manifest.json`/algun
+    `ContextPackage` ausente o con `context_hash` inconsistente, alguna
+    plantilla de prompt (`rule_writer_system.md`/`rule_writer_user.md`)
+    ausente/no es un archivo regular/vacia/con un numero de placeholders
+    distinto del esperado, el `ContextPackage` serializado excede
+    `max_context_package_json_chars`, un error del cliente LLM
+    (`LlmClientError`), o la respuesta inicial del modelo para
+    CUALQUIER candidato no pudo ensamblarse como un `RuleDraft`
+    estructuralmente valido (envelope/JSON/fences/claves duplicadas/
+    raiz/campos faltantes-extra/tipos/Pydantic/schema). Fatal para la
+    etapa COMPLETA (atomica: todo o nada) — un solo candidato invalido
+    descarta el directorio temporal entero y nunca promueve ni un solo
+    draft, nunca consume `LLM_REPAIR_ATTEMPTS`, nunca alcanza
+    GUARDRAILS_APPLIED. El mensaje nunca incluye el body de la respuesta,
+    el prompt efectivo completo, el ContextPackage ni credenciales.
+    """
+
+
+class GuardrailError(PipelineError):
+    """Precondicion de GUARDRAILS_APPLIED incumplida, o fallo durante la
+    validacion/reparacion/persistencia de `artifacts/09-guardrails/`:
+    RULE_DRAFTS_GENERATED no completo, `rule-draft-manifest.json`/algun
+    `RuleDraft` ausente o con hash inconsistente, correspondencia 1:1
+    rota contra `context-manifest.json`, alguna plantilla de reparacion
+    (`rule_repair_system.md`/`rule_repair_user.md`) ausente/invalida, un
+    error del cliente LLM durante una reparacion (`LlmClientError`), o
+    CUALQUIER candidato agoto `LLM_REPAIR_ATTEMPTS` sin alcanzar
+    EVIDENCE_VALIDATED. Fatal para la etapa COMPLETA: GUARDRAILS_APPLIED
+    es fail-fast (se detiene en el primer REJECTED definitivo, nunca
+    procesa los candidatos restantes) y atomica (nunca promueve un
+    `artifacts/09-guardrails/` parcial; la salida canonica anterior, si
+    existia, se conserva intacta). El mensaje nunca incluye el body de
+    la respuesta, el prompt efectivo completo, el ContextPackage, el
+    RuleDraft completo ni credenciales.
+    """

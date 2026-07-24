@@ -1,10 +1,11 @@
 """PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
 -> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT ->
 SEMANTIC_GRAPH_BUILT -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED ->
-CANDIDATES_DETECTED -> CONTEXTS_BUILT.
+CANDIDATES_DETECTED -> CONTEXTS_BUILT -> RULE_DRAFTS_GENERATED ->
+GUARDRAILS_APPLIED.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas doce etapas, persiste RunState atomicamente
+ejecuta exactamente estas catorce etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -67,6 +68,23 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   solo si el resultado recomputado difiere del existente. Tambien de
   solo lectura: nunca reejecuta Q0/CandidateDetector ni
   `invariants.cypher` (ver ese modulo).
+- RULE_DRAFTS_GENERATED: etapa ATOMICA para el conjunto completo de
+  candidatos (Prompt 12); delega en
+  `rule_drafts_generated_stage.run_rule_drafts_generated_stage`, que
+  nunca promueve un exito parcial: si CUALQUIER candidato produce una
+  respuesta inicial estructuralmente invalida, descarta el directorio
+  temporal completo y conserva intacta la salida canonica anterior (ver
+  ese modulo). El fast-path de reutilizacion de
+  `artifacts/08-rule-drafts/` nunca depende del estado anterior en
+  RunState, solo del contenido real en disco.
+- GUARDRAILS_APPLIED: etapa ATOMICA y FAIL-FAST (Prompt 12); delega en
+  `guardrails_applied_stage.run_guardrails_applied_stage`, que procesa
+  candidatos secuencialmente y se detiene de inmediato en el primer
+  REJECTED definitivo (tras agotar `LLM_REPAIR_ATTEMPTS`), sin llamar al
+  modelo para los candidatos restantes ni promover un
+  `artifacts/09-guardrails/` parcial (ver ese modulo). Nunca sobrescribe
+  `artifacts/08-rule-drafts/` (evidencia inmutable de la primera
+  respuesta aceptada).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -97,19 +115,23 @@ from .errors import (
     ExtractionError,
     GraphLoadError,
     GraphValidationError,
+    GuardrailError,
     PackageValidationError,
     ParserContractViolationError,
     ParserUnavailableError,
     PipelineError,
+    RuleDraftGenerationError,
     RunConflictError,
     SemanticEnrichmentBuildError,
     SemanticGraphBuildError,
 )
 from .graph_validated_stage import run_graph_validated_stage
+from .guardrails_applied_stage import run_guardrails_applied_stage
 from .inventory_builder import build_inventory
 from .package_validator import ValidatedPackage, validate_package
 from .parsed_stage import run_parsed_stage
 from .parser_client import ProLeapParserClient
+from .rule_drafts_generated_stage import run_rule_drafts_generated_stage
 from .safe_extractor import extract_package
 from .semantic_enrichment_stage import run_semantic_enrichment_stage
 from .semantic_graph_load_stage import run_semantic_graph_load_stage
@@ -652,6 +674,70 @@ def _run_contexts_built(
     )
 
 
+def _run_rule_drafts_generated(
+    state: RunState,
+    context_dir: Path,
+    rule_draft_dir: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta RULE_DRAFTS_GENERATED (LlmRuleWriter, Prompt 12 del
+    runbook): etapa atomica para el conjunto completo de candidatos —
+    delega en `rule_drafts_generated_stage.run_rule_drafts_generated_stage`,
+    que nunca promueve un exito parcial (ver ese modulo)."""
+    started_at = _now()
+    try:
+        warnings = run_rule_drafts_generated_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            context_dir=context_dir,
+            rule_draft_dir=rule_draft_dir,
+            settings=settings,
+        )
+    except RuleDraftGenerationError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.RULE_DRAFTS_GENERATED, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.RULE_DRAFTS_GENERATED, started_at, warnings=warnings
+    )
+
+
+def _run_guardrails_applied(
+    state: RunState,
+    context_dir: Path,
+    rule_draft_dir: Path,
+    guardrail_dir: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta GUARDRAILS_APPLIED (DeterministicGuardrail + repair loop,
+    Prompt 12 del runbook): etapa atomica y fail-fast — delega en
+    `guardrails_applied_stage.run_guardrails_applied_stage`, que se
+    detiene en el primer candidato REJECTED definitivo (ver ese modulo)."""
+    started_at = _now()
+    try:
+        warnings = run_guardrails_applied_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            context_dir=context_dir,
+            rule_draft_dir=rule_draft_dir,
+            guardrail_dir=guardrail_dir,
+            settings=settings,
+        )
+    except GuardrailError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.GUARDRAILS_APPLIED, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.GUARDRAILS_APPLIED, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
     -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT -> SEMANTIC_GRAPH_BUILT
@@ -678,6 +764,8 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     invariants_path = run_dir / "artifacts" / "05-invariants.json"
     candidates_path = run_dir / "artifacts" / "06-candidates.json"
     context_dir = run_dir / "artifacts" / "07-context"
+    rule_draft_dir = run_dir / "artifacts" / "08-rule-drafts"
+    guardrail_dir = run_dir / "artifacts" / "09-guardrails"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -760,6 +848,18 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_contexts_built(
+    state = _run_contexts_built(
         state, semantic_graph_path, candidates_path, context_dir, settings, run_json_path
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    state = _run_rule_drafts_generated(
+        state, context_dir, rule_draft_dir, settings, run_json_path
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_guardrails_applied(
+        state, context_dir, rule_draft_dir, guardrail_dir, settings, run_json_path
     )
