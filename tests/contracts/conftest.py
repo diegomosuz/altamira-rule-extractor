@@ -179,7 +179,12 @@ def valid_context_package() -> ContextPackage:
                     resolved_predicates=["WS-PAIS = 'AR'"],
                     unresolved_predicates=[],
                     applicability_status=ApplicabilityStatus.EXACT,
-                    applicable_rows=[ApplicableParameterRow(values={"limite": 1000})],
+                    applicable_rows=[
+                        ApplicableParameterRow(
+                            parameter_entry_id="parameter::PARM01::entry::1::abc123456789",
+                            values={"limite": 1000},
+                        )
+                    ],
                     context_rows=[],
                     evidence_ids=["ev-2"],
                 ),
@@ -220,6 +225,7 @@ def valid_context_package() -> ContextPackage:
         batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
         domain_glossary=[
             DomainGlossaryEntry(
+                data_item_id="program::AR::op::PROG::1::abc123::data::WS-MONTO",
                 technical_name="WS-MONTO",
                 semantic_tag="amount",
                 domain_term_id="term::1.0::requested_amount",

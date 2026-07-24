@@ -1,6 +1,6 @@
-MATCH (candidate:Paragraph {id: $candidate_id})
+MATCH (candidate:Paragraph {id: $paragraph_id})
 OPTIONAL MATCH (origin:Paragraph)
-  -[:DATA_DEPENDS_ON|CONTROL_DEPENDS_ON*1..4]->(candidate)
+  -[:DATA_DEPENDS_ON|CONTROL_DEPENDS_ON*1..__DEPENDENCY_DEPTH__]->(candidate)
 WITH candidate, collect(DISTINCT origin) + [candidate] AS slice
 WITH candidate, slice, [p IN slice | p.id] AS slice_ids
 UNWIND slice AS par

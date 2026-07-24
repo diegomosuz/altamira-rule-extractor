@@ -73,6 +73,14 @@ def _default_q0_candidates_cypher_path() -> Path:
     return _discover_repo_root() / "queries" / "v1" / "q0_candidates.cypher"
 
 
+def _default_context_query_path(filename: str) -> Path:
+    return _discover_repo_root() / "queries" / "v1" / filename
+
+
+def _default_context_package_schema_path() -> Path:
+    return _discover_repo_root() / "schemas" / "context-package.schema.json"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -143,6 +151,57 @@ class Settings(BaseSettings):
     # CANDIDATES_DETECTED, ver pipeline/candidate_detector.py). Mismo
     # patron que invariants_cypher_path: no depende del CWD.
     q0_candidates_cypher_path: Path = Field(default_factory=_default_q0_candidates_cypher_path)
+
+    # Localizacion estable de Q1-Q7 (etapa CONTEXTS_BUILT, ver
+    # pipeline/context_package_builder.py) y del schema que las gobierna.
+    # Mismo patron que invariants_cypher_path/q0_candidates_cypher_path.
+    q1_scope_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q1_scope.cypher")
+    )
+    q2_code_slice_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q2_code_slice.cypher")
+    )
+    q3a_parameter_context_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q3a_parameter_context.cypher")
+    )
+    q3b_transactional_tables_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q3b_transactional_tables.cypher")
+    )
+    q4_decision_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q4_decision.cypher")
+    )
+    q5a_return_effect_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q5a_return_effect.cypher")
+    )
+    q5b_table_effects_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q5b_table_effects.cypher")
+    )
+    q6_batch_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q6_batch.cypher")
+    )
+    q7_glossary_cypher_path: Path = Field(
+        default_factory=lambda: _default_context_query_path("q7_glossary.cypher")
+    )
+    context_package_schema_path: Path = Field(
+        default_factory=_default_context_package_schema_path
+    )
+
+    # Profundidad de DATA_DEPENDS_ON/CONTROL_DEPENDS_ON usada por
+    # Q2/Q3a/Q3b/Q5b (siempre la misma dentro de una misma corrida de
+    # CONTEXTS_BUILT, para que D2/D3/D5 sean coherentes entre si). Cypher
+    # no admite un parametro en el limite de una relacion de longitud
+    # variable (verificado contra Neo4j 5 real): se sustituye como texto,
+    # siempre validado contra este rango cerrado antes de tocar el Cypher.
+    dependency_depth: int = Field(default=4, ge=1, le=10)
+
+    # Limites de tamano de un ContextPackage (nunca truncamiento
+    # silencioso: exceder cualquiera de estos es un error fatal).
+    max_code_slice_paragraphs: int = Field(default=200, ge=1, le=2000)
+    max_transactional_tables: int = Field(default=100, ge=1, le=1000)
+    # Distinto de max_parameter_entries_per_table (Prompt 7, limita
+    # ingestion por tabla): este limita el tamano total de un
+    # ContextPackage individual.
+    max_parameter_entries_per_context: int = Field(default=1000, ge=1, le=10_000)
 
 
 def load_settings() -> Settings:

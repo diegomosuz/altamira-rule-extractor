@@ -242,10 +242,15 @@
                 "items": {
                   "type": "object",
                   "required": [
+                    "parameter_entry_id",
                     "values",
                     "approved_for_rule_text"
                   ],
                   "properties": {
+                    "parameter_entry_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
                     "values": {
                       "type": "object"
                     },
@@ -260,10 +265,15 @@
                 "items": {
                   "type": "object",
                   "required": [
+                    "parameter_entry_id",
                     "values",
                     "approved_for_rule_text"
                   ],
                   "properties": {
+                    "parameter_entry_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
                     "values": {
                       "type": "object"
                     },
@@ -456,6 +466,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "data_item_id",
           "technical_name",
           "semantic_tag",
           "domain_term_id",
@@ -468,6 +479,10 @@
           "evidence_ids"
         ],
         "properties": {
+          "data_item_id": {
+            "type": "string",
+            "minLength": 1
+          },
           "technical_name": {
             "type": "string"
           },

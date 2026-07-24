@@ -29,9 +29,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 import neo4j
 from neo4j.exceptions import AuthError, ClientError, CypherSyntaxError, ServiceUnavailable
@@ -56,6 +56,8 @@ _ARTIFACT_HASH_PROPERTY = "_artifact_hash"
 _EDGE_KEY_PROPERTY = "_edge_key"
 _SUPPORTED_SERVER_MAJOR_VERSION = 5
 _SUPPORTED_URI_SCHEMES = ("bolt://", "bolt+s://", "neo4j://", "neo4j+s://")
+
+_T = TypeVar("_T")
 
 
 def _canonical_json(value: object) -> str:
@@ -438,6 +440,27 @@ class Neo4jRepository:
                 f"fallo ejecutando q0_candidates.cypher: {type(exc).__name__}"
             ) from exc
         return rows
+
+    # --- Contextos (Q1-Q7) ---
+
+    def run_in_read_transaction(self, work: Callable[[neo4j.ManagedTransaction], _T]) -> _T:
+        """Ejecuta `work` dentro de una unica transaccion de lectura
+        (`session.execute_read`), dando a `ContextPackageBuilder` una vista
+        consistente del grafo activo para TODOS los candidatos de una misma
+        corrida de CONTEXTS_BUILT, sin abrir una sesion/transaccion por
+        query ni por candidato. No es un framework: expone la transaccion
+        tal cual para que el llamador ejecute Q1-Q7 con `tx.run(...)`."""
+        try:
+            with self._driver.session(database=self._database) as session:
+                return session.execute_read(work)
+        except AuthError as exc:
+            raise Neo4jAuthenticationError("credenciales rechazadas por el servidor Neo4j") from exc
+        except ServiceUnavailable as exc:
+            raise Neo4jUnavailableError("el servidor Neo4j no esta disponible") from exc
+        except (ClientError, CypherSyntaxError) as exc:
+            raise Neo4jQueryError(
+                f"fallo ejecutando la transaccion de lectura de contexto: {type(exc).__name__}"
+            ) from exc
 
 
 def _diff_ids_and_edges(

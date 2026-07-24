@@ -15,6 +15,7 @@ from altamira_extractor.contracts import (
     ContextPackage,
     ContextPackageDecision,
     ContextParameterRow,
+    DomainGlossaryEntry,
     ParameterTableContext,
     TableEffect,
     TableEffectOperation,
@@ -109,17 +110,31 @@ def test_decision_rule_type_with_real_value_is_still_valid() -> None:
 
 def test_applicable_row_must_be_approved_true() -> None:
     with pytest.raises(ValidationError):
-        ApplicableParameterRow(values={"limite": 1}, approved_for_rule_text=False)  # type: ignore[arg-type]
+        ApplicableParameterRow(  # type: ignore[arg-type]
+            parameter_entry_id="pe-1", values={"limite": 1}, approved_for_rule_text=False
+        )
 
 
 def test_context_row_must_be_approved_false() -> None:
     with pytest.raises(ValidationError):
-        ContextParameterRow(values={"limite": 1}, approved_for_rule_text=True)  # type: ignore[arg-type]
+        ContextParameterRow(  # type: ignore[arg-type]
+            parameter_entry_id="pe-1", values={"limite": 1}, approved_for_rule_text=True
+        )
 
 
 def test_applicable_row_default_is_approved() -> None:
-    row = ApplicableParameterRow(values={"limite": 1})
+    row = ApplicableParameterRow(parameter_entry_id="pe-1", values={"limite": 1})
     assert row.approved_for_rule_text is True
+
+
+def test_applicable_row_requires_parameter_entry_id() -> None:
+    with pytest.raises(ValidationError):
+        ApplicableParameterRow(values={"limite": 1})  # type: ignore[call-arg]
+
+
+def test_context_row_requires_parameter_entry_id() -> None:
+    with pytest.raises(ValidationError):
+        ContextParameterRow(values={"limite": 1})  # type: ignore[call-arg]
 
 
 def test_unresolved_table_cannot_have_applicable_rows() -> None:
@@ -127,7 +142,9 @@ def test_unresolved_table_cannot_have_applicable_rows() -> None:
         ParameterTableContext(
             name="PARM01",
             applicability_status=ApplicabilityStatus.UNRESOLVED,
-            applicable_rows=[ApplicableParameterRow(values={"limite": 1})],
+            applicable_rows=[
+                ApplicableParameterRow(parameter_entry_id="pe-1", values={"limite": 1})
+            ],
         )
 
 
@@ -136,7 +153,9 @@ def test_not_applicable_table_cannot_have_applicable_rows() -> None:
         ParameterTableContext(
             name="PARM01",
             applicability_status=ApplicabilityStatus.NOT_APPLICABLE,
-            applicable_rows=[ApplicableParameterRow(values={"limite": 1})],
+            applicable_rows=[
+                ApplicableParameterRow(parameter_entry_id="pe-1", values={"limite": 1})
+            ],
         )
 
 
@@ -144,9 +163,21 @@ def test_unresolved_table_can_have_context_rows() -> None:
     table = ParameterTableContext(
         name="PARM01",
         applicability_status=ApplicabilityStatus.UNRESOLVED,
-        context_rows=[ContextParameterRow(values={"limite": 1})],
+        context_rows=[ContextParameterRow(parameter_entry_id="pe-1", values={"limite": 1})],
     )
     assert table.applicable_rows == []
+
+
+def test_same_parameter_entry_id_cannot_be_in_both_applicable_and_context_rows() -> None:
+    with pytest.raises(ValidationError):
+        ParameterTableContext(
+            name="PARM01",
+            applicability_status=ApplicabilityStatus.PARTIAL,
+            applicable_rows=[
+                ApplicableParameterRow(parameter_entry_id="pe-1", values={"limite": 1})
+            ],
+            context_rows=[ContextParameterRow(parameter_entry_id="pe-1", values={"limite": 1})],
+        )
 
 
 # --- efecto PROGRAM_CONTEXT --------------------------------------------------
@@ -194,3 +225,61 @@ def test_dependency_slice_effect_can_be_approved() -> None:
         evidence_ids=["ev-1"],
     )
     assert effect.approved_for_rule_text is True
+
+
+# --- DomainGlossaryEntry.data_item_id (Prompt 10b) ---
+
+
+def _domain_glossary_entry(**overrides: object) -> DomainGlossaryEntry:
+    defaults: dict[str, object] = {
+        "data_item_id": "program::AR::op::PROG::1::abc123::data::WS-MONTO",
+        "technical_name": "WS-MONTO",
+        "semantic_tag": "amount",
+        "domain_term_id": "term::1.0::requested_amount",
+        "functional_name": "importe solicitado",
+        "definition": "Importe solicitado por el cliente",
+        "entity_type": "monetary_amount",
+        "source_kind": "CURATED_CONFIG",
+        "authoritative_source": "V1 controlled glossary",
+        "confidence": 1.0,
+        "evidence_ids": ["ev-1"],
+    }
+    defaults.update(overrides)
+    return DomainGlossaryEntry(**defaults)  # type: ignore[arg-type]
+
+
+def test_domain_glossary_entry_requires_data_item_id() -> None:
+    with pytest.raises(ValidationError):
+        DomainGlossaryEntry(
+            technical_name="WS-MONTO",
+            semantic_tag="amount",
+            domain_term_id="term::1.0::requested_amount",
+            functional_name="importe solicitado",
+            definition="Importe solicitado por el cliente",
+            entity_type="monetary_amount",
+            source_kind="CURATED_CONFIG",
+            authoritative_source="V1 controlled glossary",
+            confidence=1.0,
+            evidence_ids=["ev-1"],
+        )  # type: ignore[call-arg]
+
+
+def test_domain_glossary_entry_valid_with_data_item_id() -> None:
+    entry = _domain_glossary_entry()
+    assert entry.data_item_id == "program::AR::op::PROG::1::abc123::data::WS-MONTO"
+
+
+def test_domain_glossary_entry_data_item_id_cannot_be_empty() -> None:
+    with pytest.raises(ValidationError):
+        _domain_glossary_entry(data_item_id="")
+
+
+def test_full_payload_with_new_fields_matches_schema(
+    valid_context_package: ContextPackage, context_package_schema: dict[str, Any]
+) -> None:
+    assert_matches_schema(valid_context_package.model_dump(mode="json"), context_package_schema)
+    dumped = valid_context_package.model_dump(mode="json")
+    applicable_row = dumped["data_context"]["parameter_tables"][0]["applicable_rows"][0]
+    assert applicable_row["parameter_entry_id"]
+    glossary_entry = dumped["domain_glossary"][0]
+    assert glossary_entry["data_item_id"]

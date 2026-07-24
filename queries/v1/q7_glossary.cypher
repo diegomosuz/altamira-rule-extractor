@@ -1,4 +1,4 @@
-MATCH (par:Paragraph {id: $candidate_id})-[:USES]->(di:DataItem)
+MATCH (par:Paragraph {id: $paragraph_id})-[:USES]->(di:DataItem)
 MATCH (di)-[m:HAS_DOMAIN_TERM]->(term:DomainTerm)
 RETURN DISTINCT di.id AS data_item_id,
        di.name AS technical_name,

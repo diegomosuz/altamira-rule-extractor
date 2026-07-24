@@ -1,10 +1,10 @@
 """PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
 -> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT ->
 SEMANTIC_GRAPH_BUILT -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED ->
-CANDIDATES_DETECTED.
+CANDIDATES_DETECTED -> CONTEXTS_BUILT.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas once etapas, persiste RunState atomicamente
+ejecuta exactamente estas doce etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -60,6 +60,13 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   resultado recomputado difiere del existente. Es de solo lectura sobre
   el grafo: nunca repara drift ni vuelve a ejecutar
   `invariants.cypher`/`GraphInvariantValidator` (ver ese modulo).
+- CONTEXTS_BUILT: tampoco "salta" la construccion; delega en
+  `contexts_built_stage.run_contexts_built_stage`, que ejecuta Q1-Q7
+  para cada `RuleCandidate` dentro de una unica transaccion de lectura y
+  reconstruye `artifacts/07-context/` (con su `context-manifest.json`)
+  solo si el resultado recomputado difiere del existente. Tambien de
+  solo lectura: nunca reejecuta Q0/CandidateDetector ni
+  `invariants.cypher` (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -81,9 +88,11 @@ from ..contracts.inventory import Inventory
 from ..contracts.run_state import RunState, StageExecution
 from .artifact_store import atomic_write_json
 from .candidates_detected_stage import run_candidates_detected_stage
+from .contexts_built_stage import run_contexts_built_stage
 from .dependencies_stage import run_dependencies_built_stage
 from .errors import (
     CandidateDetectionError,
+    ContextBuildError,
     DependencyBuildError,
     ExtractionError,
     GraphLoadError,
@@ -610,11 +619,44 @@ def _run_candidates_detected(
     )
 
 
+def _run_contexts_built(
+    state: RunState,
+    semantic_graph_path: Path,
+    candidates_path: Path,
+    context_dir: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta CONTEXTS_BUILT (ContextPackageBuilder/Q1-Q7, Prompt 10b del
+    runbook): reejecuta precondiciones y Q1-Q7 en cada corrida, y
+    reconstruye `artifacts/07-context/` solo si el resultado recomputado
+    difiere del existente (ver contexts_built_stage.py)."""
+    started_at = _now()
+    try:
+        warnings = run_contexts_built_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            semantic_graph_path=semantic_graph_path,
+            candidates_path=candidates_path,
+            context_dir=context_dir,
+            settings=settings,
+        )
+    except ContextBuildError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.CONTEXTS_BUILT, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.CONTEXTS_BUILT, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
     -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT -> SEMANTIC_GRAPH_BUILT
-    -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED -> CANDIDATES_DETECTED
-    para `source_zip`.
+    -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED -> CANDIDATES_DETECTED ->
+    CONTEXTS_BUILT para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -635,6 +677,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     semantic_graph_path = run_dir / "artifacts" / "04-semantic-graph.json"
     invariants_path = run_dir / "artifacts" / "05-invariants.json"
     candidates_path = run_dir / "artifacts" / "06-candidates.json"
+    context_dir = run_dir / "artifacts" / "07-context"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -705,7 +748,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_candidates_detected(
+    state = _run_candidates_detected(
         state,
         semantic_graph_path,
         semantic_enrichment_path,
@@ -713,4 +756,10 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
         candidates_path,
         settings,
         run_json_path,
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_contexts_built(
+        state, semantic_graph_path, candidates_path, context_dir, settings, run_json_path
     )

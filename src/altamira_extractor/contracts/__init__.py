@@ -21,6 +21,7 @@ from .canonical import (
     CanonicalSqlAccess,
     CanonicalStatement,
 )
+from .context_manifest import ContextDirectoryManifest, ContextRecord, QueryRecord
 from .context_package import (
     ApplicableParameterRow,
     BatchContext,
@@ -191,6 +192,10 @@ __all__ = [
     "ReturnCodeEffect",
     "TableEffect",
     "TransactionalTableRead",
+    # context manifest
+    "ContextDirectoryManifest",
+    "ContextRecord",
+    "QueryRecord",
     # rule draft
     "Claim",
     "RuleDraft",

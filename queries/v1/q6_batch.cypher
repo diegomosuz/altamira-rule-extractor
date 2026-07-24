@@ -1,4 +1,4 @@
-MATCH (par:Paragraph {id: $candidate_id})<-[:CONTAINS]-(prog:Program)
+MATCH (par:Paragraph {id: $paragraph_id})<-[:CONTAINS]-(prog:Program)
 MATCH (prog)-[:CONTAINS]->(:Paragraph)
       -[:WRITES|UPDATES|INSERTS]->(t:Table)
       <-[:READS]-(j:BatchJob)

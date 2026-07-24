@@ -1,7 +1,8 @@
-MATCH (sink:Paragraph {id: $candidate_id})
+MATCH (sink:Paragraph {id: $paragraph_id})
 OPTIONAL MATCH (origin:Paragraph)
-  -[:DATA_DEPENDS_ON|CONTROL_DEPENDS_ON*1..4]->(sink)
-WITH collect(DISTINCT origin) + [sink] AS paragraphs
+  -[:DATA_DEPENDS_ON|CONTROL_DEPENDS_ON*1..__DEPENDENCY_DEPTH__]->(sink)
+WITH sink, collect(DISTINCT origin) AS origins
+WITH origins + [sink] AS paragraphs
 UNWIND paragraphs AS par
 OPTIONAL MATCH (par)-[r:READS]->(t:Table)
 WHERE t IS NULL OR NOT t:ParameterTable

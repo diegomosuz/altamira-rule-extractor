@@ -65,15 +65,24 @@ class CodeSliceEntry(AltamiraBaseModel):
 
 class ApplicableParameterRow(AltamiraBaseModel):
     """Fila con aplicabilidad resuelta y aprobada para figurar en el
-    texto de la regla (CLAUDE.md, seccion Parametria)."""
+    texto de la regla (CLAUDE.md, seccion Parametria).
 
+    `parameter_entry_id` es la identidad primaria de la fila (nunca
+    `row_hash`/`row_number`/una combinacion de valores): Prompt 7 permite
+    dos ParameterEntry con `row_hash` y valores identicos pero
+    `parameter_entry_id` distintos (incluye `row_number`), y ambas filas
+    deben poder conservarse."""
+
+    parameter_entry_id: str = Field(min_length=1)
     values: dict[str, Any] = Field(default_factory=dict)
     approved_for_rule_text: Literal[True] = True
 
 
 class ContextParameterRow(AltamiraBaseModel):
-    """Fila de contexto, no aprobada para redactarse como valor aplicable."""
+    """Fila de contexto, no aprobada para redactarse como valor aplicable.
+    Ver `ApplicableParameterRow` sobre `parameter_entry_id`."""
 
+    parameter_entry_id: str = Field(min_length=1)
     values: dict[str, Any] = Field(default_factory=dict)
     approved_for_rule_text: Literal[False] = False
 
@@ -99,6 +108,18 @@ class ParameterTableContext(AltamiraBaseModel):
             raise ValueError(
                 "no se puede llamar applicable_rows a filas cuya aplicabilidad es "
                 "UNRESOLVED o NOT_APPLICABLE (CLAUDE.md, seccion Parametria)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _no_parameter_entry_id_in_both_lists(self) -> ParameterTableContext:
+        applicable_ids = {row.parameter_entry_id for row in self.applicable_rows}
+        context_ids = {row.parameter_entry_id for row in self.context_rows}
+        overlap = applicable_ids & context_ids
+        if overlap:
+            raise ValueError(
+                "un mismo parameter_entry_id no puede aparecer en applicable_rows y "
+                f"context_rows a la vez: {sorted(overlap)}"
             )
         return self
 
@@ -161,6 +182,12 @@ class BatchContext(AltamiraBaseModel):
 
 
 class DomainGlossaryEntry(AltamiraBaseModel):
+    """`data_item_id` es identidad, no `technical_name`/`semantic_tag`:
+    dos DataItems distintos pueden compartir technical_name en paragraphs
+    o programas distintos del mismo slice. Clave de deduplicacion:
+    `(domain_term_id, data_item_id)`."""
+
+    data_item_id: str = Field(min_length=1)
     technical_name: str = Field(min_length=1)
     semantic_tag: str = Field(min_length=1)
     domain_term_id: str = Field(min_length=1)

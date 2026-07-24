@@ -18,6 +18,7 @@ si difiere del existente.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from ..config import Settings
@@ -34,6 +35,23 @@ from .semantic_graph_load_stage import load_and_validate_semantic_graph
 from .semantic_tagger import load_semantic_tags_config
 
 _REQUIRED_RETURN_CODE_TAG = "return_code"
+
+
+def load_and_validate_candidate_artifact(candidates_path: Path) -> tuple[CandidateArtifact, str]:
+    """Relee `06-candidates.json`, calcula su SHA-256 real y lo valida
+    contra `CandidateArtifact`. Reutilizado por `contexts_built_stage.py`
+    (misma verificacion, misma fuente unica de verdad)."""
+    if not candidates_path.is_file():
+        raise CandidateDetectionError(f"no se encontro {candidates_path.name}")
+    raw_bytes = candidates_path.read_bytes()
+    candidate_artifact_hash = hashlib.sha256(raw_bytes).hexdigest()
+    try:
+        artifact = CandidateArtifact.model_validate_json(raw_bytes.decode("utf-8"))
+    except ValueError as exc:
+        raise CandidateDetectionError(
+            f"{candidates_path.name} no valida contra CandidateArtifact: {exc}"
+        ) from exc
+    return artifact, candidate_artifact_hash
 
 
 def _verify_graph_validated_precondition(stages: list[StageExecution]) -> None:

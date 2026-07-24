@@ -165,3 +165,23 @@ class CandidateDetectionError(PipelineError):
     repara, recarga ni revalida el grafo — esas responsabilidades
     pertenecen a SEMANTIC_GRAPH_LOADED/GRAPH_VALIDATED.
     """
+
+
+class ContextBuildError(PipelineError):
+    """Precondicion de CONTEXTS_BUILT incumplida, o fallo durante la
+    construccion/persistencia de `artifacts/07-context/`: CANDIDATES_DETECTED
+    no completo, `04-semantic-graph.json`/`05-invariants.json`/
+    `06-candidates.json` ausentes o invalidos, drift detectado (antes o
+    durante la transaccion de lectura de Q1-Q7), alguna de las nueve
+    queries ausente/no es un archivo regular/vacia/con un numero de
+    placeholders `__DEPENDENCY_DEPTH__` distinto del esperado, un error
+    Cypher, cardinalidad invalida de Q1/Q4 (cero o mas de una fila),
+    JSON invalido en `operands_json`/filas parametricas, un predicado no
+    soportado por la gramatica V1 que impida clasificar aplicabilidad,
+    un limite configurado excedido (nunca se trunca en silencio), un
+    ContextPackage que no valida contra Pydantic o contra
+    `context-package.schema.json`, o un fallo de escritura/intercambio/
+    restauracion del directorio `07-context/`. Fatal para la etapa
+    completa: ContextPackageBuilder nunca repara drift, nunca reejecuta
+    Q0/CandidateDetector ni `invariants.cypher`.
+    """

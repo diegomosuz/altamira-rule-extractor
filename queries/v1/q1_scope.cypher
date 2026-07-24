@@ -1,4 +1,4 @@
-MATCH (par:Paragraph {id: $candidate_id})
+MATCH (par:Paragraph {id: $paragraph_id})
       <-[:CONTAINS]-(prog:Program)
       <-[:EXECUTES_VIA]-(op:Operation)
       <-[:HAS_OPERATION]-(app:Application)
