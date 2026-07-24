@@ -13,6 +13,7 @@ from altamira_extractor.contracts import (
     ApplicableParameterRow,
     AttributionScope,
     ContextPackage,
+    ContextPackageDecision,
     ContextParameterRow,
     ParameterTableContext,
     TableEffect,
@@ -74,6 +75,33 @@ def test_context_package_rejects_invalid_source_package_hash(
     payload["scope"]["source_package_hash"] = "too-short"
     with pytest.raises(ValidationError):
         ContextPackage.model_validate(payload)
+
+
+# --- decision.rule_type: str | None (StatementKind.IF/EVALUATE no lo demuestra) ---
+
+
+def test_decision_rule_type_none_is_valid_and_matches_schema(
+    valid_context_package: ContextPackage, context_package_schema: dict[str, Any]
+) -> None:
+    package_with_null_rule_type = valid_context_package.model_copy(
+        update={"decision": valid_context_package.decision.model_copy(update={"rule_type": None})}
+    )
+    assert package_with_null_rule_type.decision.rule_type is None
+    assert_matches_schema(
+        package_with_null_rule_type.model_dump(mode="json"), context_package_schema
+    )
+
+
+def test_decision_rule_type_with_real_value_is_still_valid() -> None:
+    decision = ContextPackageDecision(
+        expression="WS-MONTO > WS-LIMITE",
+        normalized_expression="WS-MONTO > WS-LIMITE",
+        operands=["WS-MONTO", "WS-LIMITE"],
+        rule_type="threshold-comparison",
+        outcome_code="R001",
+        evidence_ids=["ev-1"],
+    )
+    assert decision.rule_type == "threshold-comparison"
 
 
 # --- filas parametricas aprobadas / no aprobadas ---------------------------

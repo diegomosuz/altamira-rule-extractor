@@ -366,6 +366,11 @@ def test_evaluate_creates_decision_node() -> None:
     para_id = f"{PROGRAM_ID}::paragraph::MAIN-PARA"
     decision = _node(graph, f"{para_id}::decision::20::1")
     assert decision.labels == [NodeLabel.DECISION]
+    # StatementKind.EVALUATE es una construccion tecnica: no demuestra un
+    # tipo funcional de regla, igual que StatementKind.IF (ver test
+    # test_if_without_leads_to_still_creates_decision_node). Ninguna
+    # etapa deriva rule_type desde el tipo de statement.
+    assert decision.properties["rule_type"] is None
 
 
 def test_direct_assignment_generates_leads_to() -> None:

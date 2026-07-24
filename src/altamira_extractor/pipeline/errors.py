@@ -151,3 +151,17 @@ class GraphValidationError(PipelineError):
     severidad ERROR incumplido. Fatal para la etapa completa: la
     reparacion pertenece a SEMANTIC_GRAPH_LOADED, no a esta etapa.
     """
+
+
+class CandidateDetectionError(PipelineError):
+    """Precondicion de CANDIDATES_DETECTED incumplida: GRAPH_VALIDATED no
+    completo, `04-semantic-graph.json`/`05-invariants.json` ausentes o
+    invalidos, `graph_validated=false`/`error_count>0`, drift detectado
+    contra el `AltamiraGraphLoad` activo, `config/semantic-tags.yml`
+    modificado desde SEMANTIC_ENRICHMENT_BUILT o sin el tag `return_code`,
+    `queries/v1/q0_candidates.cypher` ausente/vacio, un error de ejecucion
+    de Q0, o filas de Q0 inconsistentes para la misma identidad de
+    candidato. Fatal para la etapa completa: CandidateDetector nunca
+    repara, recarga ni revalida el grafo — esas responsabilidades
+    pertenecen a SEMANTIC_GRAPH_LOADED/GRAPH_VALIDATED.
+    """

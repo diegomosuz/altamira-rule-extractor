@@ -1,14 +1,14 @@
-"""Tests de runner: orquestacion RECEIVED..GRAPH_VALIDATED, hash e
+"""Tests de runner: orquestacion RECEIVED..CANDIDATES_DETECTED, hash e
 idempotencia.
 
 La mayoria de estos tests ejercitan RECEIVED..INVENTORIED y la plomeria de
 RunState alrededor de PARSED/DEPENDENCIES_BUILT/SEMANTIC_ENRICHMENT_BUILT/
-SEMANTIC_GRAPH_BUILT/SEMANTIC_GRAPH_LOADED/GRAPH_VALIDATED (transiciones,
-StageExecution, idempotencia a nivel de etapa); por eso las seis etapas
-se stubean por defecto para no depender de un JAR, un binario `java`, un
-servidor Neo4j real, ni YAML/artefactos reales aqui. El comportamiento
-real de PARSED esta cubierto en test_parser_client.py/test_parsed_stage.py;
-el de DEPENDENCIES_BUILT en
+SEMANTIC_GRAPH_BUILT/SEMANTIC_GRAPH_LOADED/GRAPH_VALIDATED/
+CANDIDATES_DETECTED (transiciones, StageExecution, idempotencia a nivel de
+etapa); por eso las siete etapas se stubean por defecto para no depender
+de un JAR, un binario `java`, un servidor Neo4j real, ni YAML/artefactos
+reales aqui. El comportamiento real de PARSED esta cubierto en
+test_parser_client.py/test_parsed_stage.py; el de DEPENDENCIES_BUILT en
 test_dependency_builder.py/test_dependencies_stage.py; el de
 SEMANTIC_ENRICHMENT_BUILT en test_ddl_parser.py/test_csv_loader.py/
 test_semantic_tagger.py/test_domain_term_mapper.py/
@@ -16,8 +16,10 @@ test_semantic_enrichment_stage.py; el de SEMANTIC_GRAPH_BUILT en
 test_semantic_graph_builder.py/test_semantic_graph_stage.py; el de
 SEMANTIC_GRAPH_LOADED/GRAPH_VALIDATED en test_neo4j_repository.py/
 test_semantic_graph_load_stage.py/test_graph_invariant_validator.py/
-test_graph_validated_stage.py; la integracion con JAR/Neo4j reales esta
-en tests/parser_integration/ y tests/neo4j_integration/."""
+test_graph_validated_stage.py; el de CANDIDATES_DETECTED en
+test_candidate_detector.py/test_candidates_detected_stage.py; la
+integracion con JAR/Neo4j reales esta en tests/parser_integration/ y
+tests/neo4j_integration/."""
 
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ from altamira_extractor.contracts.inventory import Inventory
 from altamira_extractor.contracts.run_state import RunState
 from altamira_extractor.pipeline import runner as runner_module
 from altamira_extractor.pipeline.errors import (
+    CandidateDetectionError,
     DependencyBuildError,
     GraphLoadError,
     GraphValidationError,
@@ -46,7 +49,7 @@ from altamira_extractor.pipeline.runner import _copy_and_hash, run_ingestion
 
 from .conftest import build_valid_package_zip
 
-_TOTAL_STAGE_COUNT = 10
+_TOTAL_STAGE_COUNT = 11
 
 
 @pytest.fixture(autouse=True)
@@ -105,12 +108,21 @@ def _stub_graph_validated_stage_success(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
 
-def test_full_happy_path_reaches_graph_validated(tmp_path: Path, settings: Settings) -> None:
+@pytest.fixture(autouse=True)
+def _stub_candidates_detected_stage_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runner_module,
+        "run_candidates_detected_stage",
+        lambda **kwargs: [],
+    )
+
+
+def test_full_happy_path_reaches_candidates_detected(tmp_path: Path, settings: Settings) -> None:
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
 
     state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in state.stages]
     assert stage_names == [
         PipelineStage.RECEIVED,
@@ -123,6 +135,7 @@ def test_full_happy_path_reaches_graph_validated(tmp_path: Path, settings: Setti
         PipelineStage.SEMANTIC_GRAPH_BUILT,
         PipelineStage.SEMANTIC_GRAPH_LOADED,
         PipelineStage.GRAPH_VALIDATED,
+        PipelineStage.CANDIDATES_DETECTED,
     ]
     assert all(s.status == StageStatus.SUCCEEDED for s in state.stages)
 
@@ -258,7 +271,7 @@ def test_corrupt_inventory_is_rebuilt_instead_of_reused(
 
     rebuilt_state = run_ingestion(zip_path, settings, run_id=state.run_id)
 
-    assert rebuilt_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert rebuilt_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     assert inventory.run_id == state.run_id
     stage_names = [s.stage for s in rebuilt_state.stages]
@@ -319,7 +332,7 @@ def test_parsed_warnings_propagate_to_stage_execution(
 
     # PARSED tuvo exito (con warnings) y las etapas siguientes (stubeadas)
     # tambien: el pipeline avanza mas alla de PARSED.
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     parsed_stage_execution = next(s for s in state.stages if s.stage == PipelineStage.PARSED)
     assert parsed_stage_execution.warnings == ["aviso de ejemplo"]
 
@@ -345,7 +358,7 @@ def test_retry_after_parsed_failure_does_not_duplicate_stage_execution(
         second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     parsed_executions = [s for s in second_state.stages if s.stage == PipelineStage.PARSED]
@@ -386,7 +399,7 @@ def test_dependencies_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_dependencies_built_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     dependencies_execution = next(
         s for s in state.stages if s.stage == PipelineStage.DEPENDENCIES_BUILT
     )
@@ -409,7 +422,7 @@ def test_retry_after_dependencies_built_failure_does_not_duplicate_stage_executi
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     dependencies_executions = [
@@ -452,7 +465,7 @@ def test_semantic_enrichment_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_enrichment_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     execution = next(
         s for s in state.stages if s.stage == PipelineStage.SEMANTIC_ENRICHMENT_BUILT
     )
@@ -475,7 +488,7 @@ def test_retry_after_semantic_enrichment_built_failure_does_not_duplicate_stage_
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -516,7 +529,7 @@ def test_semantic_graph_built_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_graph_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     execution = next(s for s in state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_BUILT)
     assert execution.warnings == ["referencia SQL no calificada es ambigua"]
 
@@ -537,7 +550,7 @@ def test_retry_after_semantic_graph_built_failure_does_not_duplicate_stage_execu
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -580,7 +593,7 @@ def test_semantic_graph_loaded_summary_propagates_to_stage_execution(
         mp.setattr(runner_module, "run_semantic_graph_load_stage", _succeed)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     execution = next(s for s in state.stages if s.stage == PipelineStage.SEMANTIC_GRAPH_LOADED)
     assert execution.warnings == [
         "cargados 42 nodos / 17 relaciones (Neo4j 5.24.0, database 'neo4j')"
@@ -603,7 +616,7 @@ def test_retry_after_semantic_graph_loaded_failure_does_not_duplicate_stage_exec
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [
@@ -629,6 +642,7 @@ def test_graph_validated_failure_marks_run_failed_with_error(
     execution = next(s for s in state.stages if s.stage == PipelineStage.GRAPH_VALIDATED)
     assert execution.status == StageStatus.FAILED
     assert "ERROR" in (execution.error or "")
+    assert not any(s.stage == PipelineStage.CANDIDATES_DETECTED for s in state.stages)
 
 
 def test_graph_validated_warnings_propagate_to_stage_execution(
@@ -643,7 +657,7 @@ def test_graph_validated_warnings_propagate_to_stage_execution(
         mp.setattr(runner_module, "run_graph_validated_stage", _succeed_with_warnings)
         state = run_ingestion(zip_path, settings)
 
-    assert state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
     execution = next(s for s in state.stages if s.stage == PipelineStage.GRAPH_VALIDATED)
     assert execution.warnings == ["SOME_WARNING: aviso no bloqueante (entity::1)"]
 
@@ -664,9 +678,68 @@ def test_retry_after_graph_validated_failure_does_not_duplicate_stage_execution(
     second_state = run_ingestion(zip_path, settings, run_id=run_id)
 
     assert first_state.current_stage == PipelineStage.FAILED
-    assert second_state.current_stage == PipelineStage.GRAPH_VALIDATED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
     stage_names = [s.stage for s in second_state.stages]
     assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
     executions = [s for s in second_state.stages if s.stage == PipelineStage.GRAPH_VALIDATED]
+    assert len(executions) == 1
+    assert executions[0].status == StageStatus.SUCCEEDED
+
+
+def test_candidates_detected_failure_marks_run_failed_with_error(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    def _fail(**kwargs: object) -> list[str]:
+        raise CandidateDetectionError("drift detectado entre 04-semantic-graph.json y Neo4j")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner_module, "run_candidates_detected_stage", _fail)
+        state = run_ingestion(zip_path, settings)
+
+    assert state.current_stage == PipelineStage.FAILED
+    execution = next(s for s in state.stages if s.stage == PipelineStage.CANDIDATES_DETECTED)
+    assert execution.status == StageStatus.FAILED
+    assert "drift" in (execution.error or "")
+
+
+def test_candidates_detected_warnings_propagate_to_stage_execution(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    def _succeed_with_warnings(**kwargs: object) -> list[str]:
+        return ["detectados 3 candidato(s)"]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner_module, "run_candidates_detected_stage", _succeed_with_warnings)
+        state = run_ingestion(zip_path, settings)
+
+    assert state.current_stage == PipelineStage.CANDIDATES_DETECTED
+    execution = next(s for s in state.stages if s.stage == PipelineStage.CANDIDATES_DETECTED)
+    assert execution.warnings == ["detectados 3 candidato(s)"]
+
+
+def test_retry_after_candidates_detected_failure_does_not_duplicate_stage_execution(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+    run_id = "candidates-detected-retry"
+
+    def _fail(**kwargs: object) -> list[str]:
+        raise CandidateDetectionError("fallo simulado")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner_module, "run_candidates_detected_stage", _fail)
+        first_state = run_ingestion(zip_path, settings, run_id=run_id)
+
+    second_state = run_ingestion(zip_path, settings, run_id=run_id)
+
+    assert first_state.current_stage == PipelineStage.FAILED
+    assert second_state.current_stage == PipelineStage.CANDIDATES_DETECTED
+    stage_names = [s.stage for s in second_state.stages]
+    assert len(stage_names) == len(set(stage_names)) == _TOTAL_STAGE_COUNT
+    executions = [s for s in second_state.stages if s.stage == PipelineStage.CANDIDATES_DETECTED]
     assert len(executions) == 1
     assert executions[0].status == StageStatus.SUCCEEDED

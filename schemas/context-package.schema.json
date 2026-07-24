@@ -331,7 +331,10 @@
           }
         },
         "rule_type": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "outcome_code": {
           "type": [

@@ -1,0 +1,134 @@
+"""Tests de RuleCandidate (artifacts/06-candidates.json).
+
+`rule_type` es `str | None`: StatementKind.IF/EVALUATE son
+construcciones tecnicas de COBOL, no evidencia de un tipo funcional de
+regla de negocio, asi que ninguna etapa puede derivarlo ni inventarlo
+(ver docstring de contracts/candidate.py)."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from altamira_extractor.contracts import CandidateArtifact, RuleCandidate
+
+_VALID_HASH = "a" * 64
+_OTHER_HASH = "b" * 64
+
+
+def _candidate(**overrides: object) -> RuleCandidate:
+    defaults: dict[str, object] = {
+        "candidate_id": "candidate::return-code-decision::dec-1",
+        "paragraph_id": "program::AR::op::PROG::1::abc123::paragraph::MAIN",
+        "paragraph_name": "MAIN",
+        "decision_id": "program::AR::op::PROG::1::abc123::paragraph::MAIN::decision::10::1",
+        "detector_id": "return-code-decision",
+        "detector_version": "1.0",
+        "detector_score": 1.0,
+        "condition": "WS-COD-RESULT = 'R001'",
+        "outcome_code": "R001",
+        "rule_type": None,
+        "line_start": 10,
+        "source_file": "01-codigo/cobol/PROG.cbl",
+        "source_package_hash": _VALID_HASH,
+    }
+    defaults.update(overrides)
+    return RuleCandidate(**defaults)  # type: ignore[arg-type]
+
+
+def test_rule_candidate_valid_with_rule_type_none() -> None:
+    candidate = _candidate(rule_type=None)
+    assert candidate.rule_type is None
+
+
+def test_rule_candidate_valid_with_a_real_rule_type() -> None:
+    # Un valor de rule_type real y no vacio sigue siendo valido: el
+    # contrato no exige `None`, solo deja de EXIGIR un valor no vacio.
+    candidate = _candidate(rule_type="threshold-comparison")
+    assert candidate.rule_type == "threshold-comparison"
+
+
+def test_rule_candidate_round_trips_with_rule_type_none() -> None:
+    candidate = _candidate(rule_type=None)
+    restored = RuleCandidate.model_validate_json(candidate.to_stable_json())
+    assert restored == candidate
+    assert restored.rule_type is None
+
+
+# --- CandidateArtifact (artifacts/06-candidates.json) ---
+
+
+def _artifact(**overrides: object) -> CandidateArtifact:
+    defaults: dict[str, object] = {
+        "run_id": "run-1",
+        "source_package_hash": _VALID_HASH,
+        "semantic_graph_hash": _VALID_HASH,
+        "invariants_query_hash": _VALID_HASH,
+        "q0_query_hash": _VALID_HASH,
+        "candidates": [],
+        "warnings": [],
+    }
+    defaults.update(overrides)
+    return CandidateArtifact(**defaults)  # type: ignore[arg-type]
+
+
+def test_candidate_artifact_with_empty_candidates_is_valid() -> None:
+    artifact = _artifact(candidates=[])
+    assert artifact.candidates == []
+
+
+def test_candidate_artifact_round_trips() -> None:
+    candidate = _candidate(candidate_id="candidate::det::1.0::" + _VALID_HASH + "::dec-1")
+    artifact = _artifact(candidates=[candidate])
+    restored = CandidateArtifact.model_validate_json(artifact.to_stable_json())
+    assert restored == artifact
+
+
+def test_candidate_artifact_rejects_duplicate_candidate_id() -> None:
+    candidate = _candidate(candidate_id="candidate::det::1.0::" + _VALID_HASH + "::dec-1")
+    with pytest.raises(ValidationError):
+        _artifact(candidates=[candidate, candidate])
+
+
+def test_candidate_artifact_rejects_unsorted_candidates() -> None:
+    first = _candidate(
+        candidate_id="candidate::det::1.0::" + _VALID_HASH + "::dec-2", decision_id="dec-2"
+    )
+    second = _candidate(
+        candidate_id="candidate::det::1.0::" + _VALID_HASH + "::dec-1", decision_id="dec-1"
+    )
+    with pytest.raises(ValidationError):
+        _artifact(candidates=[first, second])
+
+
+def test_candidate_artifact_accepts_sorted_candidates() -> None:
+    first = _candidate(
+        candidate_id="candidate::det::1.0::" + _VALID_HASH + "::dec-1", decision_id="dec-1"
+    )
+    second = _candidate(
+        candidate_id="candidate::det::1.0::" + _VALID_HASH + "::dec-2", decision_id="dec-2"
+    )
+    artifact = _artifact(candidates=[first, second])
+    assert [c.candidate_id for c in artifact.candidates] == [
+        first.candidate_id,
+        second.candidate_id,
+    ]
+
+
+def test_candidate_artifact_rejects_candidate_with_mismatched_source_package_hash() -> None:
+    candidate = _candidate(
+        candidate_id="candidate::det::1.0::" + _OTHER_HASH + "::dec-1",
+        source_package_hash=_OTHER_HASH,
+    )
+    with pytest.raises(ValidationError):
+        _artifact(source_package_hash=_VALID_HASH, candidates=[candidate])
+
+
+def test_candidate_artifact_rejects_duplicate_warnings() -> None:
+    with pytest.raises(ValidationError):
+        _artifact(warnings=["igual", "igual"])
+
+
+def test_candidate_artifact_rejects_unsorted_warnings() -> None:
+    with pytest.raises(ValidationError):
+        _artifact(warnings=["z", "a"])

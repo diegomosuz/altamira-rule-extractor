@@ -1,9 +1,10 @@
 """PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
 -> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT ->
-SEMANTIC_GRAPH_BUILT -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED.
+SEMANTIC_GRAPH_BUILT -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED ->
+CANDIDATES_DETECTED.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas diez etapas, persiste RunState atomicamente
+ejecuta exactamente estas once etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -51,6 +52,14 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   entre el artefacto y el estado real de Neo4j antes de ejecutar
   `queries/v1/invariants.cypher` y persistir
   `artifacts/05-invariants.json` (ver ese modulo).
+- CANDIDATES_DETECTED: nunca "salta" la deteccion (mismo principio que
+  SEMANTIC_GRAPH_LOADED: no hay optimizacion de skip); delega en
+  `candidates_detected_stage.run_candidates_detected_stage`, que
+  reejecuta precondiciones y `queries/v1/q0_candidates.cypher` en cada
+  corrida y reconstruye `artifacts/06-candidates.json` solo si el
+  resultado recomputado difiere del existente. Es de solo lectura sobre
+  el grafo: nunca repara drift ni vuelve a ejecutar
+  `invariants.cypher`/`GraphInvariantValidator` (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -71,8 +80,10 @@ from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.inventory import Inventory
 from ..contracts.run_state import RunState, StageExecution
 from .artifact_store import atomic_write_json
+from .candidates_detected_stage import run_candidates_detected_stage
 from .dependencies_stage import run_dependencies_built_stage
 from .errors import (
+    CandidateDetectionError,
     DependencyBuildError,
     ExtractionError,
     GraphLoadError,
@@ -563,10 +574,47 @@ def _run_graph_validated(
     )
 
 
+def _run_candidates_detected(
+    state: RunState,
+    semantic_graph_path: Path,
+    semantic_enrichment_path: Path,
+    invariants_path: Path,
+    candidates_path: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta CANDIDATES_DETECTED (CandidateDetector/Q0, Prompt 10a del
+    runbook): reejecuta precondiciones y Q0 en cada corrida, y persiste
+    `artifacts/06-candidates.json` solo si el resultado recomputado
+    difiere del existente (ver candidates_detected_stage.py)."""
+    started_at = _now()
+    try:
+        warnings = run_candidates_detected_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            semantic_graph_path=semantic_graph_path,
+            semantic_enrichment_path=semantic_enrichment_path,
+            invariants_path=invariants_path,
+            q0_cypher_path=settings.q0_candidates_cypher_path,
+            candidates_path=candidates_path,
+            settings=settings,
+        )
+    except CandidateDetectionError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.CANDIDATES_DETECTED, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.CANDIDATES_DETECTED, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
     -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT -> SEMANTIC_GRAPH_BUILT
-    -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED para `source_zip`.
+    -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED -> CANDIDATES_DETECTED
+    para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -586,6 +634,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     semantic_enrichment_path = run_dir / "artifacts" / "03b-semantic-enrichment.json"
     semantic_graph_path = run_dir / "artifacts" / "04-semantic-graph.json"
     invariants_path = run_dir / "artifacts" / "05-invariants.json"
+    candidates_path = run_dir / "artifacts" / "06-candidates.json"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -645,11 +694,23 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_graph_validated(
+    state = _run_graph_validated(
         state,
         semantic_graph_path,
         semantic_enrichment_path,
         invariants_path,
+        settings,
+        run_json_path,
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_candidates_detected(
+        state,
+        semantic_graph_path,
+        semantic_enrichment_path,
+        invariants_path,
+        candidates_path,
         settings,
         run_json_path,
     )

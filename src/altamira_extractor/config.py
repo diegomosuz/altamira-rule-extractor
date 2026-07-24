@@ -69,6 +69,10 @@ def _default_invariants_cypher_path() -> Path:
     return _discover_repo_root() / "queries" / "v1" / "invariants.cypher"
 
 
+def _default_q0_candidates_cypher_path() -> Path:
+    return _discover_repo_root() / "queries" / "v1" / "q0_candidates.cypher"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -134,6 +138,11 @@ class Settings(BaseSettings):
     # GRAPH_VALIDATED, ver pipeline/graph_invariant_validator.py). Mismo
     # patron que manifest_xsd_path/semantic_tags_path: no depende del CWD.
     invariants_cypher_path: Path = Field(default_factory=_default_invariants_cypher_path)
+
+    # Localizacion estable de queries/v1/q0_candidates.cypher (etapa
+    # CANDIDATES_DETECTED, ver pipeline/candidate_detector.py). Mismo
+    # patron que invariants_cypher_path: no depende del CWD.
+    q0_candidates_cypher_path: Path = Field(default_factory=_default_q0_candidates_cypher_path)
 
 
 def load_settings() -> Settings:

@@ -13,7 +13,7 @@ from .base import (
     ensure_relative_path,
     ensure_sha256_hex,
 )
-from .candidate import RuleCandidate
+from .candidate import CandidateArtifact, RuleCandidate
 from .canonical import (
     CanonicalDataItem,
     CanonicalParagraph,
@@ -170,6 +170,7 @@ __all__ = [
     "InvariantArtifact",
     "InvariantViolation",
     # candidate
+    "CandidateArtifact",
     "RuleCandidate",
     # context package
     "ApplicableParameterRow",

@@ -416,6 +416,29 @@ class Neo4jRepository:
             ) from exc
         return records
 
+    # --- Deteccion de candidatos (Q0) ---
+
+    def run_candidate_query(
+        self, cypher_text: str, *, package_hash: str
+    ) -> list[dict[str, Any]]:
+        """Ejecuta una consulta de deteccion de candidatos (Q0), parametrizada
+        unicamente por `package_hash`. Devuelve cada fila como un dict
+        columna->valor sin interpretar su forma: `CandidateDetector` es quien
+        mapea las filas a `RuleCandidate`, no este repositorio."""
+        try:
+            with self._driver.session(database=self._database) as session:
+                result = session.run(cypher_text, package_hash=package_hash)
+                rows = [dict(record) for record in result]
+        except AuthError as exc:
+            raise Neo4jAuthenticationError("credenciales rechazadas por el servidor Neo4j") from exc
+        except ServiceUnavailable as exc:
+            raise Neo4jUnavailableError("el servidor Neo4j no esta disponible") from exc
+        except (ClientError, CypherSyntaxError) as exc:
+            raise Neo4jQueryError(
+                f"fallo ejecutando q0_candidates.cypher: {type(exc).__name__}"
+            ) from exc
+        return rows
+
 
 def _diff_ids_and_edges(
     runner: _CypherRunner, expected_ids: list[str], expected_edge_keys: list[str]

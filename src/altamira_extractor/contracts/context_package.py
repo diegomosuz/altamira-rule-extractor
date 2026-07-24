@@ -117,7 +117,10 @@ class ContextPackageDecision(AltamiraBaseModel):
     expression: str = Field(min_length=1)
     normalized_expression: str = Field(min_length=1)
     operands: list[str] = Field(default_factory=list)
-    rule_type: str = Field(min_length=1)
+    # str | None: StatementKind.IF/EVALUATE son construcciones tecnicas,
+    # no evidencia de un tipo funcional de regla — ninguna etapa deriva
+    # o inventa este valor (ver docstring de contracts/candidate.py).
+    rule_type: str | None = None
     outcome_code: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
 
