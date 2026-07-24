@@ -279,6 +279,17 @@ class BranchKind(StrEnum):
     WHEN_OTHER = "WHEN_OTHER"
 
 
+class LlmProvider(StrEnum):
+    """Perfiles de proveedor LLM OpenAI-compatible soportados (Prompt 11).
+
+    Una sola implementacion de transporte (`OpenAICompatibleChatClient`)
+    resuelve el perfil (base_url/api_key/model) segun este valor; nunca
+    hay una clase por proveedor."""
+
+    OPENAI = "openai"
+    PWC_GATEWAY = "pwc_gateway"
+
+
 class ParseSupportStatus(StrEnum):
     """Nivel de soporte al interpretar DDL/CSV de parametria
     (docs/SUPPORTED_COMPLEXITY_STRATEGY.md): SUPPORTED = evidencia completa;

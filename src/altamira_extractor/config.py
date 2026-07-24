@@ -8,6 +8,7 @@ logging y rutas de artefactos.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -202,6 +203,37 @@ class Settings(BaseSettings):
     # ingestion por tabla): este limita el tamano total de un
     # ContextPackage individual.
     max_parameter_entries_per_context: int = Field(default=1000, ge=1, le=10_000)
+
+    # Cliente LLM OpenAI-compatible (Prompt 11, ver pipeline/llm_client.py).
+    # Todos los campos de proveedor (selector + credenciales por
+    # proveedor) son opcionales: la creacion general de Settings NUNCA
+    # debe exigir configuracion LLM, porque las etapas deterministicas
+    # (RECEIVED..CONTEXTS_BUILT) deben seguir funcionando sin un
+    # proveedor configurado. La validacion obligatoria (LLM_PROVIDER
+    # definido y valido, credenciales del proveedor seleccionado
+    # presentes, timeout positivo, retries en rango) ocurre recien al
+    # resolver el perfil del cliente (`resolve_llm_profile`), nunca aqui.
+    # Los nombres de variable de entorno se conservan tal como ya estaban
+    # en .env.example desde el bootstrap (Prompt 1): sin prefijo
+    # ALTAMIRA_, igual que NEO4J_*, via validation_alias explicito.
+    llm_provider: str | None = Field(default=None, validation_alias="LLM_PROVIDER")
+    llm_timeout_seconds: float = Field(default=120.0, validation_alias="LLM_TIMEOUT_SECONDS")
+    llm_http_retries: int = Field(default=3, validation_alias="LLM_HTTP_RETRIES")
+    # Literal[0]: CLAUDE.md ("Temperatura 0") — nunca configurable a otro
+    # valor via variable de entorno, para no introducir no-determinismo.
+    # Se conserva el nombre LLM_TEMPERATURE por compatibilidad con
+    # .env.example, pero cualquier valor distinto de 0 falla al construir
+    # Settings (no se difiere a la resolucion del perfil, a diferencia de
+    # timeout/retries/credenciales).
+    llm_temperature: Literal[0] = Field(default=0, validation_alias="LLM_TEMPERATURE")
+
+    openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
+    openai_model: str | None = Field(default=None, validation_alias="OPENAI_MODEL")
+
+    pwc_genai_api_key: SecretStr | None = Field(default=None, validation_alias="PWC_GENAI_API_KEY")
+    pwc_genai_base_url: str | None = Field(default=None, validation_alias="PWC_GENAI_BASE_URL")
+    pwc_genai_model: str | None = Field(default=None, validation_alias="PWC_GENAI_MODEL")
 
 
 def load_settings() -> Settings:

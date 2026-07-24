@@ -167,6 +167,71 @@ class CandidateDetectionError(PipelineError):
     """
 
 
+class LlmClientError(PipelineError):
+    """Base de errores del cliente HTTP OpenAI-compatible (Prompt 11).
+
+    El mensaje puede contener: proveedor, status HTTP, un codigo de error
+    interno sanitizado y el numero de intentos. Nunca debe contener: API
+    key, header Authorization, headers completos, body de request/response,
+    el contenido de los mensajes enviados al modelo, una URI con userinfo
+    ni un stacktrace (.claude/rules/security.md)."""
+
+
+class LlmConfigurationError(LlmClientError):
+    """El perfil LLM no se pudo resolver: `LLM_PROVIDER` ausente o invalido,
+    o falta/esta vacio `base_url`/`api_key`/`model` del proveedor
+    seleccionado, o `timeout_seconds`/`http_retries`/`temperature` fuera
+    del rango permitido. Se detecta localmente, antes de abrir cualquier
+    conexion HTTP (nunca se descubre recien en el primer request)."""
+
+
+class LlmAuthenticationError(LlmClientError):
+    """El proveedor rechazo las credenciales (HTTP 401/403). No
+    reintentable: un reintento no cambia el resultado."""
+
+
+class LlmRateLimitError(LlmClientError):
+    """HTTP 429 agotó los reintentos configurados (`LLM_HTTP_RETRIES`)."""
+
+
+class LlmUnavailableError(LlmClientError):
+    """El proveedor no esta disponible: HTTP 502/503/504 o
+    `httpx.ConnectError` agotaron los reintentos configurados."""
+
+
+class LlmTimeoutError(LlmClientError):
+    """Un timeout agoto los reintentos (`httpx.ConnectTimeout`/
+    `httpx.PoolTimeout`), o un `httpx.ReadTimeout`/`httpx.WriteTimeout`
+    ocurrio (nunca reintentable: la respuesta queda incierta — el
+    proveedor pudo haber recibido o procesado la solicitud; reintentar
+    arriesgaria duplicar una generacion paga)."""
+
+
+class LlmRequestError(LlmClientError):
+    """Un status HTTP 4xx/5xx no cubierto por las categorias anteriores
+    (400/404/409/422/500/otros), o un error de protocolo HTTP
+    (`httpx.RemoteProtocolError`). Nunca reintentable."""
+
+
+class LlmResponseFormatError(LlmClientError):
+    """El envelope HTTP 2xx no tiene la forma minima esperada: falta
+    `choices`, esta vacio, falta `message`, o `message.content` no es un
+    string. Los proveedores compatibles pueden agregar campos extra
+    (`usage`, `id`, `created`, etc.) sin que esto sea un error — solo se
+    exige la estructura minima. Nunca reintentable: la respuesta ya fue
+    recibida (2xx)."""
+
+
+class LlmResponseParsingError(LlmClientError):
+    """`message.content` no es, en su totalidad (tras recortar unicamente
+    whitespace externo), un objeto JSON estrictamente valido: incluye
+    texto antes/despues, fences Markdown, una raiz que no es un objeto
+    (array/string/numero/booleano/null), claves duplicadas, o
+    NaN/Infinity/-Infinity. El cliente nunca intenta reparar la
+    respuesta; esa responsabilidad es del repair loop de Prompt 12. Nunca
+    reintentable: la respuesta ya fue recibida (2xx)."""
+
+
 class ContextBuildError(PipelineError):
     """Precondicion de CONTEXTS_BUILT incumplida, o fallo durante la
     construccion/persistencia de `artifacts/07-context/`: CANDIDATES_DETECTED
