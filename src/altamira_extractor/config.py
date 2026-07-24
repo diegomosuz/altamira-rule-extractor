@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Extensiones admitidas en paquetes Altamira (docs/PACKAGE_CONTRACT.md +
@@ -65,6 +65,10 @@ def _default_domain_glossary_path() -> Path:
     return _discover_repo_root() / "config" / "domain-glossary.example.yml"
 
 
+def _default_invariants_cypher_path() -> Path:
+    return _discover_repo_root() / "queries" / "v1" / "invariants.cypher"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -109,6 +113,27 @@ class Settings(BaseSettings):
     semantic_tags_path: Path = Field(default_factory=_default_semantic_tags_path)
     domain_glossary_path: Path = Field(default_factory=_default_domain_glossary_path)
     max_parameter_entries_per_table: int = Field(default=10_000, gt=0)
+
+    # Conexion Neo4j (etapas SEMANTIC_GRAPH_LOADED/GRAPH_VALIDATED, ver
+    # pipeline/neo4j_repository.py). NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD/
+    # NEO4J_DATABASE se declaran sin prefijo ALTAMIRA_ (ya publicadas asi en
+    # .env.example y compartidas con el servicio `neo4j` de docker-compose);
+    # se leen con validation_alias explicito para no romper esa convencion
+    # pese al env_prefix="ALTAMIRA_" global de este modelo.
+    neo4j_uri: str = Field(default="bolt://localhost:7687", validation_alias="NEO4J_URI")
+    neo4j_user: str = Field(default="neo4j", validation_alias="NEO4J_USER")
+    neo4j_password: SecretStr = Field(
+        default=SecretStr("neo4j"), validation_alias="NEO4J_PASSWORD"
+    )
+    neo4j_database: str = Field(default="neo4j", validation_alias="NEO4J_DATABASE")
+    neo4j_connection_timeout_seconds: float = Field(default=30.0, gt=0)
+    neo4j_max_transaction_retry_time_seconds: float = Field(default=30.0, gt=0)
+    neo4j_load_batch_size: int = Field(default=500, gt=0)
+
+    # Localizacion estable de queries/v1/invariants.cypher (etapa
+    # GRAPH_VALIDATED, ver pipeline/graph_invariant_validator.py). Mismo
+    # patron que manifest_xsd_path/semantic_tags_path: no depende del CWD.
+    invariants_cypher_path: Path = Field(default_factory=_default_invariants_cypher_path)
 
 
 def load_settings() -> Settings:

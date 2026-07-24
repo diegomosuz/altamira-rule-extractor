@@ -71,6 +71,7 @@ from .enums import (
     TextEncoding,
 )
 from .guardrail import GuardrailReport, GuardrailViolation
+from .invariants import InvariantArtifact, InvariantViolation
 from .inventory import Inventory, InventoryFile
 from .manifest import (
     Manifest,
@@ -165,6 +166,9 @@ __all__ = [
     "GraphNode",
     "GraphRelationship",
     "SemanticGraph",
+    # invariants
+    "InvariantArtifact",
+    "InvariantViolation",
     # candidate
     "RuleCandidate",
     # context package

@@ -91,3 +91,63 @@ class SemanticGraphBuildError(PipelineError):
     referencia huerfana indica artefactos desincronizados, no ambiguedad
     legitima que se pueda tratar con un warning.
     """
+
+
+class Neo4jError(PipelineError):
+    """Base de errores de conexion/ejecucion contra Neo4j. Nunca incluye
+    password, URI con userinfo, parametros completos de consulta ni
+    stacktrace en su mensaje (.claude/rules/security.md)."""
+
+
+class Neo4jConfigurationError(Neo4jError):
+    """`neo4j_uri` vacio o con esquema no soportado (se espera `bolt://` o
+    `neo4j://`), detectado localmente antes de intentar conectar."""
+
+
+class Neo4jAuthenticationError(Neo4jError):
+    """El servidor rechazo las credenciales (`neo4j.exceptions.AuthError`).
+    El mensaje nunca incluye la password."""
+
+
+class Neo4jUnavailableError(Neo4jError):
+    """El servidor no esta disponible o no acepta conexiones
+    (`neo4j.exceptions.ServiceUnavailable`)."""
+
+
+class Neo4jTimeoutError(Neo4jError):
+    """La conexion o una transaccion excedio el tiempo configurado."""
+
+
+class Neo4jUnsupportedVersionError(Neo4jError):
+    """El servidor conectado no es Neo4j major version 5 (unica version
+    soportada, coincide con `docker-compose.blueprint.yml`)."""
+
+
+class Neo4jQueryError(Neo4jError):
+    """Una consulta Cypher concreta fallo (sintaxis, tipo, restriccion).
+    El mensaje nunca incluye los parametros ni el texto completo de la
+    consulta cuando estos pudieran contener `source_text`/filas
+    parametricas."""
+
+
+class GraphLoadError(PipelineError):
+    """Precondicion de SEMANTIC_GRAPH_LOADED incumplida (SEMANTIC_GRAPH_BUILT
+    no completo, `04-semantic-graph.json` ausente/invalido), o la
+    verificacion previa al commit de la carga transaccional detecto una
+    inconsistencia (conteos, IDs, edge_keys, o labels de ParameterTable
+    que no coinciden con el `SemanticGraph` recien cargado). Fatal para la
+    etapa completa: la transaccion completa hace rollback, nunca queda una
+    carga parcial marcada como exitosa.
+    """
+
+
+class GraphValidationError(PipelineError):
+    """Precondicion de GRAPH_VALIDATED incumplida: SEMANTIC_GRAPH_LOADED no
+    completo, drift detectado entre `04-semantic-graph.json` y el estado
+    real de Neo4j (hash/conteos/IDs/edge_keys distintos del nodo
+    `AltamiraGraphLoad` activo), el hash de `config/semantic-tags.yml` ya
+    no coincide con el registrado en `03b-semantic-enrichment.json`, un
+    error de ejecucion de `invariants.cypher`, o al menos un invariante de
+    severidad ERROR incumplido. Fatal para la etapa completa: la
+    reparacion pertenece a SEMANTIC_GRAPH_LOADED, no a esta etapa.
+    """

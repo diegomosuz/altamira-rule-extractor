@@ -1,9 +1,9 @@
 """PipelineRunner minimo: RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED
 -> PARSED -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT ->
-SEMANTIC_GRAPH_BUILT.
+SEMANTIC_GRAPH_BUILT -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED.
 
 No es un framework generico de pipelines: es una funcion lineal que
-ejecuta exactamente estas ocho etapas, persiste RunState atomicamente
+ejecuta exactamente estas diez etapas, persiste RunState atomicamente
 en cada transicion, y aplica una idempotencia explicita y acotada:
 
 - RECEIVED: si ya hay una copia valida (`input/package.zip`) marcada
@@ -38,6 +38,19 @@ en cada transicion, y aplica una idempotencia explicita y acotada:
   `03b-semantic-enrichment.json` sigan siendo consistentes con el run
   actual antes de reutilizar o reconstruir por completo
   `artifacts/04-semantic-graph.json` (ver ese modulo).
+- SEMANTIC_GRAPH_LOADED: nunca "salta" la carga (no hay optimizacion de
+  skip-load); delega en
+  `semantic_graph_load_stage.run_semantic_graph_load_stage`, que siempre
+  reemplaza transaccionalmente el subgrafo Neo4j administrado por
+  Altamira (`_altamira_managed=true`) con el contenido actual de
+  `artifacts/04-semantic-graph.json` (ver ese modulo). V1 no soporta
+  coexistencia de varios paquetes Altamira en la misma base Neo4j (ver
+  docstring de `neo4j_repository.py`).
+- GRAPH_VALIDATED: delega en
+  `graph_validated_stage.run_graph_validated_stage`, que detecta drift
+  entre el artefacto y el estado real de Neo4j antes de ejecutar
+  `queries/v1/invariants.cypher` y persistir
+  `artifacts/05-invariants.json` (ver ese modulo).
 
 En ningun caso se duplican StageExecution: cada etapa tiene a lo sumo un
 registro en RunState.stages, que se reemplaza en los reintentos.
@@ -62,6 +75,8 @@ from .dependencies_stage import run_dependencies_built_stage
 from .errors import (
     DependencyBuildError,
     ExtractionError,
+    GraphLoadError,
+    GraphValidationError,
     PackageValidationError,
     ParserContractViolationError,
     ParserUnavailableError,
@@ -70,12 +85,14 @@ from .errors import (
     SemanticEnrichmentBuildError,
     SemanticGraphBuildError,
 )
+from .graph_validated_stage import run_graph_validated_stage
 from .inventory_builder import build_inventory
 from .package_validator import ValidatedPackage, validate_package
 from .parsed_stage import run_parsed_stage
 from .parser_client import ProLeapParserClient
 from .safe_extractor import extract_package
 from .semantic_enrichment_stage import run_semantic_enrichment_stage
+from .semantic_graph_load_stage import run_semantic_graph_load_stage
 from .semantic_graph_stage import run_semantic_graph_stage
 
 _COPY_CHUNK_SIZE = 1024 * 1024
@@ -478,10 +495,78 @@ def _run_semantic_graph_built(
     )
 
 
+def _run_semantic_graph_loaded(
+    state: RunState, semantic_graph_path: Path, settings: Settings, run_json_path: Path
+) -> RunState:
+    """Ejecuta SEMANTIC_GRAPH_LOADED (Neo4jRepository, Prompt 9 del
+    runbook): siempre reemplaza transaccionalmente el subgrafo Neo4j
+    administrado por Altamira con el contenido actual de
+    `artifacts/04-semantic-graph.json` (ver semantic_graph_load_stage.py).
+    No hay optimizacion de skip-load: recargar siempre permite reparar
+    drift o modificaciones manuales en Neo4j."""
+    started_at = _now()
+    try:
+        result = run_semantic_graph_load_stage(
+            run_stages=state.stages,
+            semantic_graph_path=semantic_graph_path,
+            settings=settings,
+        )
+    except GraphLoadError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.SEMANTIC_GRAPH_LOADED, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state,
+        run_json_path,
+        PipelineStage.SEMANTIC_GRAPH_LOADED,
+        started_at,
+        warnings=[
+            f"cargados {result.node_count} nodos / {result.relationship_count} relaciones "
+            f"(Neo4j {result.server_version}, database {result.database!r})"
+        ],
+    )
+
+
+def _run_graph_validated(
+    state: RunState,
+    semantic_graph_path: Path,
+    semantic_enrichment_path: Path,
+    invariants_path: Path,
+    settings: Settings,
+    run_json_path: Path,
+) -> RunState:
+    """Ejecuta GRAPH_VALIDATED (GraphInvariantValidator, Prompt 9 del
+    runbook): detecta drift entre el artefacto y el estado real de Neo4j,
+    ejecuta `queries/v1/invariants.cypher`, y persiste
+    `artifacts/05-invariants.json`. Un invariante ERROR incumplido marca
+    la etapa como FAILED (ver graph_validated_stage.py)."""
+    started_at = _now()
+    try:
+        warnings = run_graph_validated_stage(
+            run_id=state.run_id,
+            source_package_hash=state.source_package_hash or "",
+            run_stages=state.stages,
+            semantic_graph_path=semantic_graph_path,
+            semantic_enrichment_path=semantic_enrichment_path,
+            invariants_cypher_path=settings.invariants_cypher_path,
+            invariants_path=invariants_path,
+            settings=settings,
+        )
+    except GraphValidationError as exc:
+        return _mark_failed(
+            state, run_json_path, PipelineStage.GRAPH_VALIDATED, started_at, str(exc)
+        )
+
+    return _mark_succeeded(
+        state, run_json_path, PipelineStage.GRAPH_VALIDATED, started_at, warnings=warnings
+    )
+
+
 def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = None) -> RunState:
     """Ejecuta RECEIVED -> VALIDATED -> EXTRACTED -> INVENTORIED -> PARSED
     -> DEPENDENCIES_BUILT -> SEMANTIC_ENRICHMENT_BUILT -> SEMANTIC_GRAPH_BUILT
-    para `source_zip`.
+    -> SEMANTIC_GRAPH_LOADED -> GRAPH_VALIDATED para `source_zip`.
 
     Si `run_id` se omite, se genera uno nuevo. Si se pasa un `run_id` de
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
@@ -500,6 +585,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     dependencies_path = run_dir / "artifacts" / "03-dependencies.json"
     semantic_enrichment_path = run_dir / "artifacts" / "03b-semantic-enrichment.json"
     semantic_graph_path = run_dir / "artifacts" / "04-semantic-graph.json"
+    invariants_path = run_dir / "artifacts" / "05-invariants.json"
 
     state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
 
@@ -543,12 +629,27 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     if state.current_stage == PipelineStage.FAILED:
         return state
 
-    return _run_semantic_graph_built(
+    state = _run_semantic_graph_built(
         state,
         inventory_path,
         canonical_dir,
         dependencies_path,
         semantic_enrichment_path,
         semantic_graph_path,
+        run_json_path,
+    )
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    state = _run_semantic_graph_loaded(state, semantic_graph_path, settings, run_json_path)
+    if state.current_stage == PipelineStage.FAILED:
+        return state
+
+    return _run_graph_validated(
+        state,
+        semantic_graph_path,
+        semantic_enrichment_path,
+        invariants_path,
+        settings,
         run_json_path,
     )
