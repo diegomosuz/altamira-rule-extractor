@@ -269,6 +269,13 @@ class Settings(BaseSettings):
     # exceder este limite es un error fatal antes de llamar al proveedor.
     max_context_package_json_chars: int = Field(default=200_000, ge=1)
 
+    # Capacidad del executor local de la API (Prompt 13b, ver api/executor.py):
+    # cuantas ejecuciones de run_ingestion pueden estar activas (programadas
+    # o corriendo) al mismo tiempo dentro de ESTE proceso. La coordinacion es
+    # unicamente por proceso -- V1 requiere un unico worker de Uvicorn (ver
+    # docstring de api/app.py). No es una cola externa ni distribuida.
+    api_max_workers: int = Field(default=1, ge=1, le=8)
+
 
 def load_settings() -> Settings:
     """Punto unico de carga de configuracion para CLI/API/pipeline."""

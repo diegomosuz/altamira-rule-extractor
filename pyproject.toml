@@ -18,6 +18,9 @@ dependencies = [
     "neo4j>=5.24,<6",
     "jsonschema>=4.18",
     "httpx>=0.27,<1",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "python-multipart>=0.0.9,<1",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +46,16 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Idioma obligatorio de FastAPI: Depends()/File()/Query() SIEMPRE como
+# default de parametro (asi resuelve la inyeccion de dependencias). No es
+# el antipatron de "default mutable" que B008 detecta en general.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Query",
+]
 
 [tool.mypy]
 python_version = "3.12"

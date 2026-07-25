@@ -53,7 +53,7 @@ from altamira_extractor.pipeline.errors import (
 )
 from altamira_extractor.pipeline.neo4j_repository import GraphLoadResult
 from altamira_extractor.pipeline.parsed_stage import ParsedStageOutcome
-from altamira_extractor.pipeline.runner import _copy_and_hash, run_ingestion
+from altamira_extractor.pipeline.runner import _copy_and_hash, prepare_received, run_ingestion
 
 from .conftest import build_valid_package_zip
 
@@ -194,6 +194,101 @@ def test_full_happy_path_reaches_completed(tmp_path: Path, settings: Settings) -
     inventory_path = settings.runs_dir / state.run_id / "artifacts" / "01-inventory.json"
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     assert inventory.run_id == state.run_id
+
+
+# --- prepare_received: regresion del refactor (Prompt 13b) ---
+#
+# runner.run_ingestion ahora delega en prepare_received para RECEIVED en
+# vez de inlinear esa logica -- estos tests demuestran que el
+# comportamiento observable de run_ingestion (CLI) es identico al de
+# antes del refactor, y que prepare_received es reutilizable de forma
+# aislada (la API, Prompt 13b, la llama directamente).
+
+
+def test_prepare_received_generates_run_id_and_persists_state(
+    tmp_path: Path, settings: Settings
+) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    state = prepare_received(zip_path, settings)
+
+    assert state.run_id
+    stage_names = [s.stage for s in state.stages]
+    assert stage_names == [PipelineStage.RECEIVED]
+    assert state.stages[0].status == StageStatus.SUCCEEDED
+    assert state.current_stage == PipelineStage.RECEIVED
+    assert state.source_package_hash == hashlib.sha256(zip_path.read_bytes()).hexdigest()
+
+    run_json_path = settings.runs_dir / state.run_id / "run.json"
+    assert run_json_path.is_file()
+    persisted = RunState.model_validate_json(run_json_path.read_text(encoding="utf-8"))
+    assert persisted == state
+
+    input_zip_path = settings.runs_dir / state.run_id / "input" / "package.zip"
+    assert input_zip_path.is_file()
+    assert input_zip_path.read_bytes() == zip_path.read_bytes()
+
+
+def test_prepare_received_accepts_explicit_run_id(tmp_path: Path, settings: Settings) -> None:
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    state = prepare_received(zip_path, settings, run_id="explicit-run-id")
+
+    assert state.run_id == "explicit-run-id"
+    assert (settings.runs_dir / "explicit-run-id" / "run.json").is_file()
+
+
+def test_run_ingestion_reuses_prepare_received_without_reopening_source(
+    tmp_path: Path, settings: Settings
+) -> None:
+    """El flujo que la API usara: prepare_received primero (sincrono),
+    despues run_ingestion con el MISMO run_id pasando el package.zip
+    canonico ya escrito como source_zip -- RECEIVED ya SUCCEEDED debe
+    reutilizarlo sin volver a copiar (nunca un self-copy: _run_received
+    ignora source_zip por completo en el fast-path)."""
+    zip_path = build_valid_package_zip(tmp_path / "package.zip")
+
+    prepared = prepare_received(zip_path, settings)
+    run_id = prepared.run_id
+    canonical_zip_path = settings.runs_dir / run_id / "input" / "package.zip"
+    original_bytes = canonical_zip_path.read_bytes()
+    original_mtime = canonical_zip_path.stat().st_mtime_ns
+    original_hash = prepared.source_package_hash
+
+    state = run_ingestion(canonical_zip_path, settings, run_id=run_id)
+
+    assert state.current_stage == PipelineStage.COMPLETED
+    received_executions = [s for s in state.stages if s.stage == PipelineStage.RECEIVED]
+    assert len(received_executions) == 1
+    assert canonical_zip_path.read_bytes() == original_bytes
+    assert canonical_zip_path.stat().st_mtime_ns == original_mtime
+    # source_package_hash permanece estable entre el prepare_received
+    # sincrono inicial y el resto de run_ingestion (nunca se recalcula:
+    # RECEIVED ya SUCCEEDED, asi que ninguna etapa posterior lo toca).
+    assert state.source_package_hash == original_hash
+
+
+def test_run_ingestion_result_identical_with_or_without_separate_prepare_received(
+    tmp_path: Path, settings: Settings
+) -> None:
+    """Compara el resultado de run_ingestion llamado directamente (como
+    siempre) contra prepare_received + run_ingestion (como hara la API):
+    mismo contenido de RunState salvo run_id/timestamps/hash (source
+    distinto por instancia de ZIP)."""
+    zip_a = build_valid_package_zip(tmp_path / "a.zip")
+    direct_state = run_ingestion(zip_a, settings)
+
+    zip_b = build_valid_package_zip(tmp_path / "b.zip")
+    prepared = prepare_received(zip_b, settings)
+    two_step_state = run_ingestion(
+        settings.runs_dir / prepared.run_id / "input" / "package.zip",
+        settings,
+        run_id=prepared.run_id,
+    )
+
+    assert [s.stage for s in direct_state.stages] == [s.stage for s in two_step_state.stages]
+    assert [s.status for s in direct_state.stages] == [s.status for s in two_step_state.stages]
+    assert direct_state.current_stage == two_step_state.current_stage == PipelineStage.COMPLETED
 
 
 def test_copy_and_hash_reflects_bytes_actually_persisted(tmp_path: Path) -> None:

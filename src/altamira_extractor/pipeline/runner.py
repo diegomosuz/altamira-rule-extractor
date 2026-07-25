@@ -260,6 +260,30 @@ def _copy_and_hash(source: Path, destination: Path) -> str:
     return digest.hexdigest()
 
 
+def prepare_received(
+    source_zip: Path, settings: Settings, run_id: str | None = None
+) -> RunState:
+    """Ejecuta UNICAMENTE RECEIVED: genera `run_id` si hace falta, relee o
+    inicializa `RunState`, y persiste `input/package.zip` + su
+    `StageExecution`. Publica (sin guion bajo) porque la API (Prompt 13b)
+    la reutiliza para dejar el run persistido de forma sincrona antes de
+    programar el resto de `run_ingestion` en background — nunca duplica
+    esta logica, y `run_ingestion` (CLI) llama a esta MISMA funcion, asi
+    que el comportamiento de ambos caminos es identico por construccion.
+
+    Devuelve el `RunState` resultante (puede ser FAILED si la copia
+    fallo); el llamador decide como continuar."""
+    if run_id is None:
+        run_id = generate_run_id()
+
+    run_dir = settings.runs_dir / run_id
+    run_json_path = run_dir / "run.json"
+    input_zip_path = run_dir / "input" / "package.zip"
+
+    state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
+    return _run_received(state, source_zip, input_zip_path, run_json_path)
+
+
 def _run_received(
     state: RunState, source_zip: Path, input_zip_path: Path, run_json_path: Path
 ) -> RunState:
@@ -781,9 +805,8 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     una ejecucion previa cuyo RECEIVED ya tuvo exito, `source_zip` se
     ignora y se continua desde el estado persistido (reanudacion minima).
     """
-    if run_id is None:
-        run_id = generate_run_id()
-
+    state = prepare_received(source_zip, settings, run_id)
+    run_id = state.run_id
     run_dir = settings.runs_dir / run_id
     run_json_path = run_dir / "run.json"
     input_zip_path = run_dir / "input" / "package.zip"
@@ -801,9 +824,6 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
     guardrail_dir = run_dir / "artifacts" / "09-guardrails"
     rules_dir = run_dir / "artifacts" / "10-rules"
 
-    state = _load_or_init_state(run_json_path, run_id, "input/package.zip")
-
-    state = _run_received(state, source_zip, input_zip_path, run_json_path)
     if state.current_stage == PipelineStage.FAILED:
         return state
 
