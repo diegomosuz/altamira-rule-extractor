@@ -14,14 +14,17 @@ Uso:
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
 artefactos (`api/reads.py`, `api/downloads.py`, `api/validation.py`,
-`api/schemas.py`) -- nunca llama a FastAPI por HTTP, y por lo tanto no
+`api/mappers.py`) -- nunca llama a FastAPI por HTTP, y por lo tanto no
 requiere que el servidor este' levantado. Esos modulos de `api/` son
 Python puro (sin `fastapi`, sin `Depends`/`Request`/`Response`, sin
 estado de aplicacion ASGI): reutilizarlos aqui no importa el framework
 HTTP, solo su logica de validacion/lectura ya probada -- evita
 duplicar esa validacion sin necesitar un paquete `application/` nuevo
-(Prompt 13c no lo requiere; ver docs/ARCHITECTURE.md 3.1, que documenta
-casos de uso compartidos, no una clase concreta).
+(ver docs/ARCHITECTURE.md 3.1, que documenta casos de uso compartidos,
+no una clase concreta). `build_rule_response` (Prompt 13d) es la misma
+funcion que usan `api/routers/runs.py::get_rule` y la UI (`ui/`): un
+unico mapeo `GuardrailCandidateArtifact -> RuleResponse`, nunca
+duplicado una segunda vez.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ import typer
 
 from .api.downloads import build_rules_zip
 from .api.errors import ApiError, ArtifactCorruptedError, RunNotResumableError
+from .api.mappers import build_rule_response
 from .api.reads import (
     read_candidate_artifact,
     read_context_package,
@@ -44,11 +48,9 @@ from .api.reads import (
     read_run_state,
     require_stage_succeeded,
 )
-from .api.schemas import GuardrailView, GuardrailViolationView, RuleResponse
 from .api.validation import validate_candidate_id, validate_run_id
 from .config import Settings, load_settings
 from .contracts.enums import PipelineStage
-from .contracts.guardrail_candidate import GuardrailCandidateArtifact
 from .contracts.run_state import RunState
 from .pipeline.runner import run_ingestion
 
@@ -157,35 +159,6 @@ def _print_ingestion_summary(state: RunState) -> None:
         if stage.error:
             line += f" ({stage.error})"
         typer.echo(line)
-
-
-def _build_rule_response(artifact: GuardrailCandidateArtifact) -> RuleResponse:
-    """Mismo mapeo que `GET /api/runs/{run_id}/candidates/{candidate_id}/rule`
-    (`api/routers/runs.py::get_rule`), reutilizando los mismos modelos
-    publicos (`RuleResponse`/`GuardrailView`/`GuardrailViolationView`).
-    Duplicado deliberadamente aqui (no se extrae a un modulo nuevo): es
-    la unica pieza de mapeo que el router no expone como funcion
-    reutilizable, y Prompt 13c no autoriza tocar `api/routers/`."""
-    report = artifact.guardrail_report
-    return RuleResponse(
-        candidate_id=artifact.candidate_id,
-        final_rule_draft=artifact.final_rule_draft,
-        guardrail=GuardrailView(
-            verdict=report.verdict,
-            violations=[
-                GuardrailViolationView(
-                    violation_id=v.violation_id,
-                    rule=v.rule,
-                    field=v.field,
-                    message=v.message,
-                    severity=v.severity,
-                )
-                for v in report.violations
-            ],
-            warnings=artifact.warnings,
-            repair_attempts_used=len(artifact.repair_history),
-        ),
-    )
 
 
 def _resolve_download_destination(run_id: str, output: Path | None) -> Path:
@@ -346,7 +319,7 @@ def rule(run_id: RunIdArgument, candidate_id: CandidateIdArgument) -> None:
     state = read_run_state(run_dir)
     require_stage_succeeded(state, PipelineStage.GUARDRAILS_APPLIED)
     artifact = read_guardrail_candidate_artifact(run_dir, candidate_id)
-    response = _build_rule_response(artifact)
+    response = build_rule_response(artifact)
     typer.echo(response.model_dump_json(indent=2))
 
 

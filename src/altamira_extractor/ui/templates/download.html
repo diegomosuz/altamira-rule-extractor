@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Descarga {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="ruta de navegacion">
+  <a href="{{ url_for('ui_runs') }}">Runs</a> /
+  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
+  <span>Descarga</span>
+</nav>
+{% endblock %}
+{% block content %}
+<h1>Descargar reglas</h1>
+<p>run_id: {{ run_id }}</p>
+<p>Etapa actual: <span class="badge badge-{{ run.current_stage.value | lower }}">{{ run.current_stage.value }}</span></p>
+<p>El ZIP contiene unicamente el manifiesto de reglas y los archivos Markdown declarados en <code>artifacts/10-rules/</code>, ya validados (hashes, ausencia de symlinks y archivos no declarados).</p>
+<p><a class="button" href="{{ url_for('download_rules', run_id=run_id) }}">Descargar ZIP de reglas</a></p>
+{% endblock %}

@@ -16,18 +16,11 @@ from ...config import Settings
 from ...contracts.context_package import ContextPackage
 from ...contracts.enums import PipelineStage
 from ...contracts.run_state import RunState
-from ...pipeline.runner import prepare_received, run_ingestion
 from ..deps import get_executor, get_settings
 from ..downloads import build_rules_zip
-from ..errors import (
-    ApiError,
-    ArtifactCorruptedError,
-    ExecutorAtCapacityError,
-    RunAlreadyActiveError,
-    RunNotResumableError,
-    ServiceUnavailableError,
-)
+from ..errors import ApiError
 from ..executor import RunExecutor
+from ..mappers import build_rule_response
 from ..reads import (
     read_candidate_artifact,
     read_context_package,
@@ -35,11 +28,10 @@ from ..reads import (
     read_run_state,
     require_stage_succeeded,
 )
+from ..run_actions import create_and_submit_run, submit_existing_run
 from ..schemas import (
     CandidatesResponse,
     CandidateSummary,
-    GuardrailView,
-    GuardrailViolationView,
     RuleResponse,
     RunAcceptedResponse,
     RunDetail,
@@ -47,7 +39,6 @@ from ..schemas import (
     RunSummary,
     StageExecutionView,
 )
-from ..uploads import stream_upload_to_incoming
 from ..validation import validate_candidate_id, validate_run_id
 
 logger = logging.getLogger(__name__)
@@ -107,36 +98,12 @@ def create_run(
     settings: Settings = Depends(get_settings),
     executor: RunExecutor = Depends(get_executor),
 ) -> RunAcceptedResponse:
-    temp_path = stream_upload_to_incoming(file, settings)
-    try:
-        state = prepare_received(temp_path, settings)
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
-
-    if state.current_stage == PipelineStage.FAILED:
-        raise ServiceUnavailableError(
-            "no se pudo inicializar el run (fallo de escritura local en RECEIVED)"
-        )
-
-    run_id = state.run_id
-    input_zip_path = settings.runs_dir / run_id / "input" / "package.zip"
-
-    result = executor.try_submit(
-        run_id, lambda: run_ingestion(input_zip_path, settings, run_id=run_id)
-    )
-    if result == "at_capacity":
-        raise ExecutorAtCapacityError(run_id)
-    if result == "already_active":
-        # Inalcanzable en la practica para un run_id recien generado; se
-        # maneja por completitud.
-        raise RunAlreadyActiveError()
-
+    state = create_and_submit_run(file, settings, executor)
     return RunAcceptedResponse(
-        run_id=run_id,
+        run_id=state.run_id,
         current_stage=state.current_stage,
         status="accepted",
-        status_url=f"/api/runs/{run_id}",
+        status_url=f"/api/runs/{state.run_id}",
     )
 
 
@@ -184,21 +151,7 @@ def resume_run(
 ) -> RunAcceptedResponse:
     run_dir = _run_dir(settings, run_id)
     state = read_run_state(run_dir)
-
-    if state.current_stage == PipelineStage.COMPLETED:
-        raise RunNotResumableError()
-
-    input_zip_path = run_dir / "input" / "package.zip"
-    if input_zip_path.is_symlink() or not input_zip_path.is_file():
-        raise ArtifactCorruptedError("input/package.zip ausente, no regular o symlink")
-
-    result = executor.try_submit(
-        run_id, lambda: run_ingestion(input_zip_path, settings, run_id=run_id)
-    )
-    if result == "already_active":
-        raise RunAlreadyActiveError()
-    if result == "at_capacity":
-        raise ExecutorAtCapacityError(run_id)
+    submit_existing_run(run_dir, run_id, state, settings, executor)
 
     return RunAcceptedResponse(
         run_id=run_id,
@@ -268,26 +221,7 @@ def get_rule(
     state = read_run_state(run_dir)
     require_stage_succeeded(state, PipelineStage.GUARDRAILS_APPLIED)
     artifact = read_guardrail_candidate_artifact(run_dir, candidate_id)
-    report = artifact.guardrail_report
-    return RuleResponse(
-        candidate_id=artifact.candidate_id,
-        final_rule_draft=artifact.final_rule_draft,
-        guardrail=GuardrailView(
-            verdict=report.verdict,
-            violations=[
-                GuardrailViolationView(
-                    violation_id=v.violation_id,
-                    rule=v.rule,
-                    field=v.field,
-                    message=v.message,
-                    severity=v.severity,
-                )
-                for v in report.violations
-            ],
-            warnings=artifact.warnings,
-            repair_attempts_used=len(artifact.repair_history),
-        ),
-    )
+    return build_rule_response(artifact)
 
 
 def _delete_temp_file(path: Path) -> None:

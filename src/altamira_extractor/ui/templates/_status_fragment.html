@@ -1,0 +1,47 @@
+<div id="status-fragment"
+  {% if not is_terminal %}
+  hx-get="{{ url_for('ui_status_fragment', run_id=run.run_id) }}"
+  hx-trigger="every 3s"
+  hx-target="this"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  <dl class="run-meta">
+    <dt>run_id</dt><dd>{{ run.run_id }}</dd>
+    <dt>Etapa actual</dt>
+    <dd><span class="badge badge-{{ run.current_stage.value | lower }}">{{ run.current_stage.value }}</span></dd>
+    <dt>Archivo</dt><dd>{{ run.package_filename }}</dd>
+    <dt>source_package_hash</dt><dd>{{ run.source_package_hash or "No informado" }}</dd>
+  </dl>
+
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Etapa</th>
+        <th scope="col">Estado</th>
+        <th scope="col">Inicio</th>
+        <th scope="col">Fin</th>
+        <th scope="col">Warnings</th>
+        <th scope="col">Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stage in run.stages %}
+      <tr>
+        <td>{{ stage.stage.value }}</td>
+        <td><span class="badge badge-{{ stage.status.value | lower }}">{{ stage.status.value }}</span></td>
+        <td>{{ stage.started_at.isoformat() if stage.started_at else "No informado" }}</td>
+        <td>{{ stage.finished_at.isoformat() if stage.finished_at else "No informado" }}</td>
+        <td>
+          {% if stage.warnings %}
+          <ul>{% for warning in stage.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+          {% else %}--{% endif %}
+        </td>
+        <td>{{ stage.error or "--" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>

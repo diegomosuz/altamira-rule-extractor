@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Upload -- Altamira Rule Extractor{% endblock %}
+{% block content %}
+<h1>Subir paquete Altamira</h1>
+<p>Tamano maximo permitido: {{ (max_package_size_bytes / 1048576) | round(1) }} MB.</p>
+
+{% if error %}
+<div class="alert alert-error" role="alert">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('ui_create_run') }}" enctype="multipart/form-data">
+  <label for="file">Paquete .zip</label>
+  <input type="file" id="file" name="file" accept=".zip" required>
+  <button type="submit">Subir e iniciar</button>
+</form>
+{% endblock %}

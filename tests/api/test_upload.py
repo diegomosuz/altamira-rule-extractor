@@ -151,13 +151,13 @@ def test_invalid_zip_ends_up_failed_at_validated(client: TestClient, tmp_path: P
 def test_prepare_received_failure_leaves_no_active_run_and_cleans_temp(
     settings: Settings, tmp_path: Path, monkeypatch: object
 ) -> None:
-    import altamira_extractor.api.routers.runs as runs_module
+    import altamira_extractor.api.run_actions as run_actions_module
     from altamira_extractor.api.app import create_app
 
     def _boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("fallo simulado antes de programar en el executor")
 
-    monkeypatch.setattr(runs_module, "prepare_received", _boom)  # type: ignore[attr-defined]
+    monkeypatch.setattr(run_actions_module, "prepare_received", _boom)  # type: ignore[attr-defined]
 
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
     # raise_server_exceptions=False: se quiere observar la respuesta 500

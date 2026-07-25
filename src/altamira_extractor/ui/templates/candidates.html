@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Candidatos {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="ruta de navegacion">
+  <a href="{{ url_for('ui_runs') }}">Runs</a> /
+  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
+  <span>Candidatos</span>
+</nav>
+{% endblock %}
+{% block content %}
+<h1>Candidatos detectados</h1>
+
+{% if candidates %}
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th scope="col">candidate_id</th>
+      <th scope="col">Parrafo</th>
+      <th scope="col">Condicion</th>
+      <th scope="col">Codigo de retorno</th>
+      <th scope="col">Tipo de regla</th>
+      <th scope="col">Estado</th>
+      <th scope="col"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for candidate in candidates %}
+    <tr>
+      <td>{{ candidate.candidate_id }}</td>
+      <td>{{ candidate.paragraph_name }}</td>
+      <td>{{ candidate.condition }}</td>
+      <td>{{ candidate.outcome_code or "No informado" }}</td>
+      <td>{{ candidate.rule_type or "No informado" }}</td>
+      <td><span class="badge badge-{{ candidate.status.value | lower }}">{{ candidate.status.value }}</span></td>
+      <td class="links">
+        {% if context_ready %}
+        <a href="{{ url_for('ui_context', run_id=run_id, candidate_id=candidate.candidate_id) }}">Contexto</a>
+        {% endif %}
+        {% if rule_ready %}
+        <a href="{{ url_for('ui_rule', run_id=run_id, candidate_id=candidate.candidate_id) }}">Regla</a>
+        <a href="{{ url_for('ui_guardrail', run_id=run_id, candidate_id=candidate.candidate_id) }}">Guardrail</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No hay candidatos detectados.</p>
+{% endif %}
+{% endblock %}

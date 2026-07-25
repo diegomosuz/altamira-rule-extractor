@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Runs -- Altamira Rule Extractor{% endblock %}
+{% block content %}
+<h1>Ejecuciones</h1>
+
+{% if runs %}
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th scope="col">run_id</th>
+      <th scope="col">Etapa actual</th>
+      <th scope="col">source_package_hash</th>
+      <th scope="col"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    <tr>
+      <td>{{ run.run_id }}</td>
+      <td><span class="badge badge-{{ run.current_stage.value | lower }}">{{ run.current_stage.value }}</span></td>
+      <td>{{ run.source_package_hash or "No informado" }}</td>
+      <td><a href="{{ url_for('ui_run_status', run_id=run.run_id) }}">Ver detalle</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<nav class="pagination" aria-label="paginacion de runs">
+  {% if has_previous %}
+  <a href="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ previous_offset }}"
+     hx-get="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ previous_offset }}"
+     hx-select="#main-content" hx-target="#main-content" hx-swap="outerHTML"
+     hx-push-url="true">Anterior</a>
+  {% endif %}
+  {% if has_next %}
+  <a href="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ next_offset }}"
+     hx-get="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ next_offset }}"
+     hx-select="#main-content" hx-target="#main-content" hx-swap="outerHTML"
+     hx-push-url="true">Siguiente</a>
+  {% endif %}
+</nav>
+{% else %}
+<p>No hay ejecuciones registradas.</p>
+{% endif %}
+{% endblock %}

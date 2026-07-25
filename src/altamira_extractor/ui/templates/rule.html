@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Regla {{ candidate_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="ruta de navegacion">
+  <a href="{{ url_for('ui_runs') }}">Runs</a> /
+  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
+  <a href="{{ url_for('ui_candidates', run_id=run_id) }}">Candidatos</a> /
+  <span>Regla</span>
+</nav>
+{% endblock %}
+{% block content %}
+<div class="disclaimer" role="note">
+  Este documento es un borrador generado automáticamente y requiere revisión funcional.
+</div>
+
+<h1>{{ rule.final_rule_draft.title }}</h1>
+<p>
+  <span class="badge badge-{{ rule.final_rule_draft.evidence_validation_status.value | lower }}">{{ rule.final_rule_draft.evidence_validation_status.value }}</span>
+  <span class="badge badge-{{ rule.final_rule_draft.functional_review_status.value | lower }}">{{ rule.final_rule_draft.functional_review_status.value }}</span>
+</p>
+
+<section aria-labelledby="rule-context-heading">
+  <h2 id="rule-context-heading">Contexto</h2>
+  <p>{{ rule.final_rule_draft.context }}</p>
+</section>
+
+<section aria-labelledby="rule-statement-heading">
+  <h2 id="rule-statement-heading">Enunciado</h2>
+  <p>{{ rule.final_rule_draft.statement }}</p>
+</section>
+
+<section aria-labelledby="rule-condition-heading">
+  <h2 id="rule-condition-heading">Condicion</h2>
+  <p><code>{{ rule.final_rule_draft.condition }}</code></p>
+</section>
+
+<section aria-labelledby="rule-parameters-heading">
+  <h2 id="rule-parameters-heading">Parametros</h2>
+  {% if rule.final_rule_draft.parameters %}
+  <ul>{% for parameter in rule.final_rule_draft.parameters %}<li>{{ parameter }}</li>{% endfor %}</ul>
+  {% else %}<p>Sin parametros.</p>{% endif %}
+  {% if rule.final_rule_draft.parameter_source %}
+  <p>Fuente: {{ rule.final_rule_draft.parameter_source }}</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="rule-effect-heading">
+  <h2 id="rule-effect-heading">Efecto</h2>
+  <p>{{ rule.final_rule_draft.effect }}</p>
+</section>
+
+<section aria-labelledby="rule-traceability-heading">
+  <h2 id="rule-traceability-heading">Trazabilidad</h2>
+  <ul>{% for item in rule.final_rule_draft.traceability %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+
+<section aria-labelledby="rule-limitations-heading">
+  <h2 id="rule-limitations-heading">Limitaciones</h2>
+  <ul>{% for item in rule.final_rule_draft.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+
+<section aria-labelledby="rule-claims-heading">
+  <h2 id="rule-claims-heading">Claims</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th scope="col">claim_id</th><th scope="col">Campo</th><th scope="col">evidence_paths</th><th scope="col">evidence_ids</th></tr></thead>
+    <tbody>
+      {% for claim in rule.final_rule_draft.claims %}
+      <tr>
+        <td>{{ claim.claim_id }}</td>
+        <td>{{ claim.field.value }}</td>
+        <td>{{ claim.evidence_paths | join(", ") }}</td>
+        <td>{{ claim.evidence_ids | join(", ") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<p><a href="{{ url_for('ui_guardrail', run_id=run_id, candidate_id=candidate_id) }}">Ver guardrail</a></p>
+{% endblock %}

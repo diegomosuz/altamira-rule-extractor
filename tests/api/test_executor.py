@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import altamira_extractor.api.routers.runs as runs_module
+import altamira_extractor.api.run_actions as run_actions_module
 from altamira_extractor.api.executor import RunExecutor
 from altamira_extractor.config import Settings
 
@@ -41,7 +41,7 @@ def test_capacity_exceeded_returns_503_and_preserves_run(
         started.set()
         block.wait(timeout=5)
 
-    monkeypatch.setattr(runs_module, "run_ingestion", _blocking_run_ingestion)  # type: ignore[attr-defined]
+    monkeypatch.setattr(run_actions_module, "run_ingestion", _blocking_run_ingestion)  # type: ignore[attr-defined]
 
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
     try:
@@ -85,7 +85,7 @@ def test_resume_on_active_run_returns_409(
         started.set()
         block.wait(timeout=5)
 
-    monkeypatch.setattr(runs_module, "run_ingestion", _blocking_run_ingestion)  # type: ignore[attr-defined]
+    monkeypatch.setattr(run_actions_module, "run_ingestion", _blocking_run_ingestion)  # type: ignore[attr-defined]
 
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
     try:
@@ -113,7 +113,7 @@ def test_callback_frees_registry_after_completion(
         release.wait(timeout=5)
         finished.set()
 
-    monkeypatch.setattr(runs_module, "run_ingestion", _controlled_run_ingestion)  # type: ignore[attr-defined]
+    monkeypatch.setattr(run_actions_module, "run_ingestion", _controlled_run_ingestion)  # type: ignore[attr-defined]
 
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
     with zip_path.open("rb") as fh:

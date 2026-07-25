@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Altamira Rule Extractor{% endblock %}</title>
+<meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false}'>
+<link rel="stylesheet" href="{{ url_for('ui_static', path='app.css') }}">
+<script src="{{ url_for('ui_static', path='htmx.min.js') }}" defer></script>
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="{{ url_for('ui_runs') }}">Altamira Rule Extractor</a>
+  <nav aria-label="navegacion principal">
+    <a href="{{ url_for('ui_upload_form') }}">Upload</a>
+    <a href="{{ url_for('ui_runs') }}">Runs</a>
+  </nav>
+</header>
+{% block breadcrumb %}{% endblock %}
+<main id="main-content">
+{% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <p>Altamira Rule Extractor -- borradores generados automaticamente, requieren revision funcional. Sin autenticacion en V1: restrinja el acceso de red externamente.</p>
+</footer>
+</body>
+</html>

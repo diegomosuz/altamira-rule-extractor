@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Guardrail {{ candidate_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="ruta de navegacion">
+  <a href="{{ url_for('ui_runs') }}">Runs</a> /
+  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
+  <a href="{{ url_for('ui_candidates', run_id=run_id) }}">Candidatos</a> /
+  <span>Guardrail</span>
+</nav>
+{% endblock %}
+{% block content %}
+<h1>Guardrail</h1>
+<p>Veredicto: <span class="badge badge-{{ rule.guardrail.verdict.value | lower }}">{{ rule.guardrail.verdict.value }}</span></p>
+<p>Reparaciones utilizadas: {{ rule.guardrail.repair_attempts_used }}</p>
+
+<section aria-labelledby="violations-heading">
+  <h2 id="violations-heading">Violaciones</h2>
+  {% if rule.guardrail.violations %}
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th scope="col">Severidad</th><th scope="col">Regla</th><th scope="col">Campo</th><th scope="col">Mensaje</th></tr></thead>
+    <tbody>
+      {% for violation in rule.guardrail.violations %}
+      <tr>
+        <td><span class="badge badge-{{ violation.severity.value | lower }}">{{ violation.severity.value }}</span></td>
+        <td>{{ violation.rule }}</td>
+        <td>{{ violation.field or "No informado" }}</td>
+        <td>{{ violation.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p>Sin violaciones.</p>{% endif %}
+</section>
+
+<section aria-labelledby="guardrail-warnings-heading">
+  <h2 id="guardrail-warnings-heading">Warnings</h2>
+  {% if rule.guardrail.warnings %}
+  <ul>{% for warning in rule.guardrail.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+  {% else %}<p>Sin warnings.</p>{% endif %}
+</section>
+
+<p><a href="{{ url_for('ui_rule', run_id=run_id, candidate_id=candidate_id) }}">Ver regla</a></p>
+{% endblock %}
