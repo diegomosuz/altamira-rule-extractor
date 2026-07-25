@@ -1,0 +1,40 @@
+# Control de versiones y secretos
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+# Runtime local del pipeline (nunca al build context)
+data/
+
+# Builds locales / artefactos generados
+parser/target/
+build/
+dist/
+*.egg-info/
+src/altamira_rule_extractor.egg-info/
+
+# Caches
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.eggs/
+.venv/
+venv/
+
+# ZIPs temporales / scratch
+*.zip
+*.tmp
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Documentacion no necesaria en la imagen
+docs/
+README_START_HERE.md

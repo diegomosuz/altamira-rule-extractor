@@ -1,0 +1,52 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    init: true
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "python", "-c",
+         "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  neo4j:
+    image: "${NEO4J_IMAGE:-neo4j:5-community}"
+    environment:
+      # Unicamente NEO4J_AUTH: la imagen oficial interpreta CUALQUIER
+      # otra variable NEO4J_* como un override de configuracion del
+      # servidor (con validacion estricta) -- NEO4J_USER/NEO4J_PASSWORD
+      # NO son settings validos y el contenedor no arranca si se
+      # declaran asi (confirmado empiricamente). Las credenciales que
+      # necesita el healthcheck viajan en variables sin ese prefijo.
+      NEO4J_AUTH: "${NEO4J_USER}/${NEO4J_PASSWORD}"
+      HEALTHCHECK_NEO4J_USER: "${NEO4J_USER}"
+      HEALTHCHECK_NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test:
+        ["CMD-SHELL",
+         "cypher-shell -u $$HEALTHCHECK_NEO4J_USER -p $$HEALTHCHECK_NEO4J_PASSWORD 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  neo4j_data:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Extensiones admitidas en paquetes Altamira (docs/PACKAGE_CONTRACT.md +
@@ -234,6 +234,26 @@ class Settings(BaseSettings):
     # Settings (no se difiere a la resolucion del perfil, a diferencia de
     # timeout/retries/credenciales).
     llm_temperature: Literal[0] = Field(default=0, validation_alias="LLM_TEMPERATURE")
+
+    @field_validator("llm_temperature", mode="before")
+    @classmethod
+    def _coerce_llm_temperature_zero_string(cls, value: object) -> object:
+        """Unico campo con esta coercion puntual (no una coercion generica
+        para todo Settings): pydantic-settings entrega el valor de una
+        variable de entorno siempre como `str`, y `Literal[0]` no coacciona
+        "0" a 0 automaticamente -- `Settings()` fallaba con
+        `ValidationError` cada vez que `LLM_TEMPERATURE` provenia de un
+        `.env` real (nunca antes ejercitado: todo test previo construia
+        `Settings(...)` con kwargs Python, nunca via `load_settings()`
+        contra un archivo). Solo "0" (con o sin espacios exteriores) se
+        normaliza a 0; cualquier otro valor (incluido "1", "0.1" o texto
+        arbitrario) se deja pasar tal cual para que `Literal[0]` lo
+        rechace con el mismo error de siempre -- la temperatura sigue
+        siendo exactamente 0 o un fallo de construccion, nunca configurable
+        a otro valor (CLAUDE.md: "Temperatura 0")."""
+        if isinstance(value, str) and value.strip() == "0":
+            return 0
+        return value
 
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")

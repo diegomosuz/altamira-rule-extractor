@@ -50,7 +50,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import ui
-from ..config import Settings
+from ..config import Settings, load_settings
 from ..ui.router import router as ui_router
 from .errors import ApiError, ExecutorAtCapacityError
 from .executor import RunExecutor
@@ -194,3 +194,15 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     return app
+
+
+def app_factory() -> FastAPI:
+    """Punto de entrada para `uvicorn --factory` (Prompt 14a): construye
+    `Settings` recien cuando Uvicorn invoca esta funcion, nunca antes
+    (nada de esto corre a import-time del modulo). El contenedor arranca
+    con exactamente 1 worker (`--workers 1`): `RunExecutor` coordina
+    concurrencia solo dentro de un unico proceso (ver docstring de
+    `create_app` mas arriba) -- con mas de un worker cada proceso
+    tendria su propio registro de runs activos desincronizado del
+    resto."""
+    return create_app(load_settings())
