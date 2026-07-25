@@ -88,8 +88,8 @@ final class StatementExtractor {
         String id = nextId(StatementKind.IF);
         collected.add(new CanonicalStatement(
                 id, StatementKind.IF, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
-                loc.kind(), parentId, branchKind, null, expression, null, operands, operands, List.of(),
-                List.of(), null, List.of(), List.of()));
+                loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), operands,
+                operands, List.of(), List.of(), null, List.of(), List.of()));
 
         if (ifStmt.getThen() != null) {
             walk(ifStmt.getThen().getStatements(), id, BranchKind.THEN);
@@ -104,11 +104,18 @@ final class StatementExtractor {
         List<String> operands = evaluateStmt.getSelect() != null
                 ? ValueReferences.collectVariableNames(evaluateStmt.getSelect().getSelectValueStmt())
                 : List.of();
+        // expression = texto crudo del sujeto EVALUATEd (mismo Select ya
+        // usado para operands arriba); antes quedaba siempre null aunque
+        // el dato estructural ya estaba disponible.
+        String expression = evaluateStmt.getSelect() != null && evaluateStmt.getSelect().getCtx() != null
+                ? evaluateStmt.getSelect().getCtx().getText()
+                : null;
         String id = nextId(StatementKind.EVALUATE);
         collected.add(new CanonicalStatement(
                 id, StatementKind.EVALUATE, loc.sourceText(), loc.sourceFile(), loc.lineStart(),
-                loc.lineEnd(), loc.kind(), parentId, branchKind, null, null, null, operands, operands,
-                List.of(), List.of(), null, List.of(), List.of()));
+                loc.lineEnd(), loc.kind(), parentId, branchKind, null, expression,
+                normalizeExpression(expression), operands, operands, List.of(), List.of(), null, List.of(),
+                List.of()));
 
         for (WhenPhrase whenPhrase : evaluateStmt.getWhenPhrases()) {
             String condition = whenPhrase.getCtx() != null ? whenPhrase.getCtx().getText() : null;
@@ -234,8 +241,8 @@ final class StatementExtractor {
         String id = nextId(StatementKind.COMPUTE);
         collected.add(new CanonicalStatement(
                 id, StatementKind.COMPUTE, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
-                loc.kind(), parentId, branchKind, null, expression, null, List.of(), read,
-                List.copyOf(targets), List.copyOf(targets), null, List.of(), List.of()));
+                loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
+                read, List.copyOf(targets), List.copyOf(targets), null, List.of(), List.of()));
     }
 
     private void convertGoTo(GoToStatement gotoStmt, String parentId, BranchKind branchKind) {
@@ -334,6 +341,28 @@ final class StatementExtractor {
 
     private String nextId(StatementKind kind) {
         return ctx.programName + "::" + paragraphName + "::" + ctx.nextOrdinal() + "::" + kind.name();
+    }
+
+    /**
+     * V1: normalizedExpression es una representacion deterministica y
+     * semanticamente CONSERVADORA de expression -- no una normalizacion
+     * COBOL con significado semantico. No existe una especificacion
+     * formal de normalizacion en V1, asi que el comportamiento honesto
+     * es unicamente recortar whitespace EXTERIOR ({@link String#strip()}):
+     * conserva mayusculas/minusculas, literales entre comillas (incluido
+     * su whitespace interno, p. ej. {@code 'A   B'}), numeros,
+     * operadores e identificadores exactamente como los devolvio el
+     * parser. No colapsa whitespace interno, no usa regex para
+     * interpretar semantica COBOL, y nunca se deriva desde sourceText
+     * (solo desde expression, que ya es el texto estructural del nodo
+     * ASG correspondiente).
+     */
+    static String normalizeExpression(String expression) {
+        if (expression == null) {
+            return null;
+        }
+        String trimmed = expression.strip();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private record Location(
