@@ -1,13 +1,13 @@
 """Integracion dedicada de la UI (Prompt 13d): mismo fixture COBOL,
 mismo cliente LLM fake y mismos evidence_id empiricamente confirmados
-que tests/api/test_api_integration.py (reutilizados por import, nunca
-reescritos) -- pero conducidos por TestClient contra `/ui/*`: upload
-multipart real con Origin valido, polling del fragmento de estado hasta
-COMPLETED, navegacion de las 8 pantallas, descarga via el endpoint
-binario `/api/runs/{run_id}/download` ya existente, y verificacion de
-que un titulo malicioso generado por el LLM fake se muestra como texto
-seguro. Java 17 y Neo4j 5 reales, cero llamadas reales a proveedores.
-No levanta Uvicorn."""
+que tests/e2e_support.py (reutilizados por import, nunca reescritos)
+-- pero conducidos por TestClient contra `/ui/*`: upload multipart real
+con Origin valido, polling del fragmento de estado hasta COMPLETED,
+navegacion de las 8 pantallas, descarga via el endpoint binario
+`/api/runs/{run_id}/download` ya existente, y verificacion de que un
+titulo malicioso generado por el LLM fake se muestra como texto seguro.
+Java 17 y Neo4j 5 reales, cero llamadas reales a proveedores. No
+levanta Uvicorn."""
 
 from __future__ import annotations
 
@@ -24,12 +24,12 @@ import altamira_extractor.pipeline.guardrails_applied_stage as guardrails_stage_
 import altamira_extractor.pipeline.rule_drafts_generated_stage as rule_drafts_stage_module
 from altamira_extractor.api.app import create_app
 
-from ..api.test_api_integration import (
-    _install_fake_client,
-    _require_jar,
-    _settings,
-    _valid_payload,
-    _write_package_zip,
+from ..e2e_support import (
+    build_settings,
+    install_fake_client,
+    require_jar,
+    valid_payload,
+    write_package_zip,
 )
 
 pytestmark = pytest.mark.integration
@@ -59,15 +59,15 @@ def _wait_for_terminal_via_status_fragment(
 def test_ui_end_to_end_upload_polling_navigation_and_download(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _require_jar()
-    settings = _settings(tmp_path)
-    _install_fake_client(
-        monkeypatch, rule_drafts_stage_module, [_valid_payload(title=MALICIOUS_TITLE)]
+    require_jar()
+    settings = build_settings(tmp_path)
+    install_fake_client(
+        monkeypatch, rule_drafts_stage_module, [valid_payload(title=MALICIOUS_TITLE)]
     )
-    repair_calls = _install_fake_client(monkeypatch, guardrails_stage_module, [])
+    repair_calls = install_fake_client(monkeypatch, guardrails_stage_module, [])
 
     with TestClient(create_app(settings)) as client:
-        zip_path = _write_package_zip(tmp_path / "package.zip")
+        zip_path = write_package_zip(tmp_path / "package.zip")
         with zip_path.open("rb") as fh:
             upload_response = client.post(
                 "/ui/runs",

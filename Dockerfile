@@ -126,3 +126,37 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=10 \
 # proceso (ver docstring de api/app.py::create_app/app_factory).
 CMD ["uvicorn", "altamira_extractor.api.app:app_factory", "--factory", \
      "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+########################################
+# Stage: test (Prompt 14b) -- nunca se referencia desde docker-compose.yml
+# ni desde el target runtime; existe solo para `docker build --target test`.
+########################################
+FROM runtime AS test
+
+USER root
+
+# Mismo wheel exacto que runtime (misma capa de python-build); se agrega
+# el extra [dev] (pytest+pytest-asyncio) encima de lo ya instalado, sin
+# reinstalar dependencias runtime desde cero. `set -- ...whl; test "$#"
+# -eq 1` exige EXACTAMENTE un wheel (nunca toma "el primero" en
+# silencio): el build falla si /tmp/dist quedo vacio o con mas de un
+# wheel, en vez de instalar uno arbitrario.
+COPY --from=python-build /dist /tmp/dist
+RUN set -eux; \
+    set -- /tmp/dist/*.whl; \
+    test "$#" -eq 1; \
+    wheel="$1"; \
+    pip install --no-cache-dir "${wheel}[dev]"; \
+    rm -rf /tmp/dist
+
+COPY tests /app/tests
+
+# Sin chown recursivo: /app/tests queda propiedad de root (solo lectura
+# para altamira), suficiente porque el unico escritor real durante el
+# E2E es pytest via `tmp_path` (siempre bajo /tmp, ya escribible por
+# cualquier usuario) -- nunca /app/tests ni /app en general.
+USER altamira
+
+# no:cacheprovider: evita que pytest intente crear .pytest_cache/ en un
+# directorio que altamira no puede escribir.
+CMD ["python", "-m", "pytest", "tests/docker/test_docker_e2e.py", "-m", "integration", "-q", "-p", "no:cacheprovider"]

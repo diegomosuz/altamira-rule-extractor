@@ -1,7 +1,7 @@
 """Integracion dedicada del CLI (Prompt 13c): mismo fixture COBOL, mismo
 LLM fake y mismos evidence_id empiricamente confirmados que
-tests/api/test_api_integration.py (reutilizados por import, no
-reescritos) -- pero conducidos por `typer.testing.CliRunner` a traves de
+tests/e2e_support.py (reutilizados por import, no reescritos) -- pero
+conducidos por `typer.testing.CliRunner` a traves de
 `ingest -> status -> candidates -> context -> rule -> download`, nunca
 por `TestClient`/HTTP. No requiere FastAPI ni Uvicorn levantados; Java 17
 y Neo4j 5 reales, cliente LLM fake (nunca un proveedor real)."""
@@ -19,12 +19,12 @@ import altamira_extractor.cli as cli_module
 import altamira_extractor.pipeline.guardrails_applied_stage as guardrails_stage_module
 import altamira_extractor.pipeline.rule_drafts_generated_stage as rule_drafts_stage_module
 
-from .api.test_api_integration import (
-    _install_fake_client,
-    _require_jar,
-    _settings,
-    _valid_payload,
-    _write_package_zip,
+from .e2e_support import (
+    build_settings,
+    install_fake_client,
+    require_jar,
+    valid_payload,
+    write_package_zip,
 )
 
 pytestmark = pytest.mark.integration
@@ -35,15 +35,15 @@ runner = CliRunner()
 def test_cli_end_to_end_ingest_reaches_completed_and_downloads(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _require_jar()
-    settings = _settings(tmp_path)
+    require_jar()
+    settings = build_settings(tmp_path)
     monkeypatch.setattr(cli_module, "load_settings", lambda: settings)
-    _install_fake_client(monkeypatch, rule_drafts_stage_module, [_valid_payload()])
+    install_fake_client(monkeypatch, rule_drafts_stage_module, [valid_payload()])
     # Ninguna reparacion deberia invocarse: el draft inicial ya pasa el
-    # guardrail (mismo fixture que test_api_integration.py).
-    repair_calls = _install_fake_client(monkeypatch, guardrails_stage_module, [])
+    # guardrail (mismo fixture que tests/e2e_support.py).
+    repair_calls = install_fake_client(monkeypatch, guardrails_stage_module, [])
 
-    zip_path = _write_package_zip(tmp_path / "package.zip")
+    zip_path = write_package_zip(tmp_path / "package.zip")
 
     ingest_result = runner.invoke(cli_module.app, ["ingest", str(zip_path)])
     assert ingest_result.exit_code == 0, ingest_result.stderr

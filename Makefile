@@ -2,7 +2,7 @@
 # Asumen un entorno con Python 3.12 y JDK 17 + Maven ya disponibles
 # (venv local con esas versiones, o el contenedor/CI que las provea).
 .PHONY: lint typecheck test parser-test compose-check \
-	docker-build docker-up docker-down docker-logs docker-smoke
+	docker-build docker-up docker-down docker-logs docker-smoke docker-e2e
 
 lint:
 	python -m ruff check .
@@ -19,8 +19,7 @@ parser-test:
 compose-check:
 	docker compose config
 
-# Envoltorios minimos de Docker Compose (Prompt 14a). El E2E
-# contenedorizado (docker-e2e) es Prompt 14b, no implementado todavia.
+# Envoltorios minimos de Docker Compose (Prompt 14a).
 docker-build:
 	docker compose build
 
@@ -35,3 +34,9 @@ docker-logs:
 
 docker-smoke:
 	python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5); print('OK')"
+
+# E2E Docker sin internet (Prompt 14b): construye la imagen `test`,
+# levanta un proyecto Compose temporal y corre el pipeline completo
+# dentro de una red interna sin salida a Internet. Ver README.md.
+docker-e2e:
+	python scripts/docker_e2e.py

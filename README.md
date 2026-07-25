@@ -124,6 +124,42 @@ down`. Para descartar tambien el grafo de Neo4j: `docker compose down
 -v` (esto es destructivo -- solo si el contenido de `neo4j_data` es
 realmente descartable).
 
+## E2E Docker sin internet (Prompt 14b)
+
+```bash
+make docker-e2e
+# equivalente:
+python scripts/docker_e2e.py
+```
+
+Corre el pipeline completo (ZIP -> parser Java real -> grafo Neo4j real
+-> invariantes -> candidato -> contexto -> LLM fake -> guardrail ->
+Markdown) dentro de una imagen Docker separada (`docker build --target
+test`, nunca la imagen `runtime` que corre en produccion) contra un
+`neo4j` real levantado con un proyecto Docker Compose temporal y
+exclusivo de esta ejecucion. El contenedor de test corre en una red
+Docker `--internal` (sin salida a Internet): el unico host alcanzable es
+ese `neo4j` temporal. El proveedor LLM real nunca se contacta -- el
+unico cliente LLM se sustituye por un fake dentro del proceso `pytest`
+que corre adentro del contenedor de test, nunca en codigo de produccion
+(no existe ni `LLM_PROVIDER=fake` ni un servidor HTTP fake).
+
+El requisito "sin internet" se aplica a la **ejecucion** del contenedor
+de test, no al **build** de las imagenes: `docker build`/`docker compose
+build` si pueden resolver dependencias contra PyPI/Maven Central/GitHub
+normalmente (igual que cualquier build Docker de este proyecto). Una vez
+construidas, el pipeline corre exclusivamente en la red interna descrita
+arriba.
+
+El script limpia todos los recursos que crea (contenedor de test, red
+interna, proyecto Compose temporal con `down -v`, tag de imagen de
+test) incluso si algun paso falla a mitad de camino; nunca toca `./data`
+ni el `.env` del repositorio. Tarda varios minutos (build de dos
+imagenes + arranque de Neo4j + el pipeline completo). No es una
+validacion de autenticacion, autorizacion, alta disponibilidad, multiples
+workers ni rendimiento -- solo confirma que el pipeline empaquetado
+recorre sus 15 etapas hasta `COMPLETED` sin depender de Internet.
+
 ## Limitaciones operativas V1 (deliberadas, documentadas)
 
 - **Un unico worker Uvicorn**: `RunExecutor` (`api/executor.py`)
@@ -203,6 +239,5 @@ redacta automaticamente campos con nombres sensibles (`password`,
 - Ver `README_START_HERE.md` para el contexto de diseno original del
   paquete y `docs/CLAUDE_CODE_RUNBOOK.md` para la disciplina de
   ejecucion etapa por etapa.
-- El E2E contenedorizado (subir un ZIP real contra el `app` empaquetado
-  y verificar el recorrido completo hasta la descarga) es un checkpoint
-  posterior (Prompt 14b) -- no implementado todavia.
+- El E2E Docker sin internet (Prompt 14b) esta implementado: ver la
+  seccion "E2E Docker sin internet (Prompt 14b)" mas arriba.

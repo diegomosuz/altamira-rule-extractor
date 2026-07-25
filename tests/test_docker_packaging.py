@@ -8,6 +8,7 @@ es manual/CI, documentada en README.md, no parte de esta suite."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -39,6 +40,9 @@ def test_compose_app_builds_from_dockerfile_runtime_target() -> None:
     build = spec["services"]["app"]["build"]
     assert build["dockerfile"] == "Dockerfile"
     assert build["target"] == "runtime"
+    # El target `test` (Prompt 14b) nunca se referencia desde
+    # docker-compose.yml: existe solo para `docker build --target test`.
+    assert build["target"] != "test"
 
 
 def test_compose_app_depends_on_neo4j_healthy() -> None:
@@ -136,10 +140,16 @@ def test_dockerfile_runtime_creates_dedicated_non_root_user() -> None:
     assert "--uid 10001" in text
     assert "--gid 10001" in text or "groupadd --gid 10001" in text
     assert "USER altamira" in text
-    assert "USER root" not in text
     assert "sudo" not in text
     assert "chmod 777" not in text
     assert "chmod -R 777" not in text
+    # El target `runtime` (lo que corre en produccion, ver
+    # docker-compose.yml) nunca vuelve a `USER root`. El target `test`
+    # (Prompt 14b) si lo hace momentaneamente para instalar el extra
+    # [dev] y vuelve a `USER altamira` antes de su CMD -- ver
+    # test_dockerfile_test_stage_copies_tests_and_returns_to_user_altamira.
+    runtime_stage = text.split("AS runtime", 1)[1].split("AS test", 1)[0]
+    assert "USER root" not in runtime_stage
 
 
 def test_dockerfile_does_not_run_maven_at_container_start() -> None:
@@ -191,6 +201,62 @@ def test_dockerfile_never_hardcodes_secrets() -> None:
         assert suspicious not in text
 
 
+def test_dockerfile_has_a_test_stage_deriving_from_runtime() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "FROM runtime AS test" in text
+
+
+def test_dockerfile_runtime_stage_does_not_copy_tests() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    runtime_stage = text.split("AS runtime", 1)[1].split("AS test", 1)[0]
+    assert "COPY tests" not in runtime_stage
+
+
+def test_dockerfile_test_stage_copies_tests_and_returns_to_user_altamira() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    test_stage = text.split("FROM runtime AS test", 1)[1]
+    assert "COPY tests /app/tests" in test_stage
+    # La ultima instruccion USER de la etapa debe volver a altamira: el
+    # bloque termina en USER altamira, nunca en USER root.
+    user_lines = [
+        line.strip() for line in test_stage.splitlines() if line.strip().startswith("USER ")
+    ]
+    assert user_lines[-1] == "USER altamira"
+
+
+def test_dockerfile_test_stage_resolves_exactly_one_wheel_or_fails() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    test_stage = text.split("FROM runtime AS test", 1)[1]
+    # No toma "el primero" en silencio (`ls | head -1` / `find -print
+    # -quit`): exige explicitamente exactamente un match del glob antes
+    # de instalar, para que el build falle si /tmp/dist quedo vacio o
+    # con mas de un wheel.
+    assert "set -- /tmp/dist/*.whl" in test_stage
+    assert 'test "$#" -eq 1' in test_stage
+    assert '-print -quit' not in test_stage
+
+
+def test_dockerfile_test_stage_installs_dev_extra() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    test_stage = text.split("FROM runtime AS test", 1)[1]
+    assert '"${wheel}[dev]"' in test_stage
+
+
+def test_dockerfile_test_stage_cmd_runs_the_docker_e2e_test_with_integration_marker() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    test_stage = text.split("FROM runtime AS test", 1)[1]
+    cmd_line = test_stage.rsplit("CMD ", 1)[-1]
+    assert "tests/docker/test_docker_e2e.py" in cmd_line
+    assert '"-m", "integration"' in cmd_line
+    assert "no:cacheprovider" in cmd_line
+
+
+def test_no_llm_provider_fake_anywhere_in_packaging_files() -> None:
+    for path in (DOCKERFILE, COMPOSE_FILE):
+        assert "LLM_PROVIDER=fake" not in path.read_text(encoding="utf-8")
+        assert "LLM_PROVIDER: fake" not in path.read_text(encoding="utf-8")
+
+
 def test_dockerignore_excludes_the_minimum_required_patterns() -> None:
     text = DOCKERIGNORE.read_text(encoding="utf-8")
     for pattern in (
@@ -215,7 +281,7 @@ def test_dockerignore_does_not_exclude_tests_yet() -> None:
     assert "tests" not in lines
 
 
-def test_readme_documents_docker_compose_workflow_but_not_14b_e2e() -> None:
+def test_readme_documents_docker_compose_workflow_and_docker_e2e() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     readme_lower = readme.lower()
     for expected in (
@@ -228,6 +294,23 @@ def test_readme_documents_docker_compose_workflow_but_not_14b_e2e() -> None:
         "/ui/runs",
         "worker",
         "no-root",
+        "docker-e2e",
     ):
         assert expected.lower() in readme_lower
-    assert "Prompt 14b" in readme
+    # No debe presentarse como validacion de aspectos que no cubre: el
+    # texto debe descartarlos explicitamente, no simplemente omitir la
+    # palabra (que tambien aparece, correctamente, dentro de esa misma
+    # frase de descargo). Los saltos de linea del wrap de Markdown se
+    # normalizan a un espacio antes de buscar la frase completa.
+    readme_single_line = re.sub(r"\s+", " ", readme_lower)
+    assert "no es una validacion de autenticacion" in readme_single_line
+    assert "alta disponibilidad" in readme_single_line
+    assert "multiples workers ni rendimiento" in readme_single_line
+    for overclaim in (
+        "valida autenticaci",
+        "valida autorizaci",
+        "garantiza alta disponibilidad",
+        "valida multiples workers",
+        "valida rendimiento",
+    ):
+        assert overclaim not in readme_single_line
