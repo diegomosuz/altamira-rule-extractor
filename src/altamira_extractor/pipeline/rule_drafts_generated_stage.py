@@ -2,15 +2,37 @@
 CONTEXTS_BUILT -> artifacts/08-rule-drafts/ (Prompt 12).
 
 Etapa atomica para el CONJUNTO COMPLETO de candidatos de la corrida: solo
-puede quedar SUCCEEDED cuando existe exactamente un RuleDraft inicial
-estructuralmente valido por cada ContextRecord, todos validan contra
-Pydantic y `rule-draft.schema.json`, y todos estan en
-`rule-draft-manifest.json` — nunca hay exito parcial. Si CUALQUIER
-candidato produce una respuesta inicial estructuralmente invalida, el
-procesamiento se detiene de inmediato, el directorio temporal se
-descarta completo, no se consume `LLM_REPAIR_ATTEMPTS`, y la salida
-canonica anterior (si existia) se conserva intacta — nunca se promueve
-un draft de esa corrida ni se alcanza GUARDRAILS_APPLIED.
+puede quedar SUCCEEDED cuando existe exactamente un RuleDraft final
+estructuralmente valido -- y con evidencia real -- por cada ContextRecord,
+todos validan contra Pydantic y `rule-draft.schema.json`, y todos estan en
+`rule-draft-manifest.json` — nunca hay exito parcial.
+
+Checkpoint correctivo (reparacion estructural dedicada): cuando la
+respuesta INICIAL del modelo para un candidato es JSON valido pero no
+ensambla como RuleDraft (campo faltante, clave extra, tipo invalido,
+alguno de los tres campos gobernados por Python, o un evidence_id/
+evidence_path que no existe literalmente en el ContextPackage real -- ver
+`rule_draft_assembly.check_evidence_references`), la etapa ejecuta un
+ciclo acotado de reparacion (hasta `settings.llm_repair_attempts`) usando
+prompts DEDICADOS y versionados
+(`prompts/rule_structure_repair_system.md`/`rule_structure_repair_user.md`)
+-- nunca los prompts de GUARDRAILS_APPLIED (`rule_repair_*.md`), que
+reparan violaciones semanticas de guardrail, no forma. El prompt
+estructural recibe unicamente: candidate_id, el payload rechazado, los
+errores de validacion sanitizados (loc/type/msg, nunca el payload
+completo) y los evidence_id/evidence_path REALMENTE permitidos para ese
+candidato -- nunca el ContextPackage completo, nunca credenciales.
+
+Solo si TODOS los intentos de reparacion tambien fallan (estructural o de
+evidencia) la etapa completa aborta: el directorio temporal se descarta
+entero, la salida canonica anterior (si existia) se conserva intacta, y
+nunca se promueve un draft parcial ni se alcanza GUARDRAILS_APPLIED. Un
+error de infraestructura (`LlmClientError`: 401/403/429/timeout/red/5xx)
+o de precondicion (perfil LLM invalido, ContextPackage/manifest con
+drift) sigue siendo SIEMPRE un fallo directo, en cualquier intento
+(inicial o de reparacion): nunca dispara ni consume el ciclo de
+reparacion, que existe unicamente para respuestas 2xx estructural o
+referencialmente invalidas.
 
 `RuleDraftGenerationBuilder` es de solo lectura sobre `artifacts/07-context/`:
 nunca reejecuta Q1-Q7 ni reconstruye ContextPackage."""
@@ -20,6 +42,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import jsonschema
@@ -42,14 +66,31 @@ from .llm_client import ChatMessage, LlmProfile, OpenAICompatibleChatClient, res
 from .prompt_loader import load_prompt_template, render_prompt
 from .rule_draft_assembly import (
     RuleDraftAssemblyError,
+    ValidationIssue,
     assemble_rule_draft,
+    check_evidence_references,
     load_rule_draft_schema,
     rule_draft_json_hash,
 )
 
+logger = logging.getLogger("altamira_extractor.pipeline.rule_drafts_generated_stage")
+
 _DIR_NAME = "08-rule-drafts"
 _MANIFEST_FILENAME = "rule-draft-manifest.json"
 _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
+
+# Placeholders del prompt de reparacion ESTRUCTURAL dedicado (checkpoint
+# correctivo): deliberadamente distintos y separados de los que usa
+# GUARDRAILS_APPLIED (`rule_repair_system.md`/`rule_repair_user.md`, que
+# reparan violaciones de guardrail, no forma). Nunca se envia el
+# ContextPackage completo a este prompt.
+_CANDIDATE_ID_PLACEHOLDER = "{{CANDIDATE_ID}}"
+_REJECTED_PAYLOAD_PLACEHOLDER = "{{REJECTED_PAYLOAD_JSON}}"
+_VALIDATION_ERRORS_PLACEHOLDER = "{{VALIDATION_ERRORS_JSON}}"
+_ALLOWED_EVIDENCE_IDS_PLACEHOLDER = "{{ALLOWED_EVIDENCE_IDS_JSON}}"
+_ALLOWED_EVIDENCE_PATHS_PLACEHOLDER = "{{ALLOWED_EVIDENCE_PATHS_JSON}}"
+_STRUCTURE_REPAIR_SYSTEM_FILENAME = "rule_structure_repair_system.md"
+_STRUCTURE_REPAIR_USER_FILENAME = "rule_structure_repair_user.md"
 
 
 def _verify_rule_drafts_generated_precondition(run_stages: list[StageExecution]) -> None:
@@ -120,6 +161,148 @@ def _load_writer_prompts(
     except PromptTemplateError as exc:
         raise RuleDraftGenerationError(str(exc)) from exc
     return system.template_text, system.template_hash, user.template_text, user.template_hash
+
+
+def _structure_repair_prompt_path(settings: Settings, filename: str) -> Path:
+    """Los prompts de reparacion ESTRUCTURAL son siempre hermanos de
+    `rule_writer_system.md` (mismo directorio `prompts/`, real o de test):
+    no se agrega ningun campo nuevo a `Settings` para esto -- se deriva
+    del path ya existente, igual que cualquier otro recurso versionado
+    junto a el."""
+    return settings.rule_writer_system_prompt_path.parent / filename
+
+
+def _load_structure_repair_prompts(settings: Settings) -> tuple[str, str]:
+    """Devuelve (system_text, user_template_text) de los prompts
+    DEDICADOS de reparacion estructural -- nunca los de GUARDRAILS_APPLIED
+    (`rule_repair_system.md`/`rule_repair_user.md`, que reparan
+    violaciones de guardrail, no forma). El prompt de usuario nunca recibe
+    `{{CONTEXT_PACKAGE_JSON}}`: solo candidate_id, payload rechazado,
+    errores sanitizados y las listas de evidence_id/evidence_path
+    realmente permitidas."""
+    try:
+        system = load_prompt_template(
+            _structure_repair_prompt_path(settings, _STRUCTURE_REPAIR_SYSTEM_FILENAME),
+            relative_path=f"prompts/{_STRUCTURE_REPAIR_SYSTEM_FILENAME}",
+            expected_placeholder_counts={},
+        )
+        user = load_prompt_template(
+            _structure_repair_prompt_path(settings, _STRUCTURE_REPAIR_USER_FILENAME),
+            relative_path=f"prompts/{_STRUCTURE_REPAIR_USER_FILENAME}",
+            expected_placeholder_counts={
+                _CANDIDATE_ID_PLACEHOLDER: 1,
+                _REJECTED_PAYLOAD_PLACEHOLDER: 1,
+                _VALIDATION_ERRORS_PLACEHOLDER: 1,
+                _ALLOWED_EVIDENCE_IDS_PLACEHOLDER: 1,
+                _ALLOWED_EVIDENCE_PATHS_PLACEHOLDER: 1,
+            },
+        )
+    except PromptTemplateError as exc:
+        raise RuleDraftGenerationError(str(exc)) from exc
+    return system.template_text, user.template_text
+
+
+class _LazyStructureRepairPrompts:
+    """Carga `rule_structure_repair_system.md`/`rule_structure_repair_user.md`
+    UNICAMENTE la primera vez que algun candidato realmente necesita una
+    reparacion (memoizado para el resto de la corrida). Si ningun
+    candidato falla -- el caso comun -- estos archivos ni siquiera se leen
+    ni se validan: una corrida 100% exitosa nunca depende de que la
+    infraestructura de reparacion (que no usa) este bien configurada."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._cached: tuple[str, str] | None = None
+
+    def get(self) -> tuple[str, str]:
+        if self._cached is None:
+            self._cached = _load_structure_repair_prompts(self._settings)
+        return self._cached
+
+
+def _collect_evidence_anchors(node: object, path: str) -> list[str]:
+    """Camina genericamente el `dict` de un ContextPackage (nunca conoce
+    un modelo Pydantic especifico) y, para cada contenedor con
+    `evidence_ids` no vacio, devuelve el path al contenedor mismo y a
+    cada uno de sus campos escalares hermanos -- exactamente el universo
+    de `evidence_path` que un claim legitimo podria citar. No inventa
+    ningun conocimiento estructural nuevo: es un recorrido puramente
+    generico sobre el JSON ya serializado."""
+    anchors: list[str] = []
+    if isinstance(node, dict):
+        evidence_ids = node.get("evidence_ids")
+        if isinstance(evidence_ids, list) and evidence_ids:
+            anchors.append(path)
+            for key, value in node.items():
+                if key == "evidence_ids":
+                    continue
+                if value is None or isinstance(value, str | int | float | bool):
+                    anchors.append(f"{path}.{key}")
+        for key, value in node.items():
+            anchors.extend(_collect_evidence_anchors(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            anchors.extend(_collect_evidence_anchors(item, f"{path}[{index}]"))
+    return anchors
+
+
+def _classify_validation_issues(
+    issues: tuple[ValidationIssue, ...],
+) -> tuple[list[str], list[str], list[str]]:
+    """Clasifica errores estructurados en 3 categorias legibles para el
+    mensaje final (nunca para decidir logica): faltantes, adicionales, o
+    de tipo/valor invalido. Pydantic v2 usa `type="missing"`/
+    `"extra_forbidden"`; jsonschema usa el nombre del validador
+    (`"required"`/`"additionalProperties"`) en su lugar."""
+    missing: list[str] = []
+    extra: list[str] = []
+    invalid: list[str] = []
+    for issue in issues:
+        if issue.type in ("missing", "required"):
+            missing.append(issue.loc)
+        elif issue.type in ("extra_forbidden", "additionalProperties", "forbidden_self_assignment"):
+            extra.append(issue.loc)
+        else:
+            invalid.append(f"{issue.loc} ({issue.type})")
+    return sorted(set(missing)), sorted(set(extra)), sorted(set(invalid))
+
+
+def _structural_failure_message(
+    candidate_id: str, *, repair_attempts_used: int, issues: tuple[ValidationIssue, ...]
+) -> str:
+    """Mensaje final tras agotar la reparacion: candidate_id, intentos
+    realizados y los campos afectados por categoria -- NUNCA el payload
+    completo ni el texto crudo de `msg` (que ya se registro por separado
+    via logging estructurado, ver `_log_structural_failure`)."""
+    missing, extra, invalid = _classify_validation_issues(issues)
+    parts = [
+        f"candidato {candidate_id!r} agoto la reparacion estructural "
+        f"({repair_attempts_used} intento(s) de reparacion) sin producir un RuleDraft valido"
+    ]
+    if missing:
+        parts.append(f"campos faltantes: {missing}")
+    if extra:
+        parts.append(f"campos adicionales: {extra}")
+    if invalid:
+        parts.append(f"campos con tipo/valor invalido: {invalid}")
+    return "; ".join(parts)
+
+
+def _log_structural_failure(
+    candidate_id: str, *, attempt: int, issues: tuple[ValidationIssue, ...]
+) -> None:
+    """Registra unicamente loc/type/msg por error (nunca el payload, ni
+    `input`, ni headers/credenciales -- ninguno de los cuales esta
+    disponible aqui de todas formas)."""
+    logger.info(
+        "rule_draft_structural_validation_failed",
+        extra={
+            "candidate_id": candidate_id,
+            "attempt": attempt,
+            "issue_count": len(issues),
+            "issues": [{"loc": i.loc, "type": i.type, "msg": i.msg} for i in issues],
+        },
+    )
 
 
 def _rule_draft_filename(candidate_id: str) -> str:
@@ -196,67 +379,207 @@ def _existing_output_is_reusable(
     return True
 
 
+@dataclass(frozen=True)
+class _AcceptedDraft:
+    rule_draft: RuleDraft
+    response_hash: str
+    writer_user_effective_hash: str
+    repair_attempts_used: int
+
+
+def _stable_payload_json(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
+def _validation_errors_payload(issues: tuple[ValidationIssue, ...]) -> str:
+    payload = {
+        "validation_errors": [
+            {"loc": issue.loc, "type": issue.type, "msg": issue.msg} for issue in issues
+        ]
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _stable_string_list_json(values: list[str]) -> str:
+    return json.dumps(
+        sorted(set(values)), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+async def _generate_one_draft(
+    *,
+    candidate_id: str,
+    package: ContextPackage,
+    client: OpenAICompatibleChatClient,
+    system_text: str,
+    user_template_text: str,
+    repair_prompts: _LazyStructureRepairPrompts,
+    schema_validator: jsonschema.protocols.Validator,
+    llm_repair_attempts: int,
+    max_context_package_json_chars: int,
+) -> _AcceptedDraft:
+    """Genera el draft de UN candidato: llamada inicial, y -- solo si la
+    respuesta es JSON valido pero no ensambla como RuleDraft, o ensambla
+    pero cita un evidence_id/evidence_path inexistente en el
+    ContextPackage real -- hasta `llm_repair_attempts` llamadas de
+    reparacion adicionales usando los prompts ESTRUCTURALES dedicados
+    (nunca los de GUARDRAILS_APPLIED). Un `LlmClientError` (en la llamada
+    inicial o en cualquier repair) SIEMPRE propaga de inmediato como fallo
+    directo: nunca se cuenta como intento de reparacion ni se reintenta
+    aqui (eso ya lo resuelve, con sus propios reintentos HTTP acotados,
+    `OpenAICompatibleChatClient.complete()`)."""
+    context_json = package.to_stable_json()
+    if len(context_json) > max_context_package_json_chars:
+        raise RuleDraftGenerationError(
+            f"el ContextPackage de {candidate_id!r} serializado excede el limite "
+            f"configurado ({max_context_package_json_chars} caracteres)"
+        )
+
+    # Calculado UNA vez por candidato (no cambia entre intentos de
+    # reparacion): universo real de evidencia que el prompt estructural
+    # puede ofrecer como "permitido", derivado del ContextPackage real,
+    # nunca inventado ni enviado como el ContextPackage completo.
+    allowed_evidence_ids = sorted({entry.evidence_id for entry in package.evidence})
+    context_dict_for_anchors = package.model_dump(mode="json")
+    allowed_evidence_paths = sorted(set(_collect_evidence_anchors(context_dict_for_anchors, "$")))
+
+    rendered = render_prompt(user_template_text, {_CONTEXT_PACKAGE_PLACEHOLDER: context_json})
+    messages = [
+        ChatMessage(role="system", content=system_text),
+        ChatMessage(role="user", content=rendered.effective_text),
+    ]
+    try:
+        payload, response_hash = await _complete_and_hash(client, messages)
+    except LlmClientError as exc:
+        raise RuleDraftGenerationError(
+            f"fallo del cliente LLM generando el draft inicial de {candidate_id!r}: "
+            f"{type(exc).__name__}"
+        ) from exc
+
+    repair_attempts_used = 0
+    while True:
+        try:
+            rule_draft = assemble_rule_draft(payload, schema_validator=schema_validator)
+            evidence_issues = check_evidence_references(rule_draft, package)
+            if evidence_issues:
+                raise RuleDraftAssemblyError(
+                    "el RuleDraft ensamblado cita evidence_id/evidence_path que no "
+                    "existen en el ContextPackage real",
+                    validation_errors=evidence_issues,
+                )
+        except RuleDraftAssemblyError as exc:
+            _log_structural_failure(
+                candidate_id, attempt=repair_attempts_used, issues=exc.validation_errors
+            )
+            if repair_attempts_used >= llm_repair_attempts:
+                raise RuleDraftGenerationError(
+                    _structural_failure_message(
+                        candidate_id,
+                        repair_attempts_used=repair_attempts_used,
+                        issues=exc.validation_errors,
+                    ),
+                    validation_errors=exc.validation_errors,
+                ) from exc
+
+            repair_attempts_used += 1
+            repair_system_text, repair_user_template_text = repair_prompts.get()
+            repair_rendered = render_prompt(
+                repair_user_template_text,
+                {
+                    _CANDIDATE_ID_PLACEHOLDER: candidate_id,
+                    _REJECTED_PAYLOAD_PLACEHOLDER: _stable_payload_json(payload),
+                    _VALIDATION_ERRORS_PLACEHOLDER: _validation_errors_payload(
+                        exc.validation_errors
+                    ),
+                    _ALLOWED_EVIDENCE_IDS_PLACEHOLDER: _stable_string_list_json(
+                        allowed_evidence_ids
+                    ),
+                    _ALLOWED_EVIDENCE_PATHS_PLACEHOLDER: _stable_string_list_json(
+                        allowed_evidence_paths
+                    ),
+                },
+            )
+            repair_messages = [
+                ChatMessage(role="system", content=repair_system_text),
+                ChatMessage(role="user", content=repair_rendered.effective_text),
+            ]
+            try:
+                payload, response_hash = await _complete_and_hash(client, repair_messages)
+            except LlmClientError as exc2:
+                raise RuleDraftGenerationError(
+                    f"fallo del cliente LLM reparando el draft de {candidate_id!r} "
+                    f"(intento {repair_attempts_used}): {type(exc2).__name__}"
+                ) from exc2
+            continue
+
+        return _AcceptedDraft(
+            rule_draft=rule_draft,
+            response_hash=response_hash,
+            writer_user_effective_hash=rendered.effective_hash,
+            repair_attempts_used=repair_attempts_used,
+        )
+
+
 async def _generate_all_drafts(
     *,
     candidates: list[tuple[str, ContextPackage]],
     profile: LlmProfile,
     system_text: str,
     user_template_text: str,
+    repair_prompts: _LazyStructureRepairPrompts,
     schema_validator: jsonschema.protocols.Validator,
+    llm_repair_attempts: int,
     max_context_package_json_chars: int,
     context_records_by_id: dict[str, str],
     temp_dir: Path,
-) -> list[RuleDraftRecord]:
-    """Genera, en una unica corrida de evento asyncio, el draft inicial
-    de TODOS los candidatos, secuencialmente (sin concurrencia). Por cada
-    candidato exitoso escribe el draft UNICAMENTE en `temp_dir` (nunca en
-    el directorio canonico) y registra su metadata en memoria. Se detiene
-    ante el primer fallo estructural: la excepcion propaga y el llamador
-    descarta `temp_dir` completo (nada de esta corrida se promueve)."""
+) -> tuple[list[RuleDraftRecord], list[str]]:
+    """Genera, en una unica corrida de evento asyncio, el draft final
+    (inicial o reparado) de TODOS los candidatos, secuencialmente (sin
+    concurrencia). Por cada candidato exitoso escribe el draft UNICAMENTE
+    en `temp_dir` (nunca en el directorio canonico) y registra su
+    metadata en memoria. Se detiene ante el primer candidato que agote su
+    presupuesto de reparacion (o ante cualquier fallo de infraestructura):
+    la excepcion propaga y el llamador descarta `temp_dir` completo (nada
+    de esta corrida se promueve). Devuelve tambien un resumen legible por
+    candidato con reparaciones consumidas (se agrega a `warnings` del
+    manifest -- unico lugar donde `rule-draft-manifest.json`, sin ganar
+    ningun campo nuevo, deja evidencia de que hubo reparacion)."""
     records: list[RuleDraftRecord] = []
+    repair_summaries: list[str] = []
     async with OpenAICompatibleChatClient(profile) as client:
         for candidate_id, package in candidates:
-            context_json = package.to_stable_json()
-            if len(context_json) > max_context_package_json_chars:
-                raise RuleDraftGenerationError(
-                    f"el ContextPackage de {candidate_id!r} serializado excede el limite "
-                    f"configurado ({max_context_package_json_chars} caracteres)"
-                )
-            rendered = render_prompt(
-                user_template_text, {_CONTEXT_PACKAGE_PLACEHOLDER: context_json}
+            accepted = await _generate_one_draft(
+                candidate_id=candidate_id,
+                package=package,
+                client=client,
+                system_text=system_text,
+                user_template_text=user_template_text,
+                repair_prompts=repair_prompts,
+                schema_validator=schema_validator,
+                llm_repair_attempts=llm_repair_attempts,
+                max_context_package_json_chars=max_context_package_json_chars,
             )
-            messages = [
-                ChatMessage(role="system", content=system_text),
-                ChatMessage(role="user", content=rendered.effective_text),
-            ]
-            try:
-                payload, response_hash = await _complete_and_hash(client, messages)
-            except LlmClientError as exc:
-                raise RuleDraftGenerationError(
-                    f"fallo del cliente LLM generando el draft inicial de {candidate_id!r}: "
-                    f"{type(exc).__name__}"
-                ) from exc
-
-            try:
-                rule_draft = assemble_rule_draft(payload, schema_validator=schema_validator)
-            except RuleDraftAssemblyError as exc:
-                raise RuleDraftGenerationError(
-                    f"respuesta inicial estructuralmente invalida para {candidate_id!r}: {exc}"
-                ) from exc
 
             filename = _rule_draft_filename(candidate_id)
-            (temp_dir / filename).write_text(rule_draft.to_stable_json(), encoding="utf-8")
+            (temp_dir / filename).write_text(
+                accepted.rule_draft.to_stable_json(), encoding="utf-8"
+            )
             records.append(
                 RuleDraftRecord(
                     candidate_id=candidate_id,
                     context_hash=context_records_by_id[candidate_id],
                     relative_filename=filename,
-                    rule_draft_hash=rule_draft_json_hash(rule_draft),
-                    writer_user_effective_hash=rendered.effective_hash,
-                    response_hash=response_hash,
+                    rule_draft_hash=rule_draft_json_hash(accepted.rule_draft),
+                    writer_user_effective_hash=accepted.writer_user_effective_hash,
+                    response_hash=accepted.response_hash,
                 )
             )
-    return records
+            if accepted.repair_attempts_used > 0:
+                repair_summaries.append(
+                    f"{candidate_id}: reparado tras {accepted.repair_attempts_used} "
+                    "intento(s) estructural(es)"
+                )
+    return records, sorted(repair_summaries)
 
 
 async def _complete_and_hash(
@@ -303,6 +626,7 @@ def run_rule_drafts_generated_stage(
     system_text, system_hash, user_template_text, user_template_hash = _load_writer_prompts(
         settings
     )
+    repair_prompts = _LazyStructureRepairPrompts(settings)
 
     context_records_by_id = {
         record.candidate_id: record.context_hash for record in context_manifest.context_records
@@ -346,22 +670,25 @@ def run_rule_drafts_generated_stage(
     candidates = sorted(packages_by_id.items(), key=lambda item: item[0])
     temp_dir = new_temp_directory(artifacts_dir, _DIR_NAME)
     try:
-        records = asyncio.run(
+        records, repair_summaries = asyncio.run(
             _generate_all_drafts(
                 candidates=candidates,
                 profile=profile,
                 system_text=system_text,
                 user_template_text=user_template_text,
+                repair_prompts=repair_prompts,
                 schema_validator=schema_validator,
+                llm_repair_attempts=settings.llm_repair_attempts,
                 max_context_package_json_chars=settings.max_context_package_json_chars,
                 context_records_by_id=context_records_by_id,
                 temp_dir=temp_dir,
             )
         )
     except BaseException:
-        # Cualquier fallo (estructural o del cliente LLM) descarta TODO
-        # el directorio temporal: la etapa es atomica, nunca hay
-        # promocion parcial ni consumo de LLM_REPAIR_ATTEMPTS aqui.
+        # Cualquier fallo (candidato que agoto la reparacion estructural,
+        # o un fallo de infraestructura en cualquier intento) descarta
+        # TODO el directorio temporal: la etapa es atomica, nunca hay
+        # promocion parcial.
         discard_temp_directory(temp_dir)
         raise
 
@@ -383,7 +710,7 @@ def run_rule_drafts_generated_stage(
         writer_user_template_hash=user_template_hash,
         records=records,
         draft_count=len(records),
-        warnings=[],
+        warnings=repair_summaries,
     )
 
     # El contenido logico puede coincidir con la salida existente (por
@@ -410,7 +737,7 @@ def run_rule_drafts_generated_stage(
         swap_directory(temp_dir, rule_draft_dir, error_factory=RuleDraftGenerationError)
     finally:
         discard_temp_directory(temp_dir)
-    return [f"{manifest.draft_count} draft(s)"]
+    return [f"{manifest.draft_count} draft(s)", *repair_summaries]
 
 
 def _write_manifest_and_promote(

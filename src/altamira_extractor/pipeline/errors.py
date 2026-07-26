@@ -7,6 +7,8 @@ decide como traducirlas a StageExecution.error.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class PipelineError(Exception):
     """Base de todas las excepciones de dominio del pipeline de ingesta."""
@@ -265,20 +267,35 @@ class RuleDraftGenerationError(PipelineError):
     la generacion/persistencia de `artifacts/08-rule-drafts/`:
     CONTEXTS_BUILT no completo, `context-manifest.json`/algun
     `ContextPackage` ausente o con `context_hash` inconsistente, alguna
-    plantilla de prompt (`rule_writer_system.md`/`rule_writer_user.md`)
-    ausente/no es un archivo regular/vacia/con un numero de placeholders
-    distinto del esperado, el `ContextPackage` serializado excede
+    plantilla de prompt (`rule_writer_system.md`/`rule_writer_user.md`/
+    `rule_repair_system.md`/`rule_repair_user.md`) ausente/no es un
+    archivo regular/vacia/con un numero de placeholders distinto del
+    esperado, el `ContextPackage` serializado excede
     `max_context_package_json_chars`, un error del cliente LLM
-    (`LlmClientError`), o la respuesta inicial del modelo para
-    CUALQUIER candidato no pudo ensamblarse como un `RuleDraft`
-    estructuralmente valido (envelope/JSON/fences/claves duplicadas/
-    raiz/campos faltantes-extra/tipos/Pydantic/schema). Fatal para la
-    etapa COMPLETA (atomica: todo o nada) — un solo candidato invalido
-    descarta el directorio temporal entero y nunca promueve ni un solo
-    draft, nunca consume `LLM_REPAIR_ATTEMPTS`, nunca alcanza
-    GUARDRAILS_APPLIED. El mensaje nunca incluye el body de la respuesta,
-    el prompt efectivo completo, el ContextPackage ni credenciales.
-    """
+    (`LlmClientError`, en la llamada inicial o en cualquier intento de
+    reparacion: nunca reintentable a este nivel), o un candidato agoto
+    `settings.llm_repair_attempts` intentos de reparacion sin producir un
+    `RuleDraft` estructuralmente valido (envelope/JSON/fences/claves
+    duplicadas/raiz/campos faltantes-extra/tipos/Pydantic/schema). Una
+    respuesta inicial estructuralmente invalida YA NO aborta de
+    inmediato: primero se agota el ciclo de reparacion acotado (mismos
+    prompts versionados que GUARDRAILS_APPLIED), y solo si tambien falla
+    la etapa aborta. Fatal para la etapa COMPLETA (atomica: todo o
+    nada) — un solo candidato que agote su reparacion descarta el
+    directorio temporal entero y nunca promueve ni un solo draft, nunca
+    alcanza GUARDRAILS_APPLIED. El mensaje nunca incluye el payload
+    completo del modelo, el body de la respuesta, el prompt efectivo
+    completo, el ContextPackage ni credenciales — solo candidate_id,
+    numero de intentos y los campos (loc) afectados por categoria.
+
+    `validation_errors` (opcional, vacio por defecto) expone los mismos
+    detalles estructurados loc/type/msg de `RuleDraftAssemblyError` para
+    quien necesite inspeccionarlos programaticamente (p. ej. tests) sin
+    parsear el mensaje de texto."""
+
+    def __init__(self, message: str, *, validation_errors: tuple[Any, ...] = ()) -> None:
+        super().__init__(message)
+        self.validation_errors = validation_errors
 
 
 class GuardrailError(PipelineError):

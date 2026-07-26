@@ -8,10 +8,13 @@ Cliente LLM inyectado por monkeypatch (mismo patron que Prompt 11): sin
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 
 from altamira_extractor.config import Settings
@@ -43,8 +46,24 @@ from altamira_extractor.contracts.enums import (
 from altamira_extractor.contracts.rule_draft_manifest import RuleDraftDirectoryManifest
 from altamira_extractor.contracts.run_state import StageExecution
 from altamira_extractor.pipeline import rule_drafts_generated_stage as stage_module
-from altamira_extractor.pipeline.errors import LlmTimeoutError, RuleDraftGenerationError
+from altamira_extractor.pipeline.errors import (
+    LlmAuthenticationError,
+    LlmRateLimitError,
+    LlmTimeoutError,
+    RuleDraftGenerationError,
+)
+from altamira_extractor.pipeline.prompt_loader import load_prompt_template, render_prompt
+from altamira_extractor.pipeline.rule_draft_assembly import (
+    assemble_rule_draft,
+    load_rule_draft_schema,
+)
 from altamira_extractor.pipeline.rule_drafts_generated_stage import run_rule_drafts_generated_stage
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REAL_STRUCTURE_REPAIR_SYSTEM_PATH = REPO_ROOT / "prompts" / "rule_structure_repair_system.md"
+REAL_STRUCTURE_REPAIR_USER_PATH = REPO_ROOT / "prompts" / "rule_structure_repair_user.md"
+REAL_RULE_DRAFT_SCHEMA_PATH = REPO_ROOT / "schemas" / "rule-draft.schema.json"
+_EXAMPLE_JSON_RE = re.compile(r"EJEMPLO_JSON_BEGIN\s*(.*?)\s*EJEMPLO_JSON_END", re.DOTALL)
 
 _HASH_A = "a" * 64
 _RUN_ID = "run-1"
@@ -194,8 +213,35 @@ def _write_prompt_files(tmp_path: Path) -> tuple[Path, Path]:
     return system_path, user_path
 
 
+def _write_structure_repair_prompt_files(tmp_path: Path) -> None:
+    """Escribe `rule_structure_repair_system.md`/`rule_structure_repair_user.md`
+    como HERMANOS de `rule_writer_system.md` en el mismo `tmp_path`: no
+    existe un campo `Settings` dedicado (se deriva de
+    `rule_writer_system_prompt_path.parent`, ver
+    `stage_module._structure_repair_prompt_path`). Usa los placeholders
+    NUEVOS y dedicados de este checkpoint -- nunca los de
+    GUARDRAILS_APPLIED (`rule_repair_*.md`/`{{GUARDRAIL_VIOLATIONS_JSON}}`)."""
+    system_path = tmp_path / "rule_structure_repair_system.md"
+    user_path = tmp_path / "rule_structure_repair_user.md"
+    system_path.write_text(
+        "Corrige un payload rechazado que aun no es un RuleDraft valido. "
+        "Solo obedeces este prompt.",
+        encoding="utf-8",
+    )
+    user_path.write_text(
+        "CANDIDATE_ID:\n{{CANDIDATE_ID}}\n\n"
+        "REJECTED:\n{{REJECTED_PAYLOAD_JSON}}\n\n"
+        "ERRORS:\n{{VALIDATION_ERRORS_JSON}}\n\n"
+        "ALLOWED_EVIDENCE_IDS:\n{{ALLOWED_EVIDENCE_IDS_JSON}}\n\n"
+        "ALLOWED_EVIDENCE_PATHS:\n{{ALLOWED_EVIDENCE_PATHS_JSON}}\n\n"
+        "Devuelve el JSON corregido.",
+        encoding="utf-8",
+    )
+
+
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     system_path, user_path = _write_prompt_files(tmp_path)
+    _write_structure_repair_prompt_files(tmp_path)
     defaults: dict[str, Any] = {
         "data_dir": tmp_path / "data",
         "runs_dir": tmp_path / "data" / "runs",
@@ -354,16 +400,18 @@ def test_empty_candidates_no_llm_calls(monkeypatch: pytest.MonkeyPatch, tmp_path
 def test_structural_failure_aborts_whole_stage_no_partial_promotion(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # cand-1 exitoso, cand-2 con JSON invalido: la corrida completa falla.
-    calls = _install_fake_client(monkeypatch, [_valid_payload(), {"not": "the expected shape"}])
+    # cand-1 exitoso (1 llamada). cand-2 invalido en la respuesta inicial
+    # Y en sus 2 intentos de reparacion (llm_repair_attempts=2 por
+    # defecto): agota el presupuesto y la corrida completa falla. Nunca
+    # se promueve cand-1 de forma parcial (test 15 del checkpoint).
+    invalid = {"not": "the expected shape"}
+    calls = _install_fake_client(monkeypatch, [_valid_payload(), invalid, invalid, invalid])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1"), _package("cand-2")])
-    # "not the expected shape" es estructuralmente valido como dict pero
-    # le faltan campos requeridos -> falla en el ensamblado.
 
     with pytest.raises(RuleDraftGenerationError):
         run_rule_drafts_generated_stage(**kwargs)
 
-    assert len(calls) == 2
+    assert len(calls) == 4
     assert not kwargs["rule_draft_dir"].exists()
     # ningun temporal huerfano
     assert list(tmp_path.glob("08-rule-drafts.tmp-*")) == []
@@ -378,11 +426,13 @@ def test_previous_valid_output_preserved_when_new_run_fails(
     first_manifest_bytes = (kwargs["rule_draft_dir"] / "rule-draft-manifest.json").read_bytes()
 
     # segunda corrida: cambia el contexto (nuevo candidato) para forzar
-    # regeneracion, y esta vez el modelo devuelve una respuesta invalida.
+    # regeneracion, y esta vez el modelo devuelve una respuesta invalida
+    # incluso tras agotar los 2 intentos de reparacion por defecto.
     kwargs2 = _base_kwargs(tmp_path, packages=[_package("cand-1"), _package("cand-2")])
     kwargs2["rule_draft_dir"] = kwargs["rule_draft_dir"]
     kwargs2["settings"] = kwargs["settings"]
-    _install_fake_client(monkeypatch, [_valid_payload(), {"bad": "payload"}])
+    bad = {"bad": "payload"}
+    _install_fake_client(monkeypatch, [_valid_payload(), bad, bad, bad])
 
     with pytest.raises(RuleDraftGenerationError):
         run_rule_drafts_generated_stage(**kwargs2)
@@ -404,12 +454,19 @@ def test_llm_client_error_aborts_stage(monkeypatch: pytest.MonkeyPatch, tmp_path
 def test_model_cannot_self_assign_forbidden_keys(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # El modelo insiste en autoasignarse evidence_validation_status en
+    # TODOS sus intentos (inicial + 2 reparaciones): sigue rechazandose
+    # siempre, la reparacion nunca lo "perdona" (test 13 del checkpoint).
     bad_payload = _valid_payload(evidence_validation_status="EVIDENCE_VALIDATED")
-    _install_fake_client(monkeypatch, [bad_payload])
+    calls = _install_fake_client(monkeypatch, [bad_payload, bad_payload, bad_payload])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
 
-    with pytest.raises(RuleDraftGenerationError):
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
         run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    assert "evidence_validation_status" in str(excinfo.value)
+    assert not kwargs["rule_draft_dir"].exists()
 
 
 def test_context_package_size_limit_is_enforced(
@@ -475,3 +532,490 @@ def test_fast_path_does_not_require_previous_runstate_success(
     monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
     warnings = run_rule_drafts_generated_stage(**kwargs)
     assert warnings == ["1 draft(s) (sin cambios)"]
+
+
+# --- checkpoint correctivo: ciclo de reparacion estructural ---
+
+
+def _manifest_of(rule_draft_dir: Path) -> RuleDraftDirectoryManifest:
+    return RuleDraftDirectoryManifest.model_validate_json(
+        (rule_draft_dir / "rule-draft-manifest.json").read_text(encoding="utf-8")
+    )
+
+
+def test_valid_initial_response_has_zero_repairs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _install_fake_client(monkeypatch, [_valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 1
+    assert warnings == ["1 draft(s)"]
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    assert manifest.warnings == []
+
+
+def test_missing_field_initial_first_repair_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing_field_payload = _valid_payload()
+    del missing_field_payload["title"]
+    calls = _install_fake_client(monkeypatch, [missing_field_payload, _valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    assert manifest.warnings == ["cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+    # el segundo mensaje enviado al modelo (la reparacion) debe incluir
+    # el payload rechazado y los errores estructurados, sin inventar
+    # nada mas alla de eso.
+    repair_user_message = calls[1][1].content
+    assert "title" in repair_user_message
+
+
+def test_extra_field_initial_first_repair_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    extra_field_payload = _valid_payload(unexpected_field="nope")
+    calls = _install_fake_client(monkeypatch, [extra_field_payload, _valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+
+def test_wrong_type_initial_second_repair_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    wrong_type_payload = _valid_payload(parameters="not-a-list")
+    still_missing_payload = _valid_payload()
+    del still_missing_payload["condition"]
+    calls = _install_fake_client(
+        monkeypatch, [wrong_type_payload, still_missing_payload, _valid_payload()]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 2 intento(s) estructural(es)"]
+
+
+def test_all_repair_attempts_invalid_fails_after_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    always_invalid = {"not": "the expected shape"}
+    # 1 inicial + 2 reparaciones (llm_repair_attempts=2 por defecto) = 3.
+    calls = _install_fake_client(
+        monkeypatch, [always_invalid, always_invalid, always_invalid]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    assert "cand-1" in str(excinfo.value)
+    assert "2 intento(s) de reparacion" in str(excinfo.value)
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_final_error_exposes_sanitized_loc_type_msg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing_and_extra = _valid_payload(unexpected_field="nope")
+    del missing_and_extra["title"]
+    _install_fake_client(
+        monkeypatch, [missing_and_extra, missing_and_extra, missing_and_extra]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    issues = excinfo.value.validation_errors
+    assert len(issues) >= 1
+    locs = {issue.loc for issue in issues}
+    types = {issue.type for issue in issues}
+    assert "title" in locs
+    assert "unexpected_field" in locs
+    assert "missing" in types
+    assert "extra_forbidden" in types
+    # cada issue tiene su propio msg no vacio (nunca el payload completo).
+    assert all(issue.msg for issue in issues)
+
+
+def test_full_payload_never_appears_in_final_error_or_logs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("DEBUG")
+    # El propio VALOR invalido es el marcador secreto (tipo incorrecto:
+    # string en vez de lista) -- Pydantic expone ese valor crudo unicamente
+    # via `input` (nunca copiado a ValidationIssue), asi que ni siquiera el
+    # campo que realmente fallo deberia filtrar su contenido.
+    secret_marker = "SECRET_PAYLOAD_MARKER_9f8e7d6c"
+    bad_payload = _valid_payload(parameters=secret_marker)
+    _install_fake_client(monkeypatch, [bad_payload, bad_payload, bad_payload])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert secret_marker not in str(excinfo.value)
+    assert secret_marker not in caplog.text
+    for issue in excinfo.value.validation_errors:
+        assert secret_marker not in issue.msg
+        assert secret_marker not in issue.loc
+
+
+def test_api_key_never_appears_in_final_error_or_logs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("DEBUG")
+    api_key = "sk-super-secret-test-key-should-never-leak"
+    always_invalid = {"not": "the expected shape"}
+    _install_fake_client(monkeypatch, [always_invalid, always_invalid, always_invalid])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+    kwargs["settings"] = _settings(tmp_path, OPENAI_API_KEY=api_key)
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert api_key not in str(excinfo.value)
+    assert api_key not in caplog.text
+
+
+def test_authentication_error_never_triggers_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _install_fake_client(monkeypatch, [LlmAuthenticationError("401")])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 1
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_rate_limit_error_never_triggers_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _install_fake_client(monkeypatch, [LlmRateLimitError("429")])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 1
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_timeout_error_never_triggers_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _install_fake_client(monkeypatch, [LlmTimeoutError("timeout")])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 1
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_llm_client_error_during_repair_never_triggers_further_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # La respuesta INICIAL es estructuralmente invalida (dispara el
+    # primer intento de reparacion); esa llamada de reparacion falla con
+    # un 429 real -- debe abortar de inmediato, sin consumir un segundo
+    # intento de reparacion ni tratar el 429 como otra respuesta invalida.
+    always_invalid = {"not": "the expected shape"}
+    calls = _install_fake_client(
+        monkeypatch, [always_invalid, LlmRateLimitError("429 durante reparacion")]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def _payload_with_claim(**claim_overrides: Any) -> dict[str, Any]:
+    claim: dict[str, Any] = {
+        "claim_id": "c1",
+        "field": "condition",
+        "evidence_paths": ["$.decision.expression"],
+        "evidence_ids": ["ev-1"],
+    }
+    claim.update(claim_overrides)
+    return _valid_payload(claims=[claim])
+
+
+def test_invented_evidence_id_initiates_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """checkpoint correctivo: `check_evidence_references` corre DESPUES de
+    `assemble_rule_draft` y ANTES de aceptar el draft -- un evidence_id
+    que no existe en `ContextPackage.evidence` es tratado como error
+    reparable de contenido estructurado (mismo `ValidationIssue`, mismo
+    ciclo), nunca delegado exclusivamente a GUARDRAILS_APPLIED."""
+    invented = _payload_with_claim(evidence_ids=["ev-does-not-exist"])
+    calls = _install_fake_client(monkeypatch, [invented, _payload_with_claim()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+
+def test_invented_evidence_id_never_promoted_when_repair_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    invented = _payload_with_claim(evidence_ids=["ev-does-not-exist"])
+    calls = _install_fake_client(monkeypatch, [invented, invented, invented])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    issues = excinfo.value.validation_errors
+    assert any(issue.type == "unknown_evidence_id" for issue in issues)
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_invented_evidence_path_initiates_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    invented = _payload_with_claim(evidence_paths=["$.decision.does_not_exist"])
+    calls = _install_fake_client(monkeypatch, [invented, _payload_with_claim()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+
+def test_invented_evidence_path_never_promoted_when_repair_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    invented = _payload_with_claim(evidence_paths=["$.decision.does_not_exist"])
+    calls = _install_fake_client(monkeypatch, [invented, invented, invented])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    issues = excinfo.value.validation_errors
+    assert any(issue.type == "unknown_evidence_path" for issue in issues)
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_evidence_path_prefix_or_partial_match_is_not_accepted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # "$.decision" (sin ".expression") es un prefijo real del path
+    # correcto, pero NUNCA se acepta como coincidencia parcial: debe
+    # tratarse como invalido igual que un path inventado.
+    prefix_only = _payload_with_claim(evidence_paths=["$.decisio"])
+    calls = _install_fake_client(monkeypatch, [prefix_only, _payload_with_claim()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+
+def test_repair_prompt_never_receives_full_context_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Marcador exclusivo del ContextPackage (nombre de programa real de
+    # _package()): el prompt de reparacion estructural nunca debe verlo,
+    # ya que no recibe el ContextPackage completo (solo candidate_id,
+    # errores, payload rechazado y listas de evidencia permitidas).
+    missing_field_payload = _valid_payload()
+    del missing_field_payload["title"]
+    calls = _install_fake_client(monkeypatch, [missing_field_payload, _valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    run_rule_drafts_generated_stage(**kwargs)
+
+    repair_user_message = calls[1][1].content
+    assert "Transferencias" not in repair_user_message
+    assert "PROG1" not in repair_user_message
+    assert "cand-1" in repair_user_message
+
+
+def test_no_partial_artifacts_remain_after_exhausted_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    always_invalid = {"not": "the expected shape"}
+    _install_fake_client(monkeypatch, [always_invalid, always_invalid, always_invalid])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert not kwargs["rule_draft_dir"].exists()
+    assert list(tmp_path.glob("08-rule-drafts.tmp-*")) == []
+    # ningun archivo huerfano del intento fallido, mas alla de la entrada
+    # legitima de 07-context/ (precondicion, no generada por esta etapa).
+    assert list(tmp_path.glob("08-rule-drafts*")) == []
+
+
+def test_three_candidates_second_fails_first_never_partially_promoted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    always_invalid = {"not": "the expected shape"}
+    calls = _install_fake_client(
+        monkeypatch,
+        [
+            _valid_payload(),  # cand-1: valido de entrada
+            always_invalid,  # cand-2: inicial invalido
+            always_invalid,  # cand-2: reparacion 1 invalida
+            always_invalid,  # cand-2: reparacion 2 invalida -> agota limite
+            # cand-3 nunca deberia llamarse: la corrida ya fallo en cand-2.
+        ],
+    )
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1"), _package("cand-2"), _package("cand-3")]
+    )
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 4
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_manifest_records_real_repair_attempts_for_multiple_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing_field_payload = _valid_payload()
+    del missing_field_payload["title"]
+    calls = _install_fake_client(
+        monkeypatch,
+        [
+            _valid_payload(),  # cand-1: sin reparacion
+            missing_field_payload,  # cand-2: inicial invalido
+            _valid_payload(),  # cand-2: reparacion 1 valida
+        ],
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1"), _package("cand-2")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    assert manifest.warnings == ["cand-2: reparado tras 1 intento(s) estructural(es)"]
+    assert warnings == ["2 draft(s)", "cand-2: reparado tras 1 intento(s) estructural(es)"]
+
+
+def test_response_hash_matches_the_finally_accepted_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing_field_payload = _valid_payload()
+    del missing_field_payload["title"]
+    accepted_payload = _valid_payload(title="Titulo final aceptado")
+    _install_fake_client(monkeypatch, [missing_field_payload, accepted_payload])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    run_rule_drafts_generated_stage(**kwargs)
+
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    record = manifest.records[0]
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            accepted_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    assert record.response_hash == expected_hash
+
+
+# --- prompts estructurales reales (checkpoint correctivo) ---
+
+
+def test_real_structure_repair_prompts_render_without_error() -> None:
+    """Carga y renderiza los archivos REALES del repositorio (nunca un
+    fixture ficticio): confirma que ambos placeholders declarados existen
+    exactamente una vez y que la sustitucion completa (los 5 placeholders
+    del prompt de usuario) no levanta `PromptTemplateError`."""
+    system = load_prompt_template(
+        REAL_STRUCTURE_REPAIR_SYSTEM_PATH,
+        relative_path="prompts/rule_structure_repair_system.md",
+        expected_placeholder_counts={},
+    )
+    user = load_prompt_template(
+        REAL_STRUCTURE_REPAIR_USER_PATH,
+        relative_path="prompts/rule_structure_repair_user.md",
+        expected_placeholder_counts={
+            "{{CANDIDATE_ID}}": 1,
+            "{{REJECTED_PAYLOAD_JSON}}": 1,
+            "{{VALIDATION_ERRORS_JSON}}": 1,
+            "{{ALLOWED_EVIDENCE_IDS_JSON}}": 1,
+            "{{ALLOWED_EVIDENCE_PATHS_JSON}}": 1,
+        },
+    )
+    assert system.template_text
+    rendered = render_prompt(
+        user.template_text,
+        {
+            "{{CANDIDATE_ID}}": "candidate::demo",
+            "{{REJECTED_PAYLOAD_JSON}}": "{}",
+            "{{VALIDATION_ERRORS_JSON}}": "{}",
+            "{{ALLOWED_EVIDENCE_IDS_JSON}}": "[]",
+            "{{ALLOWED_EVIDENCE_PATHS_JSON}}": "[]",
+        },
+    )
+    assert "{{" not in rendered.effective_text
+
+
+def test_real_structure_repair_system_prompt_example_validates_against_contract() -> None:
+    """Extrae el ejemplo JSON literal embebido entre EJEMPLO_JSON_BEGIN/
+    END en el prompt REAL y lo valida contra `assemble_rule_draft` (el
+    mismo camino que usa la etapa real). Si el contrato de RuleDraft
+    cambia y el ejemplo del prompt queda desactualizado, este test falla
+    -- nunca se asume manualmente que siguen sincronizados."""
+    text = REAL_STRUCTURE_REPAIR_SYSTEM_PATH.read_text(encoding="utf-8")
+    match = _EXAMPLE_JSON_RE.search(text)
+    assert match is not None, "el prompt debe contener EJEMPLO_JSON_BEGIN/END"
+    example = json.loads(match.group(1))
+
+    schema, _hash = load_rule_draft_schema(REAL_RULE_DRAFT_SCHEMA_PATH)
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator = validator_cls(schema)
+
+    rule_draft = assemble_rule_draft(example, schema_validator=validator)
+    assert rule_draft.schema_version == "2.0"
+
+
+def test_structure_repair_prompt_mentions_every_current_functional_field() -> None:
+    """Proteccion minima contra drift de la prosa (no solo del ejemplo):
+    cada uno de los 10 campos funcionales actuales de RuleDraft debe
+    aparecer mencionado literalmente en el prompt real. No reemplaza el
+    test anterior (que valida el EJEMPLO contra el contrato real); este
+    cubre la DESCRIPCION en prosa."""
+    from altamira_extractor.contracts.rule_draft import RuleDraft
+
+    governed = {"schema_version", "evidence_validation_status", "functional_review_status"}
+    functional_fields = set(RuleDraft.model_fields) - governed
+
+    text = REAL_STRUCTURE_REPAIR_SYSTEM_PATH.read_text(encoding="utf-8")
+    for field_name in functional_fields:
+        assert field_name in text, f"campo funcional {field_name!r} no mencionado en el prompt"

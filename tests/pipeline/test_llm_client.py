@@ -55,6 +55,20 @@ def _profile(**overrides: Any) -> LlmProfile:
     return LlmProfile(**defaults)
 
 
+def _isolated_settings(**overrides: Any) -> Settings:
+    """Construye `Settings` SIN leer ningun `.env` real del host
+    (`_env_file=None`, soportado nativamente por pydantic-settings): los
+    tests de este archivo verifican precisamente que campo/provider
+    quedan ausentes por defecto, y un `.env` local con
+    `LLM_PROVIDER=openai`/`OPENAI_API_KEY=...` real (para uso manual del
+    proyecto, nunca leido ni versionado) haria que esas aserciones
+    fallaran por una razon ajena al codigo bajo prueba. Los overrides
+    explicitos siguen aplicando identico (mayor prioridad que cualquier
+    fuente de entorno en pydantic-settings); esto solo remueve la capa
+    de archivo `.env`, nunca variables de entorno explicitas de CI."""
+    return Settings(_env_file=None, **overrides)  # type: ignore[call-arg]
+
+
 def _openai_settings(**overrides: Any) -> Settings:
     # Settings usa validation_alias en todos los campos LLM_*/OPENAI_*/
     # PWC_GENAI_* (igual que NEO4J_*): sin populate_by_name=True, hay que
@@ -66,7 +80,7 @@ def _openai_settings(**overrides: Any) -> Settings:
         "OPENAI_MODEL": "gpt-4o-test",
     }
     defaults.update(overrides)
-    return Settings(**defaults)
+    return _isolated_settings(**defaults)
 
 
 def _envelope(content: str, **extra: Any) -> dict[str, Any]:
@@ -156,7 +170,7 @@ def _client_for(
 
 
 def test_resolve_profile_requires_provider() -> None:
-    settings = Settings()
+    settings = _isolated_settings()
     with pytest.raises(LlmConfigurationError):
         resolve_llm_profile(settings)
 
@@ -168,13 +182,13 @@ def test_resolve_profile_rejects_invalid_provider() -> None:
 
 
 def test_resolve_profile_requires_openai_credentials() -> None:
-    settings = Settings(LLM_PROVIDER="openai")
+    settings = _isolated_settings(LLM_PROVIDER="openai")
     with pytest.raises(LlmConfigurationError):
         resolve_llm_profile(settings)
 
 
 def test_resolve_profile_requires_pwc_credentials() -> None:
-    settings = Settings(LLM_PROVIDER="pwc_gateway")
+    settings = _isolated_settings(LLM_PROVIDER="pwc_gateway")
     with pytest.raises(LlmConfigurationError):
         resolve_llm_profile(settings)
 
@@ -188,7 +202,7 @@ def test_resolve_profile_only_requires_selected_provider() -> None:
 
 
 def test_resolve_profile_pwc_gateway_only_requires_pwc_credentials() -> None:
-    settings = Settings(
+    settings = _isolated_settings(
         LLM_PROVIDER="pwc_gateway",
         PWC_GENAI_API_KEY="pwc-secret",
         PWC_GENAI_BASE_URL="https://gateway.internal/v1",
@@ -200,7 +214,7 @@ def test_resolve_profile_pwc_gateway_only_requires_pwc_credentials() -> None:
 
 
 def test_settings_construction_never_requires_llm_config() -> None:
-    settings = Settings()
+    settings = _isolated_settings()
     assert settings.llm_provider is None
 
 
@@ -257,7 +271,7 @@ def test_resolve_profile_rejects_retries_above_five() -> None:
 
 def test_settings_rejects_temperature_other_than_zero() -> None:
     with pytest.raises(PydanticValidationError):
-        Settings(LLM_TEMPERATURE=1)
+        _isolated_settings(LLM_TEMPERATURE=1)
 
 
 def test_api_key_never_appears_in_profile_repr_or_str() -> None:

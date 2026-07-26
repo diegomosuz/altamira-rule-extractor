@@ -174,7 +174,7 @@ def write_prompt_files(tmp_path: Path) -> dict[str, Path]:
     repair_user.write_text(
         "CONTEXT:\n{{CONTEXT_PACKAGE_JSON}}\n\n"
         "REJECTED:\n{{REJECTED_RULE_DRAFT_JSON}}\n\n"
-        "VIOLATIONS:\n{{GUARDRAILS_VIOLATIONS_JSON}}\n",
+        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n",
         encoding="utf-8",
     )
     return {

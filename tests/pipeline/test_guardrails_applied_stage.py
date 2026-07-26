@@ -54,6 +54,10 @@ from altamira_extractor.pipeline import guardrails_applied_stage as stage_module
 from altamira_extractor.pipeline.errors import GuardrailError, LlmTimeoutError
 from altamira_extractor.pipeline.guardrails_applied_stage import run_guardrails_applied_stage
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REAL_RULE_REPAIR_SYSTEM_PATH = REPO_ROOT / "prompts" / "rule_repair_system.md"
+REAL_RULE_REPAIR_USER_PATH = REPO_ROOT / "prompts" / "rule_repair_user.md"
+
 _HASH_A = "a" * 64
 _RUN_ID = "run-1"
 
@@ -265,7 +269,7 @@ def _write_repair_prompt_files(tmp_path: Path) -> tuple[Path, Path]:
     user_path.write_text(
         "CONTEXT:\n{{CONTEXT_PACKAGE_JSON}}\n\n"
         "REJECTED:\n{{REJECTED_RULE_DRAFT_JSON}}\n\n"
-        "VIOLATIONS:\n{{GUARDRAILS_VIOLATIONS_JSON}}\n",
+        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n",
         encoding="utf-8",
     )
     return system_path, user_path
@@ -854,3 +858,61 @@ def test_artifact_source_package_hash_matches_manifest(
         (kwargs["guardrail_dir"] / record.relative_filename).read_text(encoding="utf-8")
     )
     assert artifact.source_package_hash == manifest.source_package_hash
+
+
+# --- placeholder real (checkpoint correctivo: defecto preexistente) ---
+
+
+def test_real_repair_prompts_load_without_placeholder_error(tmp_path: Path) -> None:
+    """Carga los archivos REALES del repositorio (nunca un fixture
+    ficticio creado dentro del test): confirma que
+    `_load_repair_prompts` -- con el placeholder corregido a
+    `{{GUARDRAIL_VIOLATIONS_JSON}}` singular, coincidiendo con el
+    contenido real de prompts/rule_repair_user.md -- no levanta
+    `PromptTemplateError`. Antes de esta correccion, la constante del
+    codigo era plural (`GUARDRAILS_VIOLATIONS_JSON`) y nunca coincidia
+    con el archivo real, asi que GUARDRAILS_APPLIED fallaba en cuanto
+    necesitaba reparar contra los prompts reales."""
+    assert REAL_RULE_REPAIR_SYSTEM_PATH.is_file()
+    assert REAL_RULE_REPAIR_USER_PATH.is_file()
+    settings = _settings(
+        tmp_path,
+        rule_repair_system_prompt_path=REAL_RULE_REPAIR_SYSTEM_PATH,
+        rule_repair_user_prompt_path=REAL_RULE_REPAIR_USER_PATH,
+    )
+
+    system_text, system_hash, user_text, user_hash = stage_module._load_repair_prompts(settings)
+
+    assert system_text
+    assert user_text
+    assert len(system_hash) == 64
+    assert len(user_hash) == 64
+
+
+def test_guardrails_applied_does_not_fail_with_placeholder_error_using_real_prompts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ejercita `run_guardrails_applied_stage` end-to-end (fake client,
+    sin red) apuntando a los prompts de reparacion REALES del
+    repositorio, con un draft inicial que SI dispara una reparacion de
+    guardrail: confirma que la etapa nunca levanta `PromptTemplateError`
+    por el placeholder (el defecto preexistente que este checkpoint
+    corrige) y llega a EVIDENCE_VALIDATED normalmente."""
+    kwargs = _base_kwargs(
+        tmp_path,
+        packages=[_package("cand-1")],
+        drafts={"cand-1": _valid_draft(evidence_id="ev-does-not-exist")},
+    )
+    kwargs["settings"] = _settings(
+        tmp_path,
+        rule_repair_system_prompt_path=REAL_RULE_REPAIR_SYSTEM_PATH,
+        rule_repair_user_prompt_path=REAL_RULE_REPAIR_USER_PATH,
+    )
+    _install_fake_client(monkeypatch, [_valid_repair_payload()])
+
+    run_guardrails_applied_stage(**kwargs)
+
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.guardrail_count == 1
