@@ -1,0 +1,23 @@
+PAQUETE SINTETICO CONSULTA DE SALDOS - VALIDACION
+
+Archivo: PAQUETE_SINTETICO_CONSULTA_SALDOS_3_REGLAS.zip
+SHA256: d038925fc496fa85f7cd96fcae29b35559ac91beb39fc5cefe9cb02401d7d13d
+
+Validaciones realizadas:
+- manifest.xml valido contra el manifest.xsd suministrado.
+- 3 entradas ZIP, todas archivos regulares.
+- 0 entradas explicitas de directorio.
+- paths relativos con separador '/'.
+- sin barras repetidas, paths absolutos ni backslashes.
+- source format FIXED y encoding UTF-8.
+- 1 programa COBOL: SALDOCON1.
+- 1 DDL de parametria: PARAM_SALDOS.
+- 3 decisiones COBOL dirigidas a WS-COD-RETORNO:
+  1. Estado de cuenta distinto de activo -> S001.
+  2. Saldo bloqueado -> S002.
+  3. Saldo disponible negativo -> S003.
+
+Entradas:
+- 01-codigo/cobol/SALDOCON1.cbl
+- 02-parametria/ddl/PARAM_SALDOS.sql
+- manifest.xml
