@@ -214,6 +214,73 @@ def test_raw_row_not_stripped_normalized_row_stripped() -> None:
     assert result.entries[0].normalized_row["NOMBRE"] == "ANA"
 
 
+def test_empty_cell_in_a_complete_row_is_kept_as_empty_string_not_null() -> None:
+    """Matriz de complejidad (Prompt 15), caso "snapshots con valores
+    nulos": la definicion exacta para V1 es una celda vacia dentro de un
+    CSV de snapshot (`A,,C`), NUNCA equivalente a `"NULL"`/`"null"`/
+    `N/A`/cero/columna ausente. Este es el comportamiento REAL de
+    csv_loader.py, sin inferencia de tipos (ver docstring del modulo):
+    la fila 2 esta COMPLETA (2 valores para 2 columnas, no dispara la
+    rama PARTIAL de "menos valores que columnas de encabezado"), solo
+    que uno de sus valores es la cadena vacia. No existe semantica SQL
+    NULL real en V1: string vacio no equivale a NULL, y no se debe
+    redactar una regla que atribuya un valor inexistente a esta fila."""
+    csv_bytes = b"ID,NOMBRE\n1,ANA\n2,\n"
+    warnings: list[str] = []
+    result = load_csv_snapshot(
+        csv_bytes,
+        encoding="UTF-8",
+        parameter_table_id=TABLE_ID,
+        max_rows=100,
+        table_label="t",
+        warnings=warnings,
+    )
+
+    # El CSV se carga (status SUPPORTED, no PARTIAL/UNSUPPORTED): una
+    # celda vacia en una fila completa no es un CSV malformado.
+    assert result.support_status == ParseSupportStatus.SUPPORTED
+    assert len(result.entries) == 2
+    assert not warnings
+
+    complete_row = result.entries[0]
+    empty_cell_row = result.entries[1]
+
+    assert complete_row.raw_row["NOMBRE"] == "ANA"
+
+    # String vacio, nunca None/null: se conserva tal cual, nunca se
+    # inventa un valor ni se reutiliza el de otra fila (la fila 1 sigue
+    # con "ANA", la fila 2 nunca hereda ese valor).
+    assert empty_cell_row.raw_row["NOMBRE"] == ""
+    assert empty_cell_row.raw_row["NOMBRE"] is not None
+    assert isinstance(empty_cell_row.raw_row["NOMBRE"], str)
+    assert empty_cell_row.normalized_row["NOMBRE"] == ""
+    assert empty_cell_row.raw_row["ID"] == "2", "el resto de la fila se identifica normalmente"
+
+    # No hay una unica representacion JSON "null": ambos campos son
+    # strings de Python, `raw_row`/`normalized_row` nunca contienen None
+    # para una celda CSV vacia.
+    assert all(value is not None for value in empty_cell_row.raw_row.values())
+    assert all(value is not None for value in empty_cell_row.normalized_row.values())
+
+
+def test_empty_cell_row_hash_is_deterministic() -> None:
+    csv_bytes = b"ID,NOMBRE\n1,ANA\n2,\n"
+
+    first = load_csv_snapshot(
+        csv_bytes, encoding="UTF-8", parameter_table_id=TABLE_ID, max_rows=100,
+        table_label="t", warnings=[],
+    )
+    second = load_csv_snapshot(
+        csv_bytes, encoding="UTF-8", parameter_table_id=TABLE_ID, max_rows=100,
+        table_label="t", warnings=[],
+    )
+
+    assert first.entries[1].row_hash == second.entries[1].row_hash
+    assert first.entries[1].parameter_entry_id == second.entries[1].parameter_entry_id
+    # La fila vacia y la fila completa nunca colisionan entre si.
+    assert first.entries[0].row_hash != first.entries[1].row_hash
+
+
 def test_warnings_never_contain_cell_values() -> None:
     csv_bytes = b"ID,NOMBRE\n1,SECRETO-SENSIBLE\n1,SECRETO-SENSIBLE\n"
     warnings: list[str] = []

@@ -403,6 +403,77 @@ def test_direct_assignment_generates_leads_to() -> None:
     assert decision.properties["outcome_code"] == "R001"
 
 
+def test_sqlcode_decision_leads_to_a_return_code_tagged_sink() -> None:
+    """Matriz de complejidad (Prompt 15), caso SQLCODE: SQLCODE en si
+    mismo se etiqueta `sqlcode` en produccion (config/semantic-tags.yml,
+    regla `sqlcode-exact`), no `return_code` -- por eso lo que Q0
+    realmente necesita no es que SQLCODE tenga un tag particular, sino
+    que la decision CONDICIONADA por SQLCODE tenga un LEADS_TO hacia un
+    DataItem que SI este tageado `return_code` (aqui, WS-COD-RETORNO,
+    exactamente el mismo patron que el fixture de referencia PROGRULE1
+    en tests/e2e_support.py). Esta prueba reproduce esa forma
+    estructural completa (Decision-LEADS_TO->DataItem con
+    semantic_tag=return_code) sin necesitar Neo4j real: es el mismo
+    patron que consulta `queries/v1/q0_candidates.cypher`, verificado
+    aqui a nivel del SemanticGraph en memoria."""
+    if_stmt = _statement(
+        "S1",
+        StatementKind.IF,
+        expression="SQLCODE = 100",
+        operands=["SQLCODE"],
+        variables_read=["SQLCODE"],
+        line_start=15,
+    )
+    then_stmt = _statement(
+        "S2",
+        StatementKind.MOVE,
+        parent_statement_id="S1",
+        branch_kind=BranchKind.THEN,
+        branch_condition="SQLCODE = 100",
+        assigned_literal="R900",
+        target_data_items=["WS-COD-RETORNO"],
+        variables_written=["WS-COD-RETORNO"],
+        line_start=16,
+    )
+    program = _program(
+        [_data_item("SQLCODE"), _data_item("WS-COD-RETORNO")],
+        [_paragraph("MAIN-PARA", [if_stmt, then_stmt])],
+    )
+
+    return_code_item_id = f"{PROGRAM_ID}::data::WS-COD-RETORNO"
+    tag = DataItemSemanticTag(
+        data_item_id=return_code_item_id,
+        program_id=PROGRAM_ID,
+        source_file=COBOL_PATH,
+        original_name="WS-COD-RETORNO",
+        qualified_name="WS-COD-RETORNO",
+        semantic_tag="return_code",
+        semantic_confidence=1.0,
+        evidence=[
+            SemanticTagRuleMatch(rule_id="return-code-name", tag="return_code", base_confidence=1.0)
+        ],
+    )
+    enrichment = _empty_enrichment_artifact(data_item_tags=[tag])
+    graph = _build([program], enrichment_artifact=enrichment)
+
+    para_id = f"{PROGRAM_ID}::paragraph::MAIN-PARA"
+    decision_id = f"{para_id}::decision::15::1"
+
+    decision = _node(graph, decision_id)
+    assert decision.properties["expression"] == "SQLCODE = 100"
+
+    sink = _node(graph, return_code_item_id)
+    assert sink.properties["semantic_tag"] == "return_code", (
+        "el patron exacto que Q0 exige (queries/v1/q0_candidates.cypher: "
+        "sink.semantic_tag = 'return_code') depende del TARGET de la decision, "
+        "no de SQLCODE en si"
+    )
+
+    leads_to = _relationships(graph, RelationshipType.LEADS_TO, decision_id, return_code_item_id)
+    assert len(leads_to) == 1
+    assert leads_to[0].properties["assigned_literal"] == "R900"
+
+
 def test_assignment_in_nested_decision_belongs_only_to_nearest_decision() -> None:
     outer_if = _statement("S1", StatementKind.IF, expression="A", line_start=10)
     outer_then = _statement(
