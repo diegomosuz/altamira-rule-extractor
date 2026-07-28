@@ -1,16 +1,55 @@
 {% extends "base.html" %}
-{% block title %}Upload -- Altamira Rule Extractor{% endblock %}
+{% set active_nav = "upload" %}
+{% block title %}Nueva ejecucion -- Altamira Rule Extractor{% endblock %}
 {% block content %}
-<h1>Subir paquete Altamira</h1>
-<p>Tamano maximo permitido: {{ (max_package_size_bytes / 1048576) | round(1) }} MB.</p>
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>Nueva ejecucion</h1>
+    <p class="page-lede">Cargue un paquete Altamira para iniciar el analisis y la extraccion de reglas de negocio.</p>
+  </div>
+</div>
 
 {% if error %}
-<div class="alert alert-error" role="alert">{{ error }}</div>
+<div class="alert alert-error" role="alert">{{ icon("alert") }}<span>{{ error }}</span></div>
 {% endif %}
 
-<form method="post" action="{{ url_for('ui_create_run') }}" enctype="multipart/form-data">
-  <label for="file">Paquete .zip</label>
-  <input type="file" id="file" name="file" accept=".zip" required>
-  <button type="submit">Subir e iniciar</button>
+<form method="post" action="{{ url_for('ui_create_run') }}" enctype="multipart/form-data" novalidate>
+  <div class="dropzone">
+    {{ icon("upload") }}
+    <p class="dropzone-title">Arrastre y suelte el paquete .zip aqui</p>
+    <p class="dropzone-hint">o seleccione un archivo desde su equipo. Tamano maximo permitido: {{ (max_package_size_bytes / 1048576) | round(1) }} MB.</p>
+    <span class="btn btn-secondary dropzone-browse" aria-hidden="true">Elegir archivo</span>
+    <label class="visually-hidden" for="file">Paquete Altamira (.zip)</label>
+    <input type="file" id="file" name="file" accept=".zip" required>
+  </div>
+
+  <p class="field-error file-extension-warning small" hidden>{{ icon("alert") }} El archivo seleccionado no tiene extension .zip.</p>
+
+  <div class="file-summary">
+    <div>
+      {{ icon("file-zip") }}
+    </div>
+    <div>
+      <p class="file-summary-name mb-0"></p>
+      <p class="file-summary-size small text-muted mb-0"></p>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button type="submit" class="btn btn-primary upload-submit">
+      <span class="btn-spinner" aria-hidden="true"></span>
+      <span class="btn-label">Subir e iniciar analisis</span>
+    </button>
+  </div>
 </form>
+
+<section aria-labelledby="upload-help-heading" class="panel">
+  <h2 id="upload-help-heading">Que sucede despues de subir el paquete</h2>
+  <p class="text-muted mb-0">
+    El paquete se valida, se extrae y se analiza automaticamente: estructura COBOL, dependencias,
+    candidatos a regla, contexto funcional y borradores de reglas. Podra seguir el progreso de cada
+    etapa desde el detalle de la ejecucion.
+  </p>
+</section>
 {% endblock %}

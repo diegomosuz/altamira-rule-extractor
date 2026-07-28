@@ -1,67 +1,110 @@
 {% extends "base.html" %}
+{% set active_nav = "runs" %}
 {% block title %}Contexto {{ candidate_id }} -- Altamira Rule Extractor{% endblock %}
 {% block breadcrumb %}
-<nav class="breadcrumb" aria-label="ruta de navegacion">
-  <a href="{{ url_for('ui_runs') }}">Runs</a> /
-  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
-  <a href="{{ url_for('ui_candidates', run_id=run_id) }}">Candidatos</a> /
-  <span>Contexto</span>
-</nav>
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Candidatos", url_for('ui_candidates', run_id=run_id)), ("Contexto", none)]) }}
+</div>
 {% endblock %}
 {% block content %}
-<h1>Paquete contextual</h1>
-<p class="candidate-id">candidate_id: {{ candidate_id }}</p>
+{% from "_icons.html" import icon %}
+{% from "_components.html" import status_badge %}
+<div class="page-header">
+  <div>
+    <h1>Paquete contextual</h1>
+    <p class="page-lede cell-mono small">{{ candidate_id }}</p>
+  </div>
+  {% if rule_ready %}
+  <div class="actions mt-0">
+    <a class="btn btn-secondary" href="{{ url_for('ui_rule', run_id=run_id, candidate_id=candidate_id) }}">Ver regla</a>
+    <a class="btn btn-secondary" href="{{ url_for('ui_guardrail', run_id=run_id, candidate_id=candidate_id) }}">Ver guardrail</a>
+  </div>
+  {% endif %}
+</div>
 
-<section aria-labelledby="scope-heading">
-  <h2 id="scope-heading">Alcance (D1)</h2>
-  <dl>
-    <dt>Pais</dt><dd>{{ ctx.scope.country }}</dd>
-    <dt>Aplicacion</dt><dd>{{ ctx.scope.application }}</dd>
-    <dt>Operacion</dt><dd>{{ ctx.scope.operation.logical_name }}{% if ctx.scope.operation.description %} -- {{ ctx.scope.operation.description }}{% endif %}</dd>
-    <dt>Programa</dt><dd>{{ ctx.scope.program }} (v{{ ctx.scope.program_version }})</dd>
-    <dt>Parrafo</dt><dd>{{ ctx.scope.paragraph }}</dd>
-    <dt>Archivo fuente</dt><dd>{{ ctx.scope.source_file }} ({{ ctx.scope.line_start }}-{{ ctx.scope.line_end }})</dd>
-  </dl>
-</section>
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Alcance (D1)</h2></summary>
+<dl class="meta-grid">
+  <dt>Pais</dt><dd>{{ ctx.scope.country }}</dd>
+  <dt>Aplicacion</dt><dd>{{ ctx.scope.application }}</dd>
+  <dt>Operacion</dt><dd>{{ ctx.scope.operation.logical_name }}{% if ctx.scope.operation.description %} -- {{ ctx.scope.operation.description }}{% endif %}</dd>
+  <dt>Programa</dt><dd>{{ ctx.scope.program }} (v{{ ctx.scope.program_version }})</dd>
+  <dt>Parrafo</dt><dd>{{ ctx.scope.paragraph }}</dd>
+  <dt>Archivo fuente</dt><dd>{{ ctx.scope.source_file }} ({{ ctx.scope.line_start }}-{{ ctx.scope.line_end }})</dd>
+</dl>
+<details class="json-panel"><summary>Ver JSON tecnico de esta seccion</summary><pre class="source-block">{{ ctx.scope.model_dump(mode="json") | omit_keys("source_package_hash") | tojson(indent=2) }}</pre></details>
+</details>
 
-<section aria-labelledby="code-slice-heading">
-  <h2 id="code-slice-heading">Code slice (D2)</h2>
-  {% for entry in ctx.code_slice %}
-  <article class="code-entry">
-    <h3>{{ entry.paragraph }} <span class="badge badge-{{ entry.inclusion_reason.value | lower }}">{{ entry.inclusion_reason.value }}</span></h3>
-    <p>{{ entry.source_file }} ({{ entry.line_start }}-{{ entry.line_end }})</p>
-    <pre class="source-block">{{ entry.source_text }}</pre>
-  </article>
-  {% endfor %}
-</section>
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Code slice (D2)</h2></summary>
+{% for entry in ctx.code_slice %}
+<article class="code-entry">
+  <div class="code-entry-head">
+    <h3 class="mb-0">{{ entry.paragraph }} {{ status_badge(entry.inclusion_reason.value) }}</h3>
+    <span class="text-muted small">{{ entry.source_file }} ({{ entry.line_start }}-{{ entry.line_end }})</span>
+  </div>
+  <div class="source-block-wrap">
+    <button type="button" class="copy-btn" data-copy-target="#code-slice-{{ loop.index }}">Copiar</button>
+    <pre class="source-block" id="code-slice-{{ loop.index }}">{{ entry.source_text }}</pre>
+  </div>
+</article>
+{% endfor %}
+</details>
 
-<section aria-labelledby="parameter-context-heading">
-  <h2 id="parameter-context-heading">Contexto parametrico (D3)</h2>
-  {% for table in ctx.data_context.parameter_tables %}
-  <article class="parameter-table">
-    <h3>{{ table.name }}<span class="badge badge-{{ table.applicability_status.value | lower }}">{{ table.applicability_status.value }}</span></h3>
-    {% if table.snapshot_date %}<p>Snapshot: {{ table.snapshot_date }}</p>{% endif %}
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Contexto parametrico (D3)</h2></summary>
+{% for table in ctx.data_context.parameter_tables %}
+<article class="parameter-table">
+  <h3>{{ table.name }} {{ status_badge(table.applicability_status.value) }}</h3>
+  {% if table.snapshot_date %}<p>Snapshot: {{ table.snapshot_date }}</p>{% endif %}
 
-    {% if table.predicates %}
-    <h4>Predicados</h4>
-    <ul>{% for predicate in table.predicates %}<li>{{ predicate }}</li>{% endfor %}</ul>
-    {% endif %}
-    {% if table.unresolved_predicates %}
-    <h4>Predicados no resueltos</h4>
-    <ul>{% for predicate in table.unresolved_predicates %}<li>{{ predicate }}</li>{% endfor %}</ul>
-    {% endif %}
+  {% if table.predicates %}
+  <h4>Predicados</h4>
+  <ul>{% for predicate in table.predicates %}<li><code>{{ predicate }}</code></li>{% endfor %}</ul>
+  {% endif %}
+  {% if table.unresolved_predicates %}
+  <h4>Predicados no resueltos</h4>
+  <ul>{% for predicate in table.unresolved_predicates %}<li><code>{{ predicate }}</code></li>{% endfor %}</ul>
+  {% endif %}
 
-    <h4>Valores aplicables (aprobados para texto de regla)</h4>
-    {% if table.applicable_rows %}
+  <h4>Valores aplicables (aprobados para texto de regla)</h4>
+  {% if table.applicable_rows %}
+  <div class="table-scroll">
+  <table class="compact">
+    <thead><tr><th scope="col">Fila</th><th scope="col">Valores</th></tr></thead>
+    <tbody>
+      {% for row in table.applicable_rows %}
+      <tr>
+        <td class="cell-mono">{{ row.parameter_entry_id }}</td>
+        <td>
+          <dl class="meta-grid row-values">
+            {% for key, value in row.values.items() %}
+            <dt>{{ key }}</dt><dd>{{ value }}</dd>
+            {% endfor %}
+          </dl>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>Sin filas aplicables aprobadas para texto de regla.</p>
+  {% endif %}
+
+  <details class="collapsible">
+    <summary>Filas de contexto (no aprobadas para texto de regla)</summary>
+    {% if table.context_rows %}
     <div class="table-scroll">
-    <table>
-      <thead><tr><th scope="col">parameter_entry_id</th><th scope="col">Valores</th></tr></thead>
+    <table class="compact">
+      <thead><tr><th scope="col">Fila</th><th scope="col">Valores</th></tr></thead>
       <tbody>
-        {% for row in table.applicable_rows %}
+        {% for row in table.context_rows %}
         <tr>
-          <td>{{ row.parameter_entry_id }}</td>
+          <td class="cell-mono">{{ row.parameter_entry_id }}</td>
           <td>
-            <dl class="row-values">
+            <dl class="meta-grid row-values">
               {% for key, value in row.values.items() %}
               <dt>{{ key }}</dt><dd>{{ value }}</dd>
               {% endfor %}
@@ -73,132 +116,107 @@
     </table>
     </div>
     {% else %}
-    <p>Sin filas aplicables aprobadas para texto de regla.</p>
+    <p class="mb-0">Sin filas de contexto adicionales.</p>
     {% endif %}
+  </details>
+</article>
+{% else %}
+<p>Sin tablas de parametria en este contexto.</p>
+{% endfor %}
 
-    <details>
-      <summary>Filas de contexto (no aprobadas para texto de regla)</summary>
-      {% if table.context_rows %}
-      <div class="table-scroll">
-      <table>
-        <thead><tr><th scope="col">parameter_entry_id</th><th scope="col">Valores</th></tr></thead>
-        <tbody>
-          {% for row in table.context_rows %}
-          <tr>
-            <td>{{ row.parameter_entry_id }}</td>
-            <td>
-              <dl class="row-values">
-                {% for key, value in row.values.items() %}
-                <dt>{{ key }}</dt><dd>{{ value }}</dd>
-                {% endfor %}
-              </dl>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      </div>
-      {% else %}
-      <p>Sin filas de contexto adicionales.</p>
-      {% endif %}
-    </details>
-  </article>
-  {% else %}
-  <p>Sin tablas de parametria en este contexto.</p>
+<h3>Tablas transaccionales leidas</h3>
+{% if ctx.data_context.transactional_tables_read %}
+<ul>
+  {% for table in ctx.data_context.transactional_tables_read %}
+  <li>{{ table.name }}</li>
   {% endfor %}
+</ul>
+{% else %}
+<p class="mb-0">Sin tablas transaccionales registradas.</p>
+{% endif %}
+</details>
 
-  <h3>Tablas transaccionales leidas</h3>
-  {% if ctx.data_context.transactional_tables_read %}
-  <ul>
-    {% for table in ctx.data_context.transactional_tables_read %}
-    <li>{{ table.name }}</li>
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Decision (D4)</h2></summary>
+<dl class="meta-grid">
+  <dt>Expresion</dt><dd><code>{{ ctx.decision.expression }}</code></dd>
+  <dt>Expresion normalizada</dt><dd><code>{{ ctx.decision.normalized_expression }}</code></dd>
+  <dt>Tipo de regla</dt><dd>{{ ctx.decision.rule_type or "No informado" }}</dd>
+  <dt>Codigo de retorno</dt><dd>{{ ctx.decision.outcome_code or "No informado" }}</dd>
+</dl>
+<details class="json-panel"><summary>Ver JSON tecnico de esta seccion</summary><pre class="source-block">{{ ctx.decision.model_dump(mode="json") | tojson(indent=2) }}</pre></details>
+</details>
+
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Efectos (D5)</h2></summary>
+<h3>Codigos de retorno</h3>
+{% if ctx.effects.return_codes %}
+<ul>
+  {% for effect in ctx.effects.return_codes %}
+  <li><code>{{ effect.code }}</code> -- {% if effect.approved_for_rule_text %}<span class="badge badge-succeeded">aprobado</span>{% else %}<span class="badge badge-pending">no aprobado</span>{% endif %} para texto de regla</li>
+  {% endfor %}
+</ul>
+{% else %}<p>Sin codigos de retorno.</p>{% endif %}
+
+<h3>Efectos sobre tablas</h3>
+{% if ctx.effects.table_effects %}
+<div class="table-scroll">
+<table class="compact">
+  <thead><tr><th scope="col">Tabla</th><th scope="col">Operacion</th><th scope="col">Alcance</th><th scope="col">Aprobado</th></tr></thead>
+  <tbody>
+    {% for effect in ctx.effects.table_effects %}
+    <tr>
+      <td>{{ effect.table }}</td>
+      <td>{{ effect.operation.value | status_label }}</td>
+      <td>{{ status_badge(effect.attribution_scope.value) }}</td>
+      <td>{% if effect.approved_for_rule_text %}Si{% else %}No{% endif %}</td>
+    </tr>
     {% endfor %}
-  </ul>
-  {% else %}
-  <p>Sin tablas transaccionales registradas.</p>
-  {% endif %}
-</section>
+  </tbody>
+</table>
+</div>
+{% else %}<p>Sin efectos sobre tablas.</p>{% endif %}
+</details>
 
-<section aria-labelledby="decision-heading">
-  <h2 id="decision-heading">Decision (D4)</h2>
-  <dl>
-    <dt>Expresion</dt><dd><code>{{ ctx.decision.expression }}</code></dd>
-    <dt>Expresion normalizada</dt><dd><code>{{ ctx.decision.normalized_expression }}</code></dd>
-    <dt>Tipo de regla</dt><dd>{{ ctx.decision.rule_type or "No informado" }}</dd>
-    <dt>Codigo de retorno</dt><dd>{{ ctx.decision.outcome_code or "No informado" }}</dd>
-  </dl>
-</section>
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Batch (D6)</h2></summary>
+<p>Estado: {{ status_badge(ctx.batch_context.status.value) }}</p>
+{% if ctx.batch_context.downstream_jobs %}
+<ul>
+  {% for job in ctx.batch_context.downstream_jobs %}
+  <li>
+    {% for key, value in job.items() %}{{ key }}: {{ value }}{% if not loop.last %}, {% endif %}{% endfor %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}<p class="mb-0">Sin jobs downstream registrados.</p>{% endif %}
+</details>
 
-<section aria-labelledby="effects-heading">
-  <h2 id="effects-heading">Efectos (D5)</h2>
-  <h3>Codigos de retorno</h3>
-  {% if ctx.effects.return_codes %}
-  <ul>
-    {% for effect in ctx.effects.return_codes %}
-    <li>{{ effect.code }} -- {% if effect.approved_for_rule_text %}aprobado{% else %}no aprobado{% endif %} para texto de regla</li>
+<details class="collapsible" open>
+<summary><h2 class="collapsible-title">Glosario funcional (D7)</h2></summary>
+{% if ctx.domain_glossary %}
+<div class="table-scroll">
+<table class="compact">
+  <thead><tr><th scope="col">Nombre tecnico</th><th scope="col">Nombre funcional</th><th scope="col">Definicion</th></tr></thead>
+  <tbody>
+    {% for term in ctx.domain_glossary %}
+    <tr>
+      <td class="cell-mono">{{ term.technical_name }}</td>
+      <td>{{ term.functional_name }}</td>
+      <td>{{ term.definition }}</td>
+    </tr>
     {% endfor %}
-  </ul>
-  {% else %}<p>Sin codigos de retorno.</p>{% endif %}
-
-  <h3>Efectos sobre tablas</h3>
-  {% if ctx.effects.table_effects %}
-  <div class="table-scroll">
-  <table>
-    <thead><tr><th scope="col">Tabla</th><th scope="col">Operacion</th><th scope="col">Alcance</th><th scope="col">Aprobado</th></tr></thead>
-    <tbody>
-      {% for effect in ctx.effects.table_effects %}
-      <tr>
-        <td>{{ effect.table }}</td>
-        <td>{{ effect.operation.value }}</td>
-        <td><span class="badge badge-{{ effect.attribution_scope.value | lower }}">{{ effect.attribution_scope.value }}</span></td>
-        <td>{% if effect.approved_for_rule_text %}Si{% else %}No{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}<p>Sin efectos sobre tablas.</p>{% endif %}
-</section>
-
-<section aria-labelledby="batch-heading">
-  <h2 id="batch-heading">Batch (D6)</h2>
-  <p>Estado: <span class="badge badge-{{ ctx.batch_context.status.value | lower }}">{{ ctx.batch_context.status.value }}</span></p>
-  {% if ctx.batch_context.downstream_jobs %}
-  <ul>
-    {% for job in ctx.batch_context.downstream_jobs %}
-    <li>
-      {% for key, value in job.items() %}{{ key }}: {{ value }}{% if not loop.last %}, {% endif %}{% endfor %}
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}<p>Sin jobs downstream registrados.</p>{% endif %}
-</section>
-
-<section aria-labelledby="glossary-heading">
-  <h2 id="glossary-heading">Glosario funcional (D7)</h2>
-  {% if ctx.domain_glossary %}
-  <div class="table-scroll">
-  <table>
-    <thead><tr><th scope="col">Nombre tecnico</th><th scope="col">Nombre funcional</th><th scope="col">Definicion</th></tr></thead>
-    <tbody>
-      {% for term in ctx.domain_glossary %}
-      <tr>
-        <td>{{ term.technical_name }}</td>
-        <td>{{ term.functional_name }}</td>
-        <td>{{ term.definition }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}<p>Sin terminos de glosario asociados.</p>{% endif %}
-</section>
+  </tbody>
+</table>
+</div>
+{% else %}<p class="mb-0">Sin terminos de glosario asociados.</p>{% endif %}
+</details>
 
 <section aria-labelledby="completeness-heading">
   <h2 id="completeness-heading">Completitud</h2>
   <ul class="completeness">
     {% for dimension in ["D1", "D2", "D3", "D4", "D5", "D6", "D7"] %}
-    <li>{{ dimension }}: <span class="badge badge-{{ ctx.completeness[dimension].value | lower }}">{{ ctx.completeness[dimension].value }}</span></li>
+    <li>{{ dimension }}: {{ status_badge(ctx.completeness[dimension].value) }}</li>
     {% endfor %}
   </ul>
 </section>

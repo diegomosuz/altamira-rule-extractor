@@ -132,16 +132,23 @@ def test_context_stage_not_reached_is_409(client: TestClient, settings: Settings
     assert response.status_code == 409
 
 
-def test_rule_shows_disclaimer_and_claims_in_order(
+def test_rule_shows_professional_draft_notice_and_claims_in_order(
     client: TestClient, settings: Settings
 ) -> None:
+    """Modernizacion UI: el aviso de borrador ya no usa el texto alarmista
+    de prototipo ("Este documento es un borrador generado
+    automaticamente y requiere revision funcional.") -- se reemplaza por
+    una redaccion profesional equivalente, y el estado
+    NEEDS_FUNCTIONAL_REVIEW se sigue mostrando tal cual (dato
+    contractual), nunca oculto."""
     build_run_up_to_guardrails_applied(settings.runs_dir / RUN_ID, RUN_ID)
     response = client.get(f"/ui/runs/{RUN_ID}/candidates/{CANDIDATE_ID}/rule")
     assert response.status_code == 200
     assert (
         "Este documento es un borrador generado automáticamente y requiere revisión "
-        "funcional." in response.text
+        "funcional." not in response.text
     )
+    assert "revisión funcional" in response.text or "revision funcional" in response.text
     assert "EVIDENCE_VALIDATED" in response.text
     assert "NEEDS_FUNCTIONAL_REVIEW" in response.text
     assert "c1" in response.text

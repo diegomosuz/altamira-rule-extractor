@@ -1,16 +1,33 @@
 {% extends "base.html" %}
+{% set active_nav = "runs" %}
 {% block title %}Guardrail {{ candidate_id }} -- Altamira Rule Extractor{% endblock %}
 {% block breadcrumb %}
-<nav class="breadcrumb" aria-label="ruta de navegacion">
-  <a href="{{ url_for('ui_runs') }}">Runs</a> /
-  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
-  <a href="{{ url_for('ui_candidates', run_id=run_id) }}">Candidatos</a> /
-  <span>Guardrail</span>
-</nav>
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Candidatos", url_for('ui_candidates', run_id=run_id)), ("Guardrail", none)]) }}
+</div>
 {% endblock %}
 {% block content %}
-<h1>Guardrail</h1>
-<p>Veredicto: <span class="badge badge-{{ rule.guardrail.verdict.value | lower }}">{{ rule.guardrail.verdict.value }}</span></p>
+{% from "_components.html" import status_badge %}
+<div class="page-header">
+  <div>
+    <h1>Resultado del guardrail</h1>
+    <p class="mb-0">{{ status_badge(rule.guardrail.verdict.value) }}</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_rule', run_id=run_id, candidate_id=candidate_id) }}">Ver regla</a>
+</div>
+
+<div class="card-grid">
+  <div class="stat-card{% if rule.guardrail.verdict.value == 'EVIDENCE_VALIDATED' %} stat-success{% else %} stat-danger{% endif %}">
+    <p class="stat-value">{{ rule.guardrail.repair_attempts_used }}</p>
+    <p class="stat-label mb-0">Reparaciones utilizadas</p>
+  </div>
+  <div class="stat-card{% if rule.guardrail.violations %} stat-warning{% else %} stat-success{% endif %}">
+    <p class="stat-value">{{ rule.guardrail.violations | length }}</p>
+    <p class="stat-label mb-0">Violaciones</p>
+  </div>
+</div>
+
 <p>Reparaciones utilizadas: {{ rule.guardrail.repair_attempts_used }}</p>
 
 <section aria-labelledby="violations-heading">
@@ -22,8 +39,8 @@
     <tbody>
       {% for violation in rule.guardrail.violations %}
       <tr>
-        <td><span class="badge badge-{{ violation.severity.value | lower }}">{{ violation.severity.value }}</span></td>
-        <td>{{ violation.rule }}</td>
+        <td>{{ status_badge(violation.severity.value) }}</td>
+        <td class="cell-mono small">{{ violation.rule }}</td>
         <td>{{ violation.field or "No informado" }}</td>
         <td>{{ violation.message }}</td>
       </tr>
@@ -31,15 +48,15 @@
     </tbody>
   </table>
   </div>
-  {% else %}<p>Sin violaciones.</p>{% endif %}
+  {% else %}
+  <div class="alert alert-success" role="status">Sin violaciones.</div>
+  {% endif %}
 </section>
 
 <section aria-labelledby="guardrail-warnings-heading">
-  <h2 id="guardrail-warnings-heading">Warnings</h2>
+  <h2 id="guardrail-warnings-heading">Advertencias</h2>
   {% if rule.guardrail.warnings %}
-  <ul>{% for warning in rule.guardrail.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
-  {% else %}<p>Sin warnings.</p>{% endif %}
+  <ul class="mb-0">{% for warning in rule.guardrail.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+  {% else %}<p class="mb-0">Sin warnings.</p>{% endif %}
 </section>
-
-<p><a href="{{ url_for('ui_rule', run_id=run_id, candidate_id=candidate_id) }}">Ver regla</a></p>
 {% endblock %}

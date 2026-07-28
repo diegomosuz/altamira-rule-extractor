@@ -33,6 +33,10 @@ def test_at_least_the_expected_templates_exist() -> None:
         "guardrail.html",
         "download.html",
         "error.html",
+        # Modernizacion UI: macros compartidas (breadcrumb/badge de estado
+        # e iconos SVG inline) -- nunca logica nueva, solo presentacion.
+        "_icons.html",
+        "_components.html",
     }
 
 

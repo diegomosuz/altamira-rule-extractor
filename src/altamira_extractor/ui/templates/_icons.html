@@ -1,0 +1,31 @@
+{# Iconos SVG minimos, inline (nunca un font/CDN de iconos externo).
+   Todos son decorativos (aria-hidden): en cada lugar donde se usan, el
+   control ya tiene texto visible o un aria-label propio, asi que el SVG
+   nunca es el unico contenido significativo. #}
+{% macro icon(name) %}
+{%- if name == "upload" -%}
+<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0-12 4.5 4.5M12 3 7.5 7.5M4 21h16" /></svg>
+{%- elif name == "runs" -%}
+<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10" /></svg>
+{%- elif name == "check" -%}
+<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m5 13 4 4L19 7" /></svg>
+{%- elif name == "alert" -%}
+<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.3 3.9 2.6 17.5A1.6 1.6 0 0 0 4 20h16a1.6 1.6 0 0 0 1.4-2.5L13.7 3.9a1.6 1.6 0 0 0-3.4 0Z" /></svg>
+{%- elif name == "refresh" -%}
+<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M20 11A8 8 0 1 0 18.5 16M20 5v6h-6" /></svg>
+{%- elif name == "download" -%}
+<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0 4.5-4.5M12 15 7.5 10.5M4 21h16" /></svg>
+{%- elif name == "search" -%}
+<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6" /><path stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="m20 20-4.3-4.3" /></svg>
+{%- elif name == "menu" -%}
+<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+{%- elif name == "arrow-left" -%}
+<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M19 12H5m0 0 6-6m-6 6 6 6" /></svg>
+{%- elif name == "arrow-right" -%}
+<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m0 0-6-6m6 6-6 6" /></svg>
+{%- elif name == "file-zip" -%}
+<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M7 3h8l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" /><path fill="none" stroke="currentColor" stroke-width="1.6" d="M12 3v3m0 2v2m0 2v2" /></svg>
+{%- elif name == "package" -%}
+<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z" /><path fill="none" stroke="currentColor" stroke-width="1.6" d="M4 7.5 12 12l8-4.5M12 12v9" /></svg>
+{%- endif -%}
+{% endmacro %}

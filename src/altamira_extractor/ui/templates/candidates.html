@@ -1,39 +1,56 @@
 {% extends "base.html" %}
+{% set active_nav = "runs" %}
 {% block title %}Candidatos {{ run_id }} -- Altamira Rule Extractor{% endblock %}
 {% block breadcrumb %}
-<nav class="breadcrumb" aria-label="ruta de navegacion">
-  <a href="{{ url_for('ui_runs') }}">Runs</a> /
-  <a href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ run_id }}</a> /
-  <span>Candidatos</span>
-</nav>
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Candidatos", none)]) }}
+</div>
 {% endblock %}
 {% block content %}
-<h1>Candidatos detectados</h1>
+{% from "_icons.html" import icon %}
+{% from "_components.html" import status_badge %}
+<div class="page-header">
+  <div>
+    <h1>Candidatos detectados</h1>
+    <p class="page-lede">Decisiones COBOL identificadas como posibles reglas de negocio para este paquete.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ icon("arrow-left") }}Volver al detalle</a>
+</div>
 
 {% if candidates %}
+<div class="filter-bar">
+  <label class="visually-hidden" for="candidates-search">Buscar candidatos</label>
+  <input type="search" id="candidates-search" placeholder="Buscar por programa, parrafo o codigo..." data-table-search="candidates-table">
+  <span class="filter-count" data-table-count-for="candidates-table"></span>
+</div>
+
 <div class="table-scroll">
-<table>
+<table id="candidates-table">
   <thead>
     <tr>
-      <th scope="col">candidate_id</th>
-      <th scope="col">Parrafo</th>
+      <th scope="col" data-sortable>Programa</th>
+      <th scope="col" data-sortable>Parrafo</th>
       <th scope="col">Condicion</th>
-      <th scope="col">Codigo de retorno</th>
+      <th scope="col" data-sortable>Codigo de retorno</th>
       <th scope="col">Tipo de regla</th>
       <th scope="col">Estado</th>
-      <th scope="col"></th>
+      <th scope="col">Acciones</th>
     </tr>
   </thead>
   <tbody>
     {% for candidate in candidates %}
-    <tr>
-      <td>{{ candidate.candidate_id }}</td>
+    <tr data-search-text="{{ candidate.source_file | program_name }} {{ candidate.paragraph_name }} {{ candidate.outcome_code or '' }} {{ candidate.condition }} {{ candidate.candidate_id }}">
+      <td>
+        {{ candidate.source_file | program_name }}
+        <div class="small text-muted cell-mono">{{ candidate.candidate_id }}</div>
+      </td>
       <td>{{ candidate.paragraph_name }}</td>
-      <td>{{ candidate.condition }}</td>
+      <td><code>{{ candidate.condition }}</code></td>
       <td>{{ candidate.outcome_code or "No informado" }}</td>
       <td>{{ candidate.rule_type or "No informado" }}</td>
-      <td><span class="badge badge-{{ candidate.status.value | lower }}">{{ candidate.status.value }}</span></td>
-      <td class="links">
+      <td>{{ status_badge(candidate.status.value) }}</td>
+      <td class="cell-actions">
         {% if context_ready %}
         <a href="{{ url_for('ui_context', run_id=run_id, candidate_id=candidate.candidate_id) }}">Contexto</a>
         {% endif %}
@@ -48,6 +65,10 @@
 </table>
 </div>
 {% else %}
-<p>No hay candidatos detectados.</p>
+<div class="empty-state">
+  {{ icon("search") }}
+  <h2>No hay candidatos detectados.</h2>
+  <p>No se identificaron decisiones candidatas a regla de negocio en este paquete.</p>
+</div>
 {% endif %}
 {% endblock %}

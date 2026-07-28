@@ -1,24 +1,34 @@
 {% extends "base.html" %}
+{% set active_nav = "runs" %}
 {% block title %}Estado {{ run.run_id }} -- Altamira Rule Extractor{% endblock %}
 {% block breadcrumb %}
-<nav class="breadcrumb" aria-label="ruta de navegacion">
-  <a href="{{ url_for('ui_runs') }}">Runs</a> / <span>{{ run.run_id }}</span>
-</nav>
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run.run_id, none)]) }}
+</div>
 {% endblock %}
 {% block content %}
-<h1>Estado del run</h1>
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>Detalle de la ejecucion</h1>
+    <p class="page-lede">Seguimiento del pipeline completo de extraccion de reglas para este paquete.</p>
+  </div>
+  <div class="actions mt-0">
+    {% if run.current_stage.value != "COMPLETED" %}
+    <form method="post" action="{{ url_for('ui_resume', run_id=run.run_id) }}">
+      <button type="submit" class="btn {{ 'btn-primary' if run.current_stage.value == 'FAILED' else 'btn-secondary' }}">
+        <span class="btn-spinner" aria-hidden="true"></span>
+        {{ icon("refresh") }}<span class="btn-label">Reanudar</span>
+      </button>
+    </form>
+    {% endif %}
+    {% if run.current_stage.value == "COMPLETED" %}
+    <a class="btn btn-primary" href="{{ url_for('ui_download', run_id=run.run_id) }}">{{ icon("download") }}Descargar reglas</a>
+    {% endif %}
+    <a class="btn btn-secondary" href="{{ url_for('ui_candidates', run_id=run.run_id) }}">Ver candidatos</a>
+  </div>
+</div>
 
 {% include "_status_fragment.html" %}
-
-<div class="actions">
-  {% if run.current_stage.value != "COMPLETED" %}
-  <form method="post" action="{{ url_for('ui_resume', run_id=run.run_id) }}">
-    <button type="submit">Reanudar</button>
-  </form>
-  {% endif %}
-  <a href="{{ url_for('ui_candidates', run_id=run.run_id) }}">Ver candidatos</a>
-  {% if run.current_stage.value == "COMPLETED" %}
-  <a href="{{ url_for('ui_download', run_id=run.run_id) }}">Descargar reglas</a>
-  {% endif %}
-</div>
 {% endblock %}

@@ -1,3 +1,4 @@
+{% from "_components.html" import status_badge %}
 <div id="status-fragment"
   {% if not is_terminal %}
   hx-get="{{ url_for('ui_status_fragment', run_id=run.run_id) }}"
@@ -6,42 +7,53 @@
   hx-swap="outerHTML"
   {% endif %}
 >
-  <dl class="run-meta">
-    <dt>run_id</dt><dd>{{ run.run_id }}</dd>
-    <dt>Etapa actual</dt>
-    <dd><span class="badge badge-{{ run.current_stage.value | lower }}">{{ run.current_stage.value }}</span></dd>
+  <dl class="meta-grid">
+    <dt>Run ID</dt><dd class="cell-mono">{{ run.run_id }}</dd>
+    <dt>Etapa actual</dt><dd>{{ status_badge(run.current_stage.value) }}</dd>
     <dt>Archivo</dt><dd>{{ run.package_filename }}</dd>
-    <dt>source_package_hash</dt><dd>{{ run.source_package_hash or "No informado" }}</dd>
+    <dt>Iniciado</dt><dd><time datetime="{{ run.created_at.isoformat() }}">{{ run.created_at.strftime("%d/%m/%Y %H:%M:%S") }}</time></dd>
+    <dt>Actualizado</dt><dd><time datetime="{{ run.updated_at.isoformat() }}">{{ run.updated_at.strftime("%d/%m/%Y %H:%M:%S") }}</time></dd>
+    <dt>Hash del paquete</dt><dd class="cell-mono small text-muted">{{ run.source_package_hash or "No informado" }}</dd>
   </dl>
 
-  <div class="table-scroll">
-  <table>
-    <thead>
-      <tr>
-        <th scope="col">Etapa</th>
-        <th scope="col">Estado</th>
-        <th scope="col">Inicio</th>
-        <th scope="col">Fin</th>
-        <th scope="col">Warnings</th>
-        <th scope="col">Error</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for stage in run.stages %}
-      <tr>
-        <td>{{ stage.stage.value }}</td>
-        <td><span class="badge badge-{{ stage.status.value | lower }}">{{ stage.status.value }}</span></td>
-        <td>{{ stage.started_at.isoformat() if stage.started_at else "No informado" }}</td>
-        <td>{{ stage.finished_at.isoformat() if stage.finished_at else "No informado" }}</td>
-        <td>
-          {% if stage.warnings %}
-          <ul>{% for warning in stage.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
-          {% else %}--{% endif %}
-        </td>
-        <td>{{ stage.error or "--" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% if summary_counts %}
+  <div class="card-grid" role="group" aria-label="resumen de resultados">
+    {% for key, label in [("programs", "Programas"), ("candidates", "Candidatos"), ("contexts", "Contextos"), ("drafts", "Borradores"), ("guardrails", "Reglas finales")] %}
+    <div class="stat-card">
+      <p class="stat-value">{{ summary_counts[key] if summary_counts[key] is not none else "--" }}</p>
+      <p class="stat-label mb-0">{{ label }}</p>
+    </div>
+    {% endfor %}
   </div>
+  {% endif %}
+
+  <h2>Etapas del pipeline</h2>
+  <ol class="stepper">
+    {% for stage in run.stages %}
+    <li class="step" data-status="{{ stage.status.value | lower }}">
+      <div class="step-head">
+        <span class="step-name">{{ stage.stage.value | status_label }} <span class="text-muted small cell-mono">{{ stage.stage.value }}</span></span>
+        {{ status_badge(stage.status.value) }}
+      </div>
+      <div class="step-meta">
+        <span>Inicio: {{ stage.started_at.strftime("%d/%m/%Y %H:%M:%S") if stage.started_at else "No informado" }}</span>
+        <span>Fin: {{ stage.finished_at.strftime("%d/%m/%Y %H:%M:%S") if stage.finished_at else "No informado" }}</span>
+        {% if stage.duration_seconds is not none %}<span>Duracion: {{ "%.2f" | format(stage.duration_seconds) }} s</span>{% endif %}
+      </div>
+      {% if stage.warnings or stage.error %}
+      <div class="step-body">
+        {% if stage.warnings %}
+        <details class="collapsible">
+          <summary>{{ stage.warnings | length }} advertencia(s)</summary>
+          <ul>{% for warning in stage.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+        </details>
+        {% endif %}
+        {% if stage.error %}
+        <div class="alert alert-error" role="alert">{{ stage.error }}</div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
 </div>

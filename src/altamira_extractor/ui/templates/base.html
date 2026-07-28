@@ -7,21 +7,39 @@
 <meta name="htmx-config" content='{"allowEval": false, "includeIndicatorStyles": false}'>
 <link rel="stylesheet" href="{{ url_for('ui_static', path='app.css') }}">
 <script src="{{ url_for('ui_static', path='htmx.min.js') }}" defer></script>
+<script src="{{ url_for('ui_static', path='app.js') }}" defer></script>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Saltar al contenido principal</a>
 <header class="site-header">
-  <a class="brand" href="{{ url_for('ui_runs') }}">Altamira Rule Extractor</a>
-  <nav aria-label="navegacion principal">
-    <a href="{{ url_for('ui_upload_form') }}">Upload</a>
-    <a href="{{ url_for('ui_runs') }}">Runs</a>
-  </nav>
+  <div class="header-inner">
+    <a class="brand" href="{{ url_for('ui_runs') }}">
+      <span class="brand-mark">PwC</span>
+      <span class="brand-name">Altamira Rule Extractor</span>
+    </a>
+    <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="main-nav">
+      {% from "_icons.html" import icon %}{{ icon("menu") }}
+      <span>Menu</span>
+    </button>
+    <nav id="main-nav" class="main-nav" aria-label="navegacion principal">
+      <a href="{{ url_for('ui_upload_form') }}"{% if active_nav == "upload" %} aria-current="page"{% endif %}>Nueva ejecucion</a>
+      <a href="{{ url_for('ui_runs') }}"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Ejecuciones</a>
+      <a href="/docs">Documentacion de API</a>
+    </nav>
+  </div>
 </header>
 {% block breadcrumb %}{% endblock %}
 <main id="main-content">
 {% block content %}{% endblock %}
 </main>
 <footer class="site-footer">
-  <p>Altamira Rule Extractor -- borradores generados automaticamente, requieren revision funcional. Sin autenticacion en V1: restrinja el acceso de red externamente.</p>
+  <div class="footer-inner">
+    <p class="footer-signature mb-0">Desarrollada por IA Factory Argentina</p>
+    <p class="footer-meta mb-0">
+      <span>Altamira Rule Extractor</span>
+      {% if app_version %}<span>Version {{ app_version }}</span>{% endif %}
+    </p>
+  </div>
 </footer>
 </body>
 </html>

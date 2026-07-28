@@ -51,6 +51,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import ui
 from ..config import Settings, load_settings
+from ..ui.presentation import omit_keys, program_name_from_source_file, status_label
 from ..ui.router import router as ui_router
 from .errors import ApiError, ExecutorAtCapacityError
 from .executor import RunExecutor
@@ -116,6 +117,10 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.settings = settings
         app.state.executor = RunExecutor(max_workers=settings.api_max_workers)
         app.state.templates = Jinja2Templates(directory=str(ui.TEMPLATES_DIR))
+        app.state.templates.env.filters["status_label"] = status_label
+        app.state.templates.env.filters["program_name"] = program_name_from_source_file
+        app.state.templates.env.filters["omit_keys"] = omit_keys
+        app.state.templates.env.globals["app_version"] = app.version
         try:
             yield
         finally:

@@ -1,47 +1,99 @@
 {% extends "base.html" %}
-{% block title %}Runs -- Altamira Rule Extractor{% endblock %}
+{% set active_nav = "runs" %}
+{% block title %}Ejecuciones -- Altamira Rule Extractor{% endblock %}
 {% block content %}
-<h1>Ejecuciones</h1>
+{% from "_icons.html" import icon %}
+{% from "_components.html" import status_badge %}
+<div class="page-header">
+  <div>
+    <h1>Ejecuciones</h1>
+    <p class="page-lede">Panel de seguimiento de los paquetes Altamira procesados por el pipeline.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('ui_upload_form') }}">Nueva ejecucion</a>
+</div>
+
+<div class="card-grid" role="group" aria-label="resumen de ejecuciones">
+  <div class="stat-card">
+    <p class="stat-value">{{ total }}</p>
+    <p class="stat-label mb-0">Total de ejecuciones</p>
+  </div>
+  <div class="stat-card stat-success">
+    <p class="stat-value">{{ completed_count }}</p>
+    <p class="stat-label mb-0">Completadas</p>
+  </div>
+  <div class="stat-card stat-warning">
+    <p class="stat-value">{{ in_progress_count }}</p>
+    <p class="stat-label mb-0">En proceso</p>
+  </div>
+  <div class="stat-card stat-danger">
+    <p class="stat-value">{{ failed_count }}</p>
+    <p class="stat-label mb-0">Fallidas</p>
+  </div>
+</div>
+
+{% if last_run_at %}
+<p class="text-muted small">Ultima actualizacion registrada: <time datetime="{{ last_run_at.isoformat() }}">{{ last_run_at.strftime("%d/%m/%Y %H:%M") }}</time></p>
+{% endif %}
 
 {% if runs %}
+<div class="filter-bar">
+  <label class="visually-hidden" for="runs-search">Buscar ejecuciones</label>
+  <input type="search" id="runs-search" placeholder="Buscar por run_id o hash..." data-table-search="runs-table">
+  <label class="visually-hidden" for="runs-status-filter">Filtrar por etapa</label>
+  <select id="runs-status-filter" data-table-status-filter="runs-table">
+    <option value="">Todas las etapas</option>
+    {% for stage_value in ["RECEIVED","VALIDATED","EXTRACTED","INVENTORIED","PARSED","DEPENDENCIES_BUILT","SEMANTIC_ENRICHMENT_BUILT","SEMANTIC_GRAPH_BUILT","SEMANTIC_GRAPH_LOADED","GRAPH_VALIDATED","CANDIDATES_DETECTED","CONTEXTS_BUILT","RULE_DRAFTS_GENERATED","GUARDRAILS_APPLIED","COMPLETED","FAILED"] %}
+    <option value="{{ stage_value }}">{{ stage_value | status_label }}</option>
+    {% endfor %}
+  </select>
+  <span class="filter-count" data-table-count-for="runs-table"></span>
+</div>
+
 <div class="table-scroll">
-<table>
+<table id="runs-table">
   <thead>
     <tr>
-      <th scope="col">run_id</th>
-      <th scope="col">Etapa actual</th>
-      <th scope="col">source_package_hash</th>
+      <th scope="col" data-sortable>Run ID</th>
+      <th scope="col" data-sortable>Etapa actual</th>
+      <th scope="col">Hash del paquete</th>
       <th scope="col"></th>
     </tr>
   </thead>
   <tbody>
     {% for run in runs %}
-    <tr>
-      <td>{{ run.run_id }}</td>
-      <td><span class="badge badge-{{ run.current_stage.value | lower }}">{{ run.current_stage.value }}</span></td>
-      <td>{{ run.source_package_hash or "No informado" }}</td>
-      <td><a href="{{ url_for('ui_run_status', run_id=run.run_id) }}">Ver detalle</a></td>
+    <tr data-status="{{ run.current_stage.value }}" data-search-text="{{ run.run_id }} {{ run.source_package_hash or '' }}">
+      <td class="cell-mono">{{ run.run_id }}</td>
+      <td>{{ status_badge(run.current_stage.value) }}</td>
+      <td class="cell-mono small text-muted">{{ run.source_package_hash or "No informado" }}</td>
+      <td class="cell-actions"><a class="btn btn-sm" href="{{ url_for('ui_run_status', run_id=run.run_id) }}">Ver detalle</a></td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 </div>
 
-<nav class="pagination" aria-label="paginacion de runs">
+<nav class="pagination" aria-label="paginacion de ejecuciones">
   {% if has_previous %}
-  <a href="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ previous_offset }}"
+  <a class="btn btn-sm"
+     href="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ previous_offset }}"
      hx-get="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ previous_offset }}"
      hx-select="#main-content" hx-target="#main-content" hx-swap="outerHTML"
-     hx-push-url="true">Anterior</a>
+     hx-push-url="true">{{ icon("arrow-left") }}Anterior</a>
   {% endif %}
   {% if has_next %}
-  <a href="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ next_offset }}"
+  <a class="btn btn-sm"
+     href="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ next_offset }}"
      hx-get="{{ url_for('ui_runs') }}?limit={{ limit }}&offset={{ next_offset }}"
      hx-select="#main-content" hx-target="#main-content" hx-swap="outerHTML"
-     hx-push-url="true">Siguiente</a>
+     hx-push-url="true">Siguiente{{ icon("arrow-right") }}</a>
   {% endif %}
 </nav>
 {% else %}
-<p>No hay ejecuciones registradas.</p>
+<div class="empty-state">
+  {{ icon("runs") }}
+  <h2>No hay ejecuciones registradas.</h2>
+  <p>Suba un paquete Altamira para iniciar el primer analisis.</p>
+  <a class="btn btn-primary" href="{{ url_for('ui_upload_form') }}">Nueva ejecucion</a>
+</div>
 {% endif %}
 {% endblock %}

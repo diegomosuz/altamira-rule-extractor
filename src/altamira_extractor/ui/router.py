@@ -26,10 +26,14 @@ from ..api.reads import (
 from ..api.run_actions import create_and_submit_run, submit_existing_run
 from ..api.validation import validate_candidate_id, validate_run_id
 from ..config import Settings
+from ..contracts.context_manifest import ContextDirectoryManifest
 from ..contracts.enums import PipelineStage, StageStatus
+from ..contracts.guardrail_manifest import GuardrailDirectoryManifest
+from ..contracts.rule_draft_manifest import RuleDraftDirectoryManifest
 from ..contracts.run_state import RunState
 from .csrf import verify_same_origin
 from .deps import get_executor, get_settings, get_templates
+from .presentation import program_name_from_source_file
 
 router = APIRouter(prefix="/ui", tags=["ui"], include_in_schema=False)
 
@@ -62,6 +66,59 @@ def _list_run_states(settings: Settings) -> list[RunState]:
                 continue
     states.sort(key=lambda s: s.run_id, reverse=True)
     return states
+
+
+def _run_summary_counts(run_dir: Path, state: RunState) -> dict[str, int | None]:
+    """Cantidades de presentacion (modernizacion UI) para el resumen del
+    detalle de run: lee UNICAMENTE manifests ya validados por sus
+    propias etapas (nunca reconstruye ni reejecuta nada, nunca agrega un
+    campo persistido nuevo). Cada valor es `None` mientras esa etapa
+    todavia no se alcanzo -- el template lo trata como "no disponible
+    todavia", nunca como cero."""
+    counts: dict[str, int | None] = {
+        "programs": None,
+        "candidates": None,
+        "contexts": None,
+        "drafts": None,
+        "guardrails": None,
+    }
+    if _stage_succeeded(state, PipelineStage.CANDIDATES_DETECTED):
+        try:
+            artifact = read_candidate_artifact(run_dir, state.source_package_hash)
+            counts["candidates"] = len(artifact.candidates)
+            counts["programs"] = len(
+                {program_name_from_source_file(c.source_file) for c in artifact.candidates}
+            )
+        except ApiError:
+            pass
+    if _stage_succeeded(state, PipelineStage.CONTEXTS_BUILT):
+        manifest_path = run_dir / "artifacts" / "07-context" / "context-manifest.json"
+        if manifest_path.is_file():
+            try:
+                counts["contexts"] = ContextDirectoryManifest.model_validate_json(
+                    manifest_path.read_text(encoding="utf-8")
+                ).context_count
+            except ValueError:
+                pass
+    if _stage_succeeded(state, PipelineStage.RULE_DRAFTS_GENERATED):
+        manifest_path = run_dir / "artifacts" / "08-rule-drafts" / "rule-draft-manifest.json"
+        if manifest_path.is_file():
+            try:
+                counts["drafts"] = RuleDraftDirectoryManifest.model_validate_json(
+                    manifest_path.read_text(encoding="utf-8")
+                ).draft_count
+            except ValueError:
+                pass
+    if _stage_succeeded(state, PipelineStage.GUARDRAILS_APPLIED):
+        manifest_path = run_dir / "artifacts" / "09-guardrails" / "guardrail-manifest.json"
+        if manifest_path.is_file():
+            try:
+                counts["guardrails"] = GuardrailDirectoryManifest.model_validate_json(
+                    manifest_path.read_text(encoding="utf-8")
+                ).guardrail_count
+            except ValueError:
+                pass
+    return counts
 
 
 def _redirect(request: Request, route_name: str, path_params: dict[str, str]) -> Response:
@@ -138,6 +195,13 @@ def list_runs_ui(
 ) -> HTMLResponse:
     states = _list_run_states(settings)
     total = len(states)
+    # Agregaciones puramente de presentacion (dashboard): derivadas del
+    # mismo `states` ya leido para la pagina, nunca una consulta nueva
+    # ni un campo persistido adicional.
+    completed_count = sum(1 for s in states if s.current_stage == PipelineStage.COMPLETED)
+    failed_count = sum(1 for s in states if s.current_stage == PipelineStage.FAILED)
+    in_progress_count = total - completed_count - failed_count
+    last_run_at = states[0].updated_at if states else None
     page = states[offset : offset + limit]
     return templates.TemplateResponse(
         request,
@@ -145,6 +209,10 @@ def list_runs_ui(
         {
             "runs": page,
             "total": total,
+            "completed_count": completed_count,
+            "failed_count": failed_count,
+            "in_progress_count": in_progress_count,
+            "last_run_at": last_run_at,
             "limit": limit,
             "offset": offset,
             "has_previous": offset > 0,
@@ -167,7 +235,11 @@ def run_status_ui(
     return templates.TemplateResponse(
         request,
         "run_status.html",
-        {"run": state, "is_terminal": state.current_stage in _TERMINAL_STAGES},
+        {
+            "run": state,
+            "is_terminal": state.current_stage in _TERMINAL_STAGES,
+            "summary_counts": _run_summary_counts(run_dir, state),
+        },
     )
 
 
@@ -187,7 +259,11 @@ def run_status_fragment_ui(
     return templates.TemplateResponse(
         request,
         "_status_fragment.html",
-        {"run": state, "is_terminal": state.current_stage in _TERMINAL_STAGES},
+        {
+            "run": state,
+            "is_terminal": state.current_stage in _TERMINAL_STAGES,
+            "summary_counts": _run_summary_counts(run_dir, state),
+        },
     )
 
 
@@ -253,7 +329,12 @@ def context_ui(
     return templates.TemplateResponse(
         request,
         "context.html",
-        {"run_id": run_id, "candidate_id": candidate_id, "ctx": package},
+        {
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "ctx": package,
+            "rule_ready": _stage_succeeded(state, PipelineStage.GUARDRAILS_APPLIED),
+        },
     )
 
 

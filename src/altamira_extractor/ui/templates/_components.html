@@ -1,0 +1,13 @@
+{# Macros compartidas: breadcrumb consistente y badge de estado (etiqueta
+   en espanol + valor tecnico original, nunca solo uno de los dos). #}
+
+{% macro breadcrumb(items) %}
+<nav class="breadcrumb" aria-label="ruta de navegacion">
+  {% for label, url in items %}
+  {%- if url %}<a href="{{ url }}">{{ label }}</a>{% else %}<span class="crumb-current">{{ label }}</span>{% endif -%}
+  {% if not loop.last %}<span class="crumb-sep" aria-hidden="true">/</span>{% endif %}
+  {% endfor %}
+</nav>
+{% endmacro %}
+
+{% macro status_badge(value) %}<span class="badge badge-{{ value | lower }}"><span class="badge-dot" aria-hidden="true"></span>{{ value | status_label }}<span class="badge-code">{{ value }}</span></span>{% endmacro %}

@@ -36,7 +36,11 @@ pytestmark = pytest.mark.integration
 
 SAME_ORIGIN = "http://testserver"
 MALICIOUS_TITLE = "<script>alert(1)</script> Regla de saldo negativo"
-_CANDIDATE_ROW_RE = re.compile(r"<td>(candidate::[^<]+)</td>")
+# Modernizacion UI: candidate_id ahora se muestra como texto tecnico
+# secundario dentro de la celda "Programa" (nunca su unico contenido) --
+# se extrae por PATRON del ID en si, ya no por posicion exacta en el
+# HTML, para no acoplar este test a un unico layout de celda.
+_CANDIDATE_ROW_RE = re.compile(r"(candidate::[A-Za-z0-9_.:\-]+)")
 
 
 def _wait_for_terminal_via_status_fragment(
@@ -104,9 +108,12 @@ def test_ui_end_to_end_upload_polling_navigation_and_download(
         assert rule_response.status_code == 200
         assert "<script>alert(1)</script>" not in rule_response.text
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rule_response.text
+        # Modernizacion UI: el aviso alarmista de prototipo ya no se
+        # muestra (reemplazado por una redaccion profesional
+        # equivalente en `.notice`).
         assert (
             "Este documento es un borrador generado automáticamente y requiere revisión "
-            "funcional." in rule_response.text
+            "funcional." not in rule_response.text
         )
         assert "EVIDENCE_VALIDATED" in rule_response.text
 
