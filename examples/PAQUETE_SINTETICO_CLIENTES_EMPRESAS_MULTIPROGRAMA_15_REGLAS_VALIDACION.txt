@@ -1,0 +1,58 @@
+PAQUETE SINTETICO MULTIPROGRAMA - CLIENTES EMPRESAS
+
+Archivo: PAQUETE_SINTETICO_CLIENTES_EMPRESAS_MULTIPROGRAMA_15_REGLAS.zip
+SHA-256: 2442344f730473d65af2ecd1095b2ce17f5d5035bfd4ca099e79284d205950ae
+
+COMPLEJIDAD
+- Programas COBOL: 5
+- Reglas esperadas: 15
+- Copybooks: 5
+- DCLGEN: 4
+- DDL: 4
+- Snapshots CSV: 4
+- XML complementarios: 5
+- Archivos totales: 29
+
+REGLAS ESPERADAS
+- CE01: Empresa activa
+- CE02: CUIT validado
+- CE03: Documentacion completa
+- CE04: Sin sanciones activas
+- CE05: Control PEP
+- CE06: Riesgo dentro del maximo
+- CE07: Monto dentro de linea
+- CE08: Cobertura de deuda minima
+- CE09: Endeudamiento maximo
+- CE10: Cobertura de garantia minima
+- CE11: Tasacion vigente
+- CE12: Garantia vigente
+- CE13: Mora maxima
+- CE14: Cheques rechazados maximos
+- CE15: Ventas anuales minimas
+
+VALIDACIONES
+- Manifest valido contra XSD: True
+- CRC invalido: None
+- Directorios explicitos: []
+- Entradas Unix no regulares: []
+- Extensiones invalidas: []
+- XML mal formados: []
+- Errores CSV: []
+- PROGRAM-ID: ['CLEMST01', 'CLERIE01', 'CLECRE01', 'CLEGAR01', 'CLEOPE01']
+- Duplicados: []
+- Entry programs sin archivo: []
+- IF: 15
+- MOVE a retorno: 15
+- Codigos: ['CE01', 'CE02', 'CE03', 'CE04', 'CE05', 'CE06', 'CE07', 'CE08', 'CE09', 'CE10', 'CE11', 'CE12', 'CE13', 'CE14', 'CE15']
+- Lineas >72: []
+
+RESULTADO ESPERADO
+- PARSED: 5 programas
+- CANDIDATES_DETECTED: 15 candidatos
+- CONTEXTS_BUILT: 15 contextos
+- RULE_DRAFTS_GENERATED: 15 borradores
+- GUARDRAILS_APPLIED: 15 resultados
+- COMPLETED
+
+NOTA
+La parte deterministica del ZIP fue validada. El tramo LLM depende de credenciales, conectividad y disponibilidad del proveedor.
