@@ -1,0 +1,36 @@
+PAQUETE SINTÉTICO — PRÉSTAMOS A EMPRESAS — 5 REGLAS
+
+ARCHIVO
+PAQUETE_SINTETICO_PRESTAMOS_EMPRESAS_5_REGLAS.zip
+
+SHA-256
+efefc1d1ca5050e7340aa8358dd3fba2f7ae4e4e9202a466b08efcde7ce5f56a
+
+ESTRUCTURA
+- 01-codigo/cobol/PREEMP01.cbl
+- 02-parametria/ddl/PARAM_PREST_EMP.sql
+- manifest.xml
+
+REGLAS DE NEGOCIO ESPERADAS
+1. PE01 — La empresa debe estar activa.
+2. PE02 — El monto solicitado no puede superar la línea disponible.
+3. PE03 — La cobertura de deuda debe ser al menos 1,20.
+4. PE04 — El riesgo crediticio no puede superar el máximo admitido.
+5. PE05 — La empresa no puede registrar más de 30 días de mora.
+
+VALIDACIONES REALIZADAS
+- Manifest válido contra XSD: True
+- Error CRC: None
+- Entradas explícitas de directorio: []
+- Entradas Unix no regulares: []
+- Extensiones inválidas: []
+- Cantidad de IF: 5
+- Cantidad de MOVE a WS-COD-RETORNO: 5
+- Códigos de retorno faltantes: []
+- Cantidad total de archivos: 3
+
+CRITERIO DE DISEÑO
+El paquete replica deliberadamente el mismo patrón contractual y sintáctico del paquete
+PAQUETE_SINTETICO_CONSULTA_SALDOS_3_REGLAS.zip que completó el flujo E2E de la
+aplicación: un único programa COBOL FIXED, decisiones IF simples, códigos de retorno
+movidos a WS-COD-RETORNO, un DDL y un manifest V1.
