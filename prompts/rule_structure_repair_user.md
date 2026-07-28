@@ -7,13 +7,11 @@ PAYLOAD_RECHAZADO:
 ERRORES_DE_VALIDACION:
 {{VALIDATION_ERRORS_JSON}}
 
-EVIDENCE_IDS_PERMITIDOS:
-{{ALLOWED_EVIDENCE_IDS_JSON}}
+EVIDENCE_CATALOG:
+{{EVIDENCE_CATALOG_JSON}}
 
-EVIDENCE_PATHS_PERMITIDOS:
-{{ALLOWED_EVIDENCE_PATHS_JSON}}
-
-Corrige UNICAMENTE los errores listados arriba. Usa solo evidence_id y
-evidence_path de las listas permitidas: nunca inventes, abrevies ni
-corrijas uno que no este ahi literalmente. Devuelve el JSON corregido,
-sin explicaciones ni texto adicional.
+Corrige UNICAMENTE los errores listados arriba. Cada claim debe usar
+evidence_refs con alias EXACTOS del EVIDENCE_CATALOG (p. ej. "E001"):
+nunca inventes, abrevies, modifiques ni corrijas un alias que no este
+ahi literalmente. Nunca escribas evidence_id ni evidence_path reales.
+Devuelve el JSON corregido, sin explicaciones ni texto adicional.

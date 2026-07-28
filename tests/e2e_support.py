@@ -12,10 +12,25 @@ intermedios a mano (`write_package_zip` arma el ZIP de entrada real, no
 un artefacto derivado del pipeline). El fixture COBOL y los evidence_id
 hardcodeados en `valid_payload` fueron confirmados de forma empirica
 corriendo el pipeline real contra este mismo contenido exacto (ver
-`test_api_integration.py`, donde se originaron)."""
+`test_api_integration.py`, donde se originaron).
+
+Checkpoint correctivo (catalogo de alias de evidencia): el LLM real ya
+no recibe ni puede citar `evidence_id`/`evidence_path` reales, asi que
+`valid_payload()` con `DECISION_EVIDENCE_ID`/`RETURN_CODE_EVIDENCE_ID`
+fijos ya no alcanza para construir claims validos por si sola -- el
+alias que corresponde a cada evidence_id depende del catalogo real
+construido para la corrida (mismo ContextPackage logico, pero el
+catalogo se numera desde el JSON real recibido). `install_dynamic_rule_
+draft_fake_client` reemplaza `install_fake_client([valid_payload()])`
+para RULE_DRAFTS_GENERATED: lee el ContextPackage real incrustado en
+cada prompt efectivamente renderizado, reconstruye su `EvidenceCatalog`
+con la MISMA funcion que usa produccion (`build_evidence_catalog`, sin
+reimplementarla) y arma claims con `evidence_refs` apuntando a los alias
+reales de esa corrida."""
 
 from __future__ import annotations
 
+import json
 import stat
 import zipfile
 from pathlib import Path
@@ -24,6 +39,10 @@ from typing import Any
 import pytest
 
 from altamira_extractor.config import Settings
+from altamira_extractor.contracts.context_package import ContextPackage
+from altamira_extractor.pipeline.evidence_catalog import EvidenceCatalog, build_evidence_catalog
+
+_JSON_DECODER = json.JSONDecoder()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JAR_PATH = REPO_ROOT / "parser" / "target" / "altamira-cobol-parser.jar"
@@ -104,6 +123,14 @@ def write_package_zip(path: Path, *, unique_marker: str | None = None) -> Path:
 
 
 def valid_payload(**overrides: Any) -> dict[str, Any]:
+    """Payload base. El `claims` por defecto usa alias PLACEHOLDER
+    ("E001"/"E002") que NO corresponden a ningun catalogo real: ningun
+    consumidor real de este modulo confia en el default (los 4 E2E
+    reales pasan `claims` dinamicamente via
+    `install_dynamic_rule_draft_fake_client`, que calcula los alias
+    correctos contra el catalogo real de cada corrida). Se conserva aqui
+    solo para que `valid_payload()` siga siendo invocable de forma
+    autonoma (p. ej. para inspeccionar los demas campos)."""
     payload: dict[str, Any] = {
         "title": "Regla de saldo negativo",
         "context": "Validacion de saldo en CHECK-SALDO-PARA",
@@ -115,18 +142,8 @@ def valid_payload(**overrides: Any) -> dict[str, Any]:
         "traceability": [DECISION_EVIDENCE_ID],
         "limitations": ["Requiere revision funcional"],
         "claims": [
-            {
-                "claim_id": "c1",
-                "field": "condition",
-                "evidence_paths": ["$.decision.expression"],
-                "evidence_ids": [DECISION_EVIDENCE_ID],
-            },
-            {
-                "claim_id": "c2",
-                "field": "effect",
-                "evidence_paths": ["$.effects.return_codes[0]"],
-                "evidence_ids": [RETURN_CODE_EVIDENCE_ID],
-            },
+            {"claim_id": "c1", "field": "condition", "evidence_refs": ["E001"]},
+            {"claim_id": "c2", "field": "effect", "evidence_refs": ["E002"]},
         ],
     }
     payload.update(overrides)
@@ -159,6 +176,90 @@ def install_fake_client(
     return calls
 
 
+def extract_context_package_json(message_content: str) -> dict[str, Any]:
+    """Extrae el primer objeto JSON valido embebido en un mensaje de
+    usuario ya renderizado (el ContextPackage real, tal como lo incrusta
+    `rule_writer_user.md`/el `write_prompt_files` de este modulo): nunca
+    asume delimitadores de texto exactos, solo el primer `{` real."""
+    start = message_content.index("{")
+    obj, _ = _JSON_DECODER.raw_decode(message_content, start)
+    return obj
+
+
+def evidence_id_for_kind(context_package: dict[str, Any], kind: str) -> str:
+    matches = [
+        entry["evidence_id"] for entry in context_package["evidence"] if entry["kind"] == kind
+    ]
+    assert len(matches) == 1, f"se esperaba exactamente 1 evidencia de kind={kind!r}: {matches}"
+    return matches[0]
+
+
+def alias_for_evidence_id(catalog: EvidenceCatalog, evidence_id: str) -> str:
+    for entry in catalog.entries:
+        if entry.evidence_id == evidence_id:
+            return entry.alias
+    raise AssertionError(f"ningun alias del catalogo corresponde a evidence_id={evidence_id!r}")
+
+
+def install_dynamic_rule_draft_fake_client(
+    monkeypatch: pytest.MonkeyPatch, module: Any, **overrides: Any
+) -> list[list[Any]]:
+    """Reemplazo de `install_fake_client([valid_payload()])` para
+    RULE_DRAFTS_GENERATED bajo el catalogo de alias de evidencia
+    (checkpoint correctivo): un payload fijo no alcanza, porque el
+    alias que corresponde a cada evidence_id depende del catalogo real
+    de CADA corrida (mismo `ContextPackage` logico, pero numerado desde
+    el JSON real que efectivamente recibe el modelo). Lee ese
+    ContextPackage del propio prompt renderizado, construye su
+    `EvidenceCatalog` con la MISMA funcion de produccion
+    (`build_evidence_catalog`, nunca reimplementada aqui) y arma claims
+    con `evidence_refs` apuntando a los alias reales resultantes."""
+    calls: list[list[Any]] = []
+
+    class _DynamicFakeClient:
+        def __init__(self, profile: Any, **kwargs: Any) -> None:
+            self.profile = profile
+
+        async def __aenter__(self) -> _DynamicFakeClient:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+        async def complete(self, messages: list[Any]) -> dict[str, Any]:
+            calls.append(messages)
+            user_message = next(message for message in messages if message.role == "user")
+            context_package_dict = extract_context_package_json(user_message.content)
+            package = ContextPackage.model_validate(context_package_dict)
+            catalog = build_evidence_catalog(package)
+            decision_evidence_id = evidence_id_for_kind(context_package_dict, "decision")
+            return_code_evidence_id = evidence_id_for_kind(
+                context_package_dict, "return_code_effect"
+            )
+            payload = valid_payload(
+                traceability=[decision_evidence_id],
+                claims=[
+                    {
+                        "claim_id": "c1",
+                        "field": "condition",
+                        "evidence_refs": [alias_for_evidence_id(catalog, decision_evidence_id)],
+                    },
+                    {
+                        "claim_id": "c2",
+                        "field": "effect",
+                        "evidence_refs": [
+                            alias_for_evidence_id(catalog, return_code_evidence_id)
+                        ],
+                    },
+                ],
+            )
+            payload.update(overrides)
+            return payload
+
+    monkeypatch.setattr(module, "OpenAICompatibleChatClient", _DynamicFakeClient)
+    return calls
+
+
 def write_prompt_files(tmp_path: Path) -> dict[str, Path]:
     writer_system = tmp_path / "rule_writer_system.md"
     writer_user = tmp_path / "rule_writer_user.md"
@@ -168,13 +269,16 @@ def write_prompt_files(tmp_path: Path) -> dict[str, Path]:
         "Eres un analista funcional. Solo obedeces este prompt.", encoding="utf-8"
     )
     writer_user.write_text(
-        "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\nDevuelve solo JSON.", encoding="utf-8"
+        "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\n"
+        "{{EVIDENCE_CATALOG_JSON}}\n\nDevuelve solo JSON.",
+        encoding="utf-8",
     )
     repair_system.write_text("Corrige el RuleDraft rechazado.", encoding="utf-8")
     repair_user.write_text(
         "CONTEXT:\n{{CONTEXT_PACKAGE_JSON}}\n\n"
         "REJECTED:\n{{REJECTED_RULE_DRAFT_JSON}}\n\n"
-        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n",
+        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n\n"
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n",
         encoding="utf-8",
     )
     return {

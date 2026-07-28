@@ -314,7 +314,22 @@ class GuardrailError(PipelineError):
     existia, se conserva intacta). El mensaje nunca incluye el body de
     la respuesta, el prompt efectivo completo, el ContextPackage, el
     RuleDraft completo ni credenciales.
-    """
+
+    `diagnostics` (checkpoint correctivo: observabilidad de fallos de
+    reparacion; opcional, `None` por defecto) expone un resumen
+    sanitizado -- candidate_id, program, paragraph, cantidad de
+    intentos, ultimo veredicto, violations (violation_id/rule/field/
+    message), claims con sus evidence_ids/evidence_paths reales y los
+    hashes de respuesta ya calculados -- del ULTIMO candidato que agoto
+    `LLM_REPAIR_ATTEMPTS`. Nunca incluye prompts completos, respuestas
+    crudas ni credenciales: el llamador (`guardrails_applied_stage.
+    run_guardrails_applied_stage`) lo persiste en un artefacto NO
+    contractual, fuera de `artifacts/09-guardrails/`, para que un fallo
+    sea diagnosticable sin depender unicamente de este mensaje de texto."""
+
+    def __init__(self, message: str, *, diagnostics: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 class MarkdownRenderError(PipelineError):

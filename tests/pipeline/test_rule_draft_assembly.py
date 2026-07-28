@@ -28,11 +28,14 @@ from altamira_extractor.contracts.enums import (
     EvidenceValidationStatus,
     InclusionReason,
 )
+from altamira_extractor.pipeline.evidence_catalog import EvidenceCatalog, build_evidence_catalog
 from altamira_extractor.pipeline.rule_draft_assembly import (
     RuleDraftAssemblyError,
     assemble_rule_draft,
+    assemble_rule_draft_with_evidence_catalog,
     check_evidence_references,
     load_rule_draft_schema,
+    resolve_evidence_aliases,
     rule_draft_json_hash,
 )
 
@@ -136,6 +139,16 @@ def _real_schema_validator() -> jsonschema.protocols.Validator:
     schema, _hash = load_rule_draft_schema(REAL_SCHEMA_PATH)
     validator_cls = jsonschema.validators.validator_for(schema)
     return validator_cls(schema)
+
+
+def _catalog() -> EvidenceCatalog:
+    return build_evidence_catalog(_package())
+
+
+def _decision_alias(catalog: EvidenceCatalog) -> str:
+    alias = catalog.find_alias("ev-1", "$.decision")
+    assert alias is not None
+    return alias
 
 
 # --- load_rule_draft_schema ---
@@ -422,3 +435,316 @@ def test_rule_draft_json_hash_changes_with_content() -> None:
     draft_a = assemble_rule_draft(_valid_payload(), schema_validator=validator)
     draft_b = assemble_rule_draft(_valid_payload(title="Otro titulo"), schema_validator=validator)
     assert rule_draft_json_hash(draft_a) != rule_draft_json_hash(draft_b)
+
+
+# --- resolve_evidence_aliases (checkpoint correctivo: catalogo de alias) ---
+
+
+def test_resolve_evidence_aliases_translates_valid_refs_to_real_ids_and_paths() -> None:
+    catalog = _catalog()
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}]
+    )
+    translated, issues = resolve_evidence_aliases(payload, catalog)
+    assert issues == ()
+    translated_claim = translated["claims"][0]
+    assert translated_claim["evidence_ids"] == ["ev-1"]
+    assert translated_claim["evidence_paths"] == ["$.decision"]
+    assert "evidence_refs" not in translated_claim
+
+
+def test_resolve_evidence_aliases_never_mutates_the_original_payload() -> None:
+    catalog = _catalog()
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}]
+    )
+    resolve_evidence_aliases(payload, catalog)
+    assert payload["claims"][0] == {
+        "claim_id": "c1",
+        "field": "statement",
+        "evidence_refs": [alias],
+    }
+
+
+def test_resolve_evidence_aliases_unknown_alias_is_flagged_never_corrected() -> None:
+    catalog = _catalog()
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": ["E999"]}]
+    )
+    translated, issues = resolve_evidence_aliases(payload, catalog)
+    assert len(issues) == 1
+    assert issues[0].type == "unknown_evidence_alias"
+    assert issues[0].loc == "claims.0.evidence_refs.0"
+    translated_claim = translated["claims"][0]
+    assert translated_claim["evidence_ids"] == []
+    assert translated_claim["evidence_paths"] == []
+
+
+def test_resolve_evidence_aliases_rejects_direct_evidence_ids_and_paths() -> None:
+    catalog = _catalog()
+    payload = _valid_payload(
+        claims=[
+            {
+                "claim_id": "c1",
+                "field": "statement",
+                "evidence_ids": ["ev-1"],
+                "evidence_paths": ["$.decision"],
+            }
+        ]
+    )
+    _translated, issues = resolve_evidence_aliases(payload, catalog)
+    assert len(issues) == 2
+    assert {issue.type for issue in issues} == {"forbidden_direct_evidence_reference"}
+    assert {issue.loc for issue in issues} == {
+        "claims.0.evidence_ids",
+        "claims.0.evidence_paths",
+    }
+
+
+def test_resolve_evidence_aliases_leaves_malformed_claims_for_assemble_rule_draft_to_report() -> (
+    None
+):
+    catalog = _catalog()
+    payload = _valid_payload(claims=[{"claim_id": "c1", "field": "statement"}])
+    translated, issues = resolve_evidence_aliases(payload, catalog)
+    assert issues == ()
+    assert translated["claims"][0] == {"claim_id": "c1", "field": "statement"}
+
+
+# --- assemble_rule_draft_with_evidence_catalog (checkpoint correctivo) ---
+
+
+def test_assemble_with_catalog_valid_alias_produces_pending_draft_with_real_ids() -> None:
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}]
+    )
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        payload, catalog=catalog, package=package, schema_validator=validator
+    )
+    assert rule_draft.evidence_validation_status == EvidenceValidationStatus.PENDING
+    assert rule_draft.claims[0].evidence_ids == ["ev-1"]
+    assert rule_draft.claims[0].evidence_paths == ["$.decision"]
+
+
+def test_assemble_with_catalog_unknown_alias_raises_unknown_evidence_alias() -> None:
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": ["E999"]}]
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issue_types = {issue.type for issue in excinfo.value.validation_errors}
+    assert "unknown_evidence_alias" in issue_types
+
+
+def test_assemble_with_catalog_direct_evidence_reference_raises_forbidden() -> None:
+    # El payload por defecto ya usa evidence_ids/evidence_paths directos
+    # (nunca evidence_refs): exactamente lo que un modelo desobediente
+    # produciria.
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    payload = _valid_payload()
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issues = excinfo.value.validation_errors
+    assert len(issues) == 2
+    assert {issue.type for issue in issues} == {"forbidden_direct_evidence_reference"}
+
+
+def test_assemble_with_catalog_combines_alias_and_schema_issues_in_one_round() -> None:
+    # Un alias desconocido deja evidence_ids/evidence_paths vacios, lo que
+    # ademas viola min_length=1 de Claim: ambos tipos de error deben viajar
+    # juntos en la misma excepcion para no gastar dos rondas de reparacion
+    # en el mismo intento fallido.
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": ["E999"]}]
+    )
+    del payload["title"]
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issue_types = {issue.type for issue in excinfo.value.validation_errors}
+    assert "unknown_evidence_alias" in issue_types
+    assert "missing" in issue_types
+
+
+def test_assemble_with_catalog_never_relaxes_check_evidence_references() -> None:
+    # El catalogo se construye desde `package`, pero si se le pasa un
+    # catalogo/paquete desalineados (ver mas abajo), check_evidence_references
+    # sigue siendo la ultima red de seguridad: aqui confirmamos que sigue
+    # activa aun cuando la resolucion de alias fue exitosa.
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    other_package = _package()
+    other_package.evidence[0].evidence_id = "ev-other"
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}]
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=other_package, schema_validator=validator
+        )
+    issue_types = {issue.type for issue in excinfo.value.validation_errors}
+    assert "unknown_evidence_id" in issue_types
+
+
+def test_assemble_with_catalog_final_draft_never_carries_evidence_refs_or_aliases() -> None:
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}]
+    )
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        payload, catalog=catalog, package=package, schema_validator=validator
+    )
+    stable_json = rule_draft.to_stable_json()
+    assert "evidence_refs" not in stable_json
+    assert alias not in stable_json
+
+
+# --- checkpoint correctivo: alias filtrado en campos de texto libre
+# (paquete multiprograma real, 11 de 15 candidatos con
+# traceability=["E001", "E002", ...] en vez de texto humano) ---
+
+
+def test_assemble_with_catalog_rejects_bare_alias_in_traceability() -> None:
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        traceability=[alias],
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}],
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issues = excinfo.value.validation_errors
+    assert any(
+        issue.type == "alias_leaked_into_free_text" and issue.loc == "traceability.0"
+        for issue in issues
+    )
+
+
+def test_assemble_with_catalog_rejects_bare_alias_in_scalar_field() -> None:
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        title=alias,
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}],
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issues = excinfo.value.validation_errors
+    assert any(
+        issue.type == "alias_leaked_into_free_text" and issue.loc == "title" for issue in issues
+    )
+
+
+def test_assemble_with_catalog_allows_normal_free_text_traceability() -> None:
+    # Nunca un falso positivo: texto humano normal, aunque mencione la
+    # palabra "evidencia" o contenga letras/numeros, nunca se confunde
+    # con un alias real -- solo una coincidencia EXACTA del valor
+    # completo del campo dispara la validacion.
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        traceability=["La validacion se basa en el parrafo MAIN del programa PROG1."],
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}],
+    )
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        payload, catalog=catalog, package=package, schema_validator=validator
+    )
+    assert rule_draft.traceability == [
+        "La validacion se basa en el parrafo MAIN del programa PROG1."
+    ]
+
+
+def test_assemble_with_catalog_combines_free_text_alias_leak_with_unknown_alias() -> None:
+    # Ambos tipos de fallo (alias filtrado en texto libre + alias
+    # inexistente en evidence_refs) se combinan en una unica excepcion,
+    # igual que alias invalido + error de schema.
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    payload = _valid_payload(
+        traceability=[alias],
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": ["E999"]}],
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issue_types = {issue.type for issue in excinfo.value.validation_errors}
+    assert "alias_leaked_into_free_text" in issue_types
+    assert "unknown_evidence_alias" in issue_types
+
+
+def test_regression_real_run_traceability_leak_rejected_then_repaired_text_accepted() -> None:
+    """Regresion exacta del incidente real observado en el paquete
+    multiprograma de 15 reglas (11 de 15 candidatos): el modelo escribio
+    literalmente los alias del catalogo (p. ej. `["E001", "E002", "E003",
+    "E004", "E005"]` en el candidato real de mayor catalogo) dentro de
+    `traceability` en vez de texto humano. Aqui se reproduce con los dos
+    alias reales del catalogo de `_package()` (`E001`/`E002`): el primer
+    intento debe rechazarse; una reparacion con texto humano real debe
+    aceptarse."""
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    all_aliases = sorted(entry.alias for entry in catalog.entries)
+    assert all_aliases == ["E001", "E002"]
+
+    poisoned_payload = _valid_payload(
+        traceability=all_aliases,
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}],
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            poisoned_payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issue_types = {issue.type for issue in excinfo.value.validation_errors}
+    assert issue_types == {"alias_leaked_into_free_text"}
+    assert len(excinfo.value.validation_errors) == 2
+
+    repaired_payload = _valid_payload(
+        traceability=["Basado en la decision registrada en PROG1, parrafo MAIN."],
+        claims=[{"claim_id": "c1", "field": "statement", "evidence_refs": [alias]}],
+    )
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        repaired_payload, catalog=catalog, package=package, schema_validator=validator
+    )
+    assert rule_draft.traceability == ["Basado en la decision registrada en PROG1, parrafo MAIN."]
+    stable_json = rule_draft.to_stable_json()
+    for leaked_alias in all_aliases:
+        assert leaked_alias not in stable_json

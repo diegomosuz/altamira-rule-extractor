@@ -21,9 +21,9 @@ import altamira_extractor.pipeline.rule_drafts_generated_stage as rule_drafts_st
 
 from .e2e_support import (
     build_settings,
+    install_dynamic_rule_draft_fake_client,
     install_fake_client,
     require_jar,
-    valid_payload,
     write_package_zip,
 )
 
@@ -38,7 +38,7 @@ def test_cli_end_to_end_ingest_reaches_completed_and_downloads(
     require_jar()
     settings = build_settings(tmp_path)
     monkeypatch.setattr(cli_module, "load_settings", lambda: settings)
-    install_fake_client(monkeypatch, rule_drafts_stage_module, [valid_payload()])
+    install_dynamic_rule_draft_fake_client(monkeypatch, rule_drafts_stage_module)
     # Ninguna reparacion deberia invocarse: el draft inicial ya pasa el
     # guardrail (mismo fixture que tests/e2e_support.py).
     repair_calls = install_fake_client(monkeypatch, guardrails_stage_module, [])

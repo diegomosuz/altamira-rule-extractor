@@ -26,9 +26,9 @@ from altamira_extractor.api.app import create_app
 
 from ..e2e_support import (
     build_settings,
+    install_dynamic_rule_draft_fake_client,
     install_fake_client,
     require_jar,
-    valid_payload,
     write_package_zip,
 )
 
@@ -61,8 +61,8 @@ def test_ui_end_to_end_upload_polling_navigation_and_download(
 ) -> None:
     require_jar()
     settings = build_settings(tmp_path)
-    install_fake_client(
-        monkeypatch, rule_drafts_stage_module, [valid_payload(title=MALICIOUS_TITLE)]
+    install_dynamic_rule_draft_fake_client(
+        monkeypatch, rule_drafts_stage_module, title=MALICIOUS_TITLE
     )
     repair_calls = install_fake_client(monkeypatch, guardrails_stage_module, [])
 

@@ -556,6 +556,173 @@ def test_ambiguous_date_format_is_warning_not_a_false_validation() -> None:
     assert matches[0].severity == Severity.WARNING
 
 
+# --- checkpoint correctivo: agregacion de evidencia por field (candidato
+# CE10 real, Programa CLEGAR01, Parrafo VALIDAR-COBERTURA-GAR-PARA) ---
+
+
+def _package_with_extra_code_slice(
+    source_text: str, *, evidence_id: str = "ev-extra-slice"
+) -> ContextPackage:
+    """Variante de `_package()` con un SEGUNDO `code_slice` (y su propia
+    evidencia) -- usada para reproducir un `field` con mas de un claim,
+    cada uno citando una pieza de evidencia distinta."""
+    package = _package()
+    extra_evidence = EvidenceEntry(
+        evidence_id=evidence_id,
+        kind="code_slice",
+        source_file="cobol/PROG1.cbl",
+        line_start=30,
+        line_end=30,
+        source_package_hash=_HASH,
+    )
+    extra_slice = CodeSliceEntry(
+        paragraph_id="p2",
+        paragraph="VALIDAR-COBERTURA-GAR-PARA",
+        source_file="cobol/PROG1.cbl",
+        source_text=source_text,
+        line_start=30,
+        line_end=30,
+        inclusion_reason=InclusionReason.CANDIDATE,
+        evidence_ids=[evidence_id],
+    )
+    return package.model_copy(
+        update={
+            "evidence": [*package.evidence, extra_evidence],
+            "code_slice": [*package.code_slice, extra_slice],
+        }
+    )
+
+
+def test_multiple_claims_per_field_aggregate_evidence_for_number_support() -> None:
+    """checkpoint correctivo: un `field` con mas de un claim (uno cita
+    evidencia de control-flow que NO contiene el literal, otro cita el
+    statement exacto que SI lo contiene) nunca debe generar un falso
+    positivo -- el numero debe buscarse en la UNION de evidencia de
+    TODOS los claims de ese field, nunca en uno solo de forma aislada.
+    Regresion general (no especifica de CE10/CLEGAR01) del incidente
+    real: dos claims `condition` -- uno citando el `code_slice` de
+    control-flow (`MAIN-PARA`-like, sin el literal), otro citando el
+    `code_slice` del statement exacto (con el literal)."""
+    package = _package_with_extra_code_slice(
+        "VALIDAR-COBERTURA-GAR-PARA. IF WS-COBERTURA-GARANTIA-X100 < 120 "
+        "MOVE 'CE10' TO WS-COD-RETORNO END-IF."
+    )
+    draft = _draft(
+        condition="WS-COBERTURA-GARANTIA-X100 < 120",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[0]"],  # control-flow, sin el literal 120
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[1]"],  # statement exacto, con el literal 120
+                evidence_ids=["ev-extra-slice"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_number" for v in violations)
+
+
+def test_multiple_claims_per_field_still_flags_number_unsupported_by_any_claim() -> None:
+    """Nunca se relaja la exigencia: si NINGUN claim del field cita
+    evidencia que contenga el literal, la violation sigue disparandose
+    -- la correccion solo amplia el conjunto de evidencia considerado,
+    nunca inventa ni aproxima soporte."""
+    package = _package_with_extra_code_slice("VALIDAR-OTRO-PARA. PERFORM SIGUIENTE-PARA.")
+    draft = _draft(
+        condition="WS-COBERTURA-GARANTIA-X100 < 120",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[1]"],
+                evidence_ids=["ev-extra-slice"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_number"]
+    assert len(matches) == 1
+    assert matches[0].severity == Severity.ERROR
+
+
+def test_regression_clegar01_ce10_real_run_produces_zero_violations() -> None:
+    """Regresion exacta del incidente real: Programa CLEGAR01, Parrafo
+    VALIDAR-COBERTURA-GAR-PARA, Regla CE10, condicion
+    `WS-COBERTURA-GARANTIA-X100 < 120`, efecto `MOVE 'CE10' TO
+    WS-COD-RETORNO`. Reproduce la ESTRUCTURA EXACTA de claims del
+    RuleDraft real generado por RULE_DRAFTS_GENERATED para este
+    candidato (5 claims: effect/$.decision, condition/$.code_slice[0]
+    de MAIN-PARA, condition/$.code_slice[1] del statement exacto,
+    context/$.domain_glossary[0], effect/$.effects.return_codes[0]):
+    antes de la correccion, `evaluate_guardrail` devolvia exactamente 1
+    ERROR (`unsupported_explicit_number` sobre el claim que cita
+    MAIN-PARA); despues de la correccion, cero violations."""
+    package = _package_with_extra_code_slice(
+        "VALIDAR-COBERTURA-GAR-PARA.\n"
+        "    IF WS-COBERTURA-GARANTIA-X100 < 120\n"
+        "        MOVE 'CE10' TO WS-COD-RETORNO\n"
+        "    END-IF.",
+        evidence_id="ev-statement",
+    )
+    draft = _draft(
+        title="Validacion de Cobertura de Garantia para Clientes Empresas",
+        context="Clientes Empresas",
+        statement="Se valida la cobertura de garantia para la evaluacion de clientes empresas.",
+        condition="WS-COBERTURA-GARANTIA-X100 < 120",
+        parameters=[],
+        effect="CE10",
+        parameter_source=None,
+        traceability=["Evidencia trazada mediante el catalogo de alias del candidato"],
+        limitations=["Requiere revision funcional."],
+        claims=[
+            Claim(
+                claim_id="claim::1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="claim::2",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="claim::3",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[1]"],
+                evidence_ids=["ev-statement"],
+            ),
+            Claim(
+                claim_id="claim::4",
+                field=ClaimField.CONTEXT,
+                evidence_paths=["$.domain_glossary[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="claim::5",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert violations == []
+
+
 # --- prompt injection ---
 
 

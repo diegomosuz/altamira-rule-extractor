@@ -174,13 +174,6 @@ class GuardrailCandidateArtifact(AltamiraBaseModel):
         )
         pending_hash = _stable_hash(pending_equivalent)
 
-        if not self.repair_history:
-            if pending_hash != self.initial_rule_draft_hash:
-                raise ValueError(
-                    "sin reparaciones, final_rule_draft (revertido a PENDING) debe coincidir "
-                    "con initial_rule_draft_hash"
-                )
-            return self
         last_valid = next(
             (
                 attempt
@@ -189,7 +182,20 @@ class GuardrailCandidateArtifact(AltamiraBaseModel):
             ),
             None,
         )
-        if last_valid is None or last_valid.produced_rule_draft_hash != pending_hash:
+        if last_valid is None:
+            # Ni sin reparaciones, ni con reparaciones donde NINGUN intento
+            # fue structurally_valid (posible desde que GUARDRAILS_APPLIED
+            # tambien rechaza estructuralmente un alias/evidence_id que no
+            # resuelve, ver evidence_catalog.py): en ambos casos
+            # current_draft nunca avanzo mas alla de initial_draft.
+            if pending_hash != self.initial_rule_draft_hash:
+                raise ValueError(
+                    "sin ningun intento structurally_valid en repair_history, "
+                    "final_rule_draft (revertido a PENDING) debe coincidir con "
+                    "initial_rule_draft_hash"
+                )
+            return self
+        if last_valid.produced_rule_draft_hash != pending_hash:
             raise ValueError(
                 "final_rule_draft (revertido a PENDING) debe coincidir con "
                 "produced_rule_draft_hash del ultimo intento structurally_valid en "

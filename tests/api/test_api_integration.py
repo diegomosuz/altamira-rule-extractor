@@ -33,10 +33,10 @@ from ..e2e_support import (
     MANIFEST_XML,
     PARAM_DEMO_DDL,
     build_settings,
+    install_dynamic_rule_draft_fake_client,
     install_fake_client,
     regular_file_info,
     require_jar,
-    valid_payload,
     write_package_zip,
 )
 
@@ -126,7 +126,7 @@ def test_api_end_to_end_reaches_completed_and_downloads(
 ) -> None:
     require_jar()
     settings = build_settings(tmp_path)
-    install_fake_client(monkeypatch, rule_drafts_stage_module, [valid_payload()])
+    install_dynamic_rule_draft_fake_client(monkeypatch, rule_drafts_stage_module)
     # Ninguna reparacion deberia invocarse: el draft inicial ya pasa el
     # guardrail.
     repair_calls = install_fake_client(monkeypatch, guardrails_stage_module, [])

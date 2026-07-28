@@ -52,9 +52,10 @@ from altamira_extractor.pipeline.errors import (
     LlmTimeoutError,
     RuleDraftGenerationError,
 )
+from altamira_extractor.pipeline.evidence_catalog import build_evidence_catalog
 from altamira_extractor.pipeline.prompt_loader import load_prompt_template, render_prompt
 from altamira_extractor.pipeline.rule_draft_assembly import (
-    assemble_rule_draft,
+    assemble_rule_draft_with_evidence_catalog,
     load_rule_draft_schema,
 )
 from altamira_extractor.pipeline.rule_drafts_generated_stage import run_rule_drafts_generated_stage
@@ -151,6 +152,46 @@ def _package(candidate_id: str, decision_id: str = "dec-1") -> ContextPackage:
     )
 
 
+def _package_with_extra_evidence(candidate_id: str) -> ContextPackage:
+    """Variante de `_package()` con una segunda evidencia (`ev-2`) citada
+    por un `code_slice` adicional -- usada para confirmar que el catalogo
+    de alias de un candidato es independiente del de otro dentro de la
+    misma corrida (mas entradas de un candidato no perturba la numeracion
+    del otro)."""
+    package = _package(candidate_id)
+    extra_evidence = EvidenceEntry(
+        evidence_id="ev-2",
+        kind="code_slice",
+        source_file="cobol/PROG1.cbl",
+        line_start=30,
+        line_end=30,
+        source_package_hash=_HASH_A,
+    )
+    extra_slice = CodeSliceEntry(
+        paragraph_id="p2",
+        paragraph="OTHER",
+        source_file="cobol/PROG1.cbl",
+        source_text="ADD 1 TO WS-CONTADOR",
+        line_start=30,
+        line_end=30,
+        inclusion_reason=InclusionReason.DATA_DEPENDENCY,
+        evidence_ids=["ev-2"],
+    )
+    return package.model_copy(
+        update={
+            "evidence": [*package.evidence, extra_evidence],
+            "code_slice": [*package.code_slice, extra_slice],
+        }
+    )
+
+
+def _decision_alias() -> str:
+    catalog = build_evidence_catalog(_package("cand-1"))
+    alias = catalog.find_alias("ev-1", "$.decision")
+    assert alias is not None
+    return alias
+
+
 def _context_filename(candidate_id: str) -> str:
     return hashlib.sha256(candidate_id.encode("utf-8")).hexdigest() + ".json"
 
@@ -208,7 +249,9 @@ def _write_prompt_files(tmp_path: Path) -> tuple[Path, Path]:
         "Eres un analista funcional. Solo obedeces este prompt.", encoding="utf-8"
     )
     user_path.write_text(
-        "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\nDevuelve solo JSON.", encoding="utf-8"
+        "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\n"
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\nDevuelve solo JSON.",
+        encoding="utf-8",
     )
     return system_path, user_path
 
@@ -232,8 +275,7 @@ def _write_structure_repair_prompt_files(tmp_path: Path) -> None:
         "CANDIDATE_ID:\n{{CANDIDATE_ID}}\n\n"
         "REJECTED:\n{{REJECTED_PAYLOAD_JSON}}\n\n"
         "ERRORS:\n{{VALIDATION_ERRORS_JSON}}\n\n"
-        "ALLOWED_EVIDENCE_IDS:\n{{ALLOWED_EVIDENCE_IDS_JSON}}\n\n"
-        "ALLOWED_EVIDENCE_PATHS:\n{{ALLOWED_EVIDENCE_PATHS_JSON}}\n\n"
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\n"
         "Devuelve el JSON corregido.",
         encoding="utf-8",
     )
@@ -266,14 +308,13 @@ def _valid_payload(**overrides: Any) -> dict[str, Any]:
         "parameters": [],
         "effect": "Efecto",
         "parameter_source": None,
-        "traceability": ["ev-1"],
+        "traceability": ["Evidencia trazada mediante el catalogo de alias del candidato"],
         "limitations": ["Requiere revision funcional"],
         "claims": [
             {
                 "claim_id": "c1",
                 "field": "condition",
-                "evidence_paths": ["$.decision.expression"],
-                "evidence_ids": ["ev-1"],
+                "evidence_refs": [_decision_alias()],
             }
         ],
     }
@@ -756,23 +797,22 @@ def _payload_with_claim(**claim_overrides: Any) -> dict[str, Any]:
     claim: dict[str, Any] = {
         "claim_id": "c1",
         "field": "condition",
-        "evidence_paths": ["$.decision.expression"],
-        "evidence_ids": ["ev-1"],
+        "evidence_refs": [_decision_alias()],
     }
     claim.update(claim_overrides)
     return _valid_payload(claims=[claim])
 
 
-def test_invented_evidence_id_initiates_repair(
+def test_unknown_evidence_alias_initiates_repair(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """checkpoint correctivo: `check_evidence_references` corre DESPUES de
-    `assemble_rule_draft` y ANTES de aceptar el draft -- un evidence_id
-    que no existe en `ContextPackage.evidence` es tratado como error
-    reparable de contenido estructurado (mismo `ValidationIssue`, mismo
-    ciclo), nunca delegado exclusivamente a GUARDRAILS_APPLIED."""
-    invented = _payload_with_claim(evidence_ids=["ev-does-not-exist"])
-    calls = _install_fake_client(monkeypatch, [invented, _payload_with_claim()])
+    """checkpoint correctivo (catalogo de alias): un alias que no existe
+    en el catalogo del candidato es un error estructural reparable --
+    igual que un campo faltante o de tipo invalido, y con el mismo ciclo
+    acotado -- nunca se corrige por similitud ni se delega
+    exclusivamente a GUARDRAILS_APPLIED."""
+    unknown_alias = _payload_with_claim(evidence_refs=["E999"])
+    calls = _install_fake_client(monkeypatch, [unknown_alias, _payload_with_claim()])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
 
     warnings = run_rule_drafts_generated_stage(**kwargs)
@@ -781,11 +821,11 @@ def test_invented_evidence_id_initiates_repair(
     assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
 
 
-def test_invented_evidence_id_never_promoted_when_repair_exhausted(
+def test_unknown_evidence_alias_never_promoted_when_repair_exhausted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    invented = _payload_with_claim(evidence_ids=["ev-does-not-exist"])
-    calls = _install_fake_client(monkeypatch, [invented, invented, invented])
+    unknown_alias = _payload_with_claim(evidence_refs=["E999"])
+    calls = _install_fake_client(monkeypatch, [unknown_alias, unknown_alias, unknown_alias])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
 
     with pytest.raises(RuleDraftGenerationError) as excinfo:
@@ -793,15 +833,20 @@ def test_invented_evidence_id_never_promoted_when_repair_exhausted(
 
     assert len(calls) == 3
     issues = excinfo.value.validation_errors
-    assert any(issue.type == "unknown_evidence_id" for issue in issues)
+    assert any(issue.type == "unknown_evidence_alias" for issue in issues)
     assert not kwargs["rule_draft_dir"].exists()
 
 
-def test_invented_evidence_path_initiates_repair(
+def test_direct_evidence_reference_initiates_repair(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    invented = _payload_with_claim(evidence_paths=["$.decision.does_not_exist"])
-    calls = _install_fake_client(monkeypatch, [invented, _payload_with_claim()])
+    """El modelo desobedece el prompt y devuelve evidence_ids/
+    evidence_paths reales directamente en vez de evidence_refs -- se
+    rechaza como forbidden_direct_evidence_reference y entra al mismo
+    ciclo de reparacion acotado que cualquier otro fallo estructural."""
+    direct_reference = _payload_with_claim(evidence_ids=["ev-1"], evidence_paths=["$.decision"])
+    del direct_reference["claims"][0]["evidence_refs"]
+    calls = _install_fake_client(monkeypatch, [direct_reference, _payload_with_claim()])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
 
     warnings = run_rule_drafts_generated_stage(**kwargs)
@@ -810,11 +855,14 @@ def test_invented_evidence_path_initiates_repair(
     assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
 
 
-def test_invented_evidence_path_never_promoted_when_repair_exhausted(
+def test_direct_evidence_reference_never_promoted_when_repair_exhausted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    invented = _payload_with_claim(evidence_paths=["$.decision.does_not_exist"])
-    calls = _install_fake_client(monkeypatch, [invented, invented, invented])
+    direct_reference = _payload_with_claim(evidence_ids=["ev-1"], evidence_paths=["$.decision"])
+    del direct_reference["claims"][0]["evidence_refs"]
+    calls = _install_fake_client(
+        monkeypatch, [direct_reference, direct_reference, direct_reference]
+    )
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
 
     with pytest.raises(RuleDraftGenerationError) as excinfo:
@@ -822,17 +870,18 @@ def test_invented_evidence_path_never_promoted_when_repair_exhausted(
 
     assert len(calls) == 3
     issues = excinfo.value.validation_errors
-    assert any(issue.type == "unknown_evidence_path" for issue in issues)
+    assert any(issue.type == "forbidden_direct_evidence_reference" for issue in issues)
     assert not kwargs["rule_draft_dir"].exists()
 
 
-def test_evidence_path_prefix_or_partial_match_is_not_accepted(
+def test_evidence_alias_prefix_or_partial_match_is_not_accepted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # "$.decision" (sin ".expression") es un prefijo real del path
-    # correcto, pero NUNCA se acepta como coincidencia parcial: debe
-    # tratarse como invalido igual que un path inventado.
-    prefix_only = _payload_with_claim(evidence_paths=["$.decisio"])
+    # Un alias truncado (prefijo real de un alias valido) NUNCA se acepta
+    # como coincidencia parcial: debe tratarse como alias inexistente,
+    # igual que uno completamente inventado.
+    alias = _decision_alias()
+    prefix_only = _payload_with_claim(evidence_refs=[alias[:-1]])
     calls = _install_fake_client(monkeypatch, [prefix_only, _payload_with_claim()])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
 
@@ -842,13 +891,50 @@ def test_evidence_path_prefix_or_partial_match_is_not_accepted(
     assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
 
 
+def test_regression_clegar01_ce10_unknown_alias_then_repaired_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regresion exacta del incidente real (Programa CLEGAR01, Parrafo
+    VALIDAR-COBERTURA-GAR-PARA, Regla CE10): antes del catalogo de alias,
+    el modelo copiaba mal un `evidence_id` real y la reparacion
+    estructural (basada en listas independientes de ids/paths permitidos)
+    fallaba dos veces seguidas. Con el catalogo, el primer intento cita un
+    alias inexistente (`E999`) -- rechazado como `unknown_evidence_alias`
+    -- y la reparacion cita el alias real correcto: el RuleDraft final
+    queda valido, con evidence_id/evidence_path reales, y sin rastro de
+    `E999` ni del alias en si en el artefacto persistido."""
+    alias = _decision_alias()
+    first_attempt = _payload_with_claim(evidence_refs=["E999"])
+    repaired_attempt = _payload_with_claim(evidence_refs=[alias])
+    calls = _install_fake_client(monkeypatch, [first_attempt, repaired_attempt])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    record = manifest.records[0]
+    draft_text = (kwargs["rule_draft_dir"] / record.relative_filename).read_text(
+        encoding="utf-8"
+    )
+    assert "E999" not in draft_text
+    assert "evidence_refs" not in draft_text
+    assert alias not in draft_text
+    assert "ev-1" in draft_text
+    assert "$.decision" in draft_text
+
+
 def test_repair_prompt_never_receives_full_context_package(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Marcador exclusivo del ContextPackage (nombre de programa real de
-    # _package()): el prompt de reparacion estructural nunca debe verlo,
-    # ya que no recibe el ContextPackage completo (solo candidate_id,
-    # errores, payload rechazado y listas de evidencia permitidas).
+    # El contenido de negocio libre del ContextPackage completo (nombre
+    # de aplicacion, expresion real de la decision) nunca debe llegar al
+    # prompt de reparacion estructural: solo candidate_id, errores,
+    # payload rechazado y el catalogo de alias -- que SI incluye
+    # metadata funcional (kind/source_file/lineas) por diseno, nunca el
+    # ContextPackage completo como fuente de identificadores a citar.
     missing_field_payload = _valid_payload()
     del missing_field_payload["title"]
     calls = _install_fake_client(monkeypatch, [missing_field_payload, _valid_payload()])
@@ -857,9 +943,17 @@ def test_repair_prompt_never_receives_full_context_package(
     run_rule_drafts_generated_stage(**kwargs)
 
     repair_user_message = calls[1][1].content
+    # "Transferencias" (nombre de aplicacion, scope.application) es unico
+    # del ContextPackage completo: nunca aparece en el payload rechazado
+    # (que el propio modelo escribio) ni en el catalogo de alias
+    # (metadata derivada solo de kind/source_file/lineas).
     assert "Transferencias" not in repair_user_message
-    assert "PROG1" not in repair_user_message
     assert "cand-1" in repair_user_message
+    # el catalogo de alias si viaja en este prompt (checkpoint correctivo):
+    # confirma que el mecanismo nuevo esta activo, sin exponer el
+    # evidence_id/evidence_path real detras del alias.
+    assert _decision_alias() in repair_user_message
+    assert "ev-1" not in repair_user_message
 
 
 def test_no_partial_artifacts_remain_after_exhausted_repair(
@@ -948,14 +1042,103 @@ def test_response_hash_matches_the_finally_accepted_response(
     assert record.response_hash == expected_hash
 
 
+# --- checkpoint correctivo: catalogo de alias de evidencia (multi-candidato) ---
+
+
+def test_multiple_candidates_have_independent_evidence_catalogs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cand-1 y cand-2 tienen catalogos con distinta cantidad de entradas
+    (cand-2 cita evidencia adicional propia): la numeracion de alias de
+    cand-1 no se ve afectada por cuanta evidencia tenga cand-2, y
+    viceversa -- cada candidato se resuelve unicamente contra SU propio
+    catalogo, construido una vez y reutilizado en sus propios intentos."""
+    package_1 = _package("cand-1")
+    package_2 = _package_with_extra_evidence("cand-2")
+
+    alias_1 = _decision_alias()
+    catalog_2 = build_evidence_catalog(package_2)
+    extra_alias = catalog_2.find_alias("ev-2", "$.code_slice[1]")
+    assert extra_alias is not None
+
+    calls = _install_fake_client(
+        monkeypatch,
+        [
+            _payload_with_claim(evidence_refs=[alias_1]),
+            _payload_with_claim(evidence_refs=[extra_alias]),
+        ],
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[package_1, package_2])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["2 draft(s)"]
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    assert manifest.draft_count == 2
+
+
+def test_final_persisted_draft_never_contains_evidence_refs_or_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El artefacto final en `artifacts/08-rule-drafts/` es exactamente un
+    `RuleDraft` contractual: nunca conserva `evidence_refs` ni un alias
+    `E00N`, ni siquiera tras un ciclo de reparacion (el catalogo es un
+    protocolo de conversacion en memoria, nunca se persiste)."""
+    alias = _decision_alias()
+    missing_field_payload = _payload_with_claim(evidence_refs=[alias])
+    del missing_field_payload["title"]
+    calls = _install_fake_client(
+        monkeypatch, [missing_field_payload, _payload_with_claim(evidence_refs=[alias])]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    manifest = _manifest_of(kwargs["rule_draft_dir"])
+    record = manifest.records[0]
+    draft_text = (kwargs["rule_draft_dir"] / record.relative_filename).read_text(
+        encoding="utf-8"
+    )
+    assert "evidence_refs" not in draft_text
+    assert alias not in draft_text
+    assert re.search(r"\bE\d{3}\b", draft_text) is None
+    assert "ev-1" in draft_text
+
+
+def test_writer_prompt_hash_change_forces_regeneration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cambiar el contenido de `rule_writer_user.md` (mismos placeholders,
+    texto adicional) cambia `writer_user_template_hash`: el fast-path de
+    idempotencia deja de aplicar y la etapa vuelve a invocar al LLM real,
+    incluso cuando el ContextPackage no cambio."""
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+    _install_fake_client(monkeypatch, [_valid_payload()])
+    first_warnings = run_rule_drafts_generated_stage(**kwargs)
+    assert first_warnings == ["1 draft(s)"]
+
+    user_path = kwargs["settings"].rule_writer_user_prompt_path
+    user_path.write_text(
+        user_path.read_text(encoding="utf-8") + "\nInstruccion adicional.\n", encoding="utf-8"
+    )
+    calls = _install_fake_client(monkeypatch, [_valid_payload()])
+    second_warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert second_warnings == ["1 draft(s)"]
+    assert len(calls) == 1
+
+
 # --- prompts estructurales reales (checkpoint correctivo) ---
 
 
 def test_real_structure_repair_prompts_render_without_error() -> None:
     """Carga y renderiza los archivos REALES del repositorio (nunca un
-    fixture ficticio): confirma que ambos placeholders declarados existen
-    exactamente una vez y que la sustitucion completa (los 5 placeholders
-    del prompt de usuario) no levanta `PromptTemplateError`."""
+    fixture ficticio): confirma que los 4 placeholders declarados (checkpoint
+    correctivo: catalogo de alias, un unico EVIDENCE_CATALOG_JSON en vez de
+    las dos listas independientes anteriores) existen exactamente una vez y
+    que la sustitucion completa no levanta `PromptTemplateError`."""
     system = load_prompt_template(
         REAL_STRUCTURE_REPAIR_SYSTEM_PATH,
         relative_path="prompts/rule_structure_repair_system.md",
@@ -968,8 +1151,7 @@ def test_real_structure_repair_prompts_render_without_error() -> None:
             "{{CANDIDATE_ID}}": 1,
             "{{REJECTED_PAYLOAD_JSON}}": 1,
             "{{VALIDATION_ERRORS_JSON}}": 1,
-            "{{ALLOWED_EVIDENCE_IDS_JSON}}": 1,
-            "{{ALLOWED_EVIDENCE_PATHS_JSON}}": 1,
+            "{{EVIDENCE_CATALOG_JSON}}": 1,
         },
     )
     assert system.template_text
@@ -979,8 +1161,7 @@ def test_real_structure_repair_prompts_render_without_error() -> None:
             "{{CANDIDATE_ID}}": "candidate::demo",
             "{{REJECTED_PAYLOAD_JSON}}": "{}",
             "{{VALIDATION_ERRORS_JSON}}": "{}",
-            "{{ALLOWED_EVIDENCE_IDS_JSON}}": "[]",
-            "{{ALLOWED_EVIDENCE_PATHS_JSON}}": "[]",
+            "{{EVIDENCE_CATALOG_JSON}}": "{}",
         },
     )
     assert "{{" not in rendered.effective_text
@@ -988,10 +1169,12 @@ def test_real_structure_repair_prompts_render_without_error() -> None:
 
 def test_real_structure_repair_system_prompt_example_validates_against_contract() -> None:
     """Extrae el ejemplo JSON literal embebido entre EJEMPLO_JSON_BEGIN/
-    END en el prompt REAL y lo valida contra `assemble_rule_draft` (el
-    mismo camino que usa la etapa real). Si el contrato de RuleDraft
-    cambia y el ejemplo del prompt queda desactualizado, este test falla
-    -- nunca se asume manualmente que siguen sincronizados."""
+    END en el prompt REAL (checkpoint correctivo: ahora usa `evidence_refs`
+    con un alias del catalogo, nunca evidence_ids/evidence_paths reales) y
+    lo valida contra `assemble_rule_draft_with_evidence_catalog` (el mismo
+    camino que usa la etapa real). Si el contrato de RuleDraft cambia y el
+    ejemplo del prompt queda desactualizado, este test falla -- nunca se
+    asume manualmente que siguen sincronizados."""
     text = REAL_STRUCTURE_REPAIR_SYSTEM_PATH.read_text(encoding="utf-8")
     match = _EXAMPLE_JSON_RE.search(text)
     assert match is not None, "el prompt debe contener EJEMPLO_JSON_BEGIN/END"
@@ -1001,7 +1184,11 @@ def test_real_structure_repair_system_prompt_example_validates_against_contract(
     validator_cls = jsonschema.validators.validator_for(schema)
     validator = validator_cls(schema)
 
-    rule_draft = assemble_rule_draft(example, schema_validator=validator)
+    package = _package("cand-1")
+    catalog = build_evidence_catalog(package)
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        example, catalog=catalog, package=package, schema_validator=validator
+    )
     assert rule_draft.schema_version == "2.0"
 
 

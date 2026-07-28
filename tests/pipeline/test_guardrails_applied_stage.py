@@ -9,6 +9,8 @@ Cliente LLM inyectado por monkeypatch (mismo patron que Prompt 11): sin
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,7 @@ from altamira_extractor.contracts.rule_draft_manifest import (
 from altamira_extractor.contracts.run_state import StageExecution
 from altamira_extractor.pipeline import guardrails_applied_stage as stage_module
 from altamira_extractor.pipeline.errors import GuardrailError, LlmTimeoutError
+from altamira_extractor.pipeline.evidence_catalog import build_evidence_catalog
 from altamira_extractor.pipeline.guardrails_applied_stage import run_guardrails_applied_stage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,11 +147,49 @@ def _package(candidate_id: str, decision_id: str = "dec-1") -> ContextPackage:
     )
 
 
+def _package_with_extra_evidence(candidate_id: str) -> ContextPackage:
+    """Variante de `_package()` con una segunda evidencia (`ev-2`) citada
+    por un `code_slice` adicional -- usada para confirmar que el
+    catalogo de alias de un candidato es independiente del de otro
+    dentro de la misma corrida."""
+    package = _package(candidate_id)
+    extra_evidence = EvidenceEntry(
+        evidence_id="ev-2",
+        kind="code_slice",
+        source_file="cobol/PROG1.cbl",
+        line_start=30,
+        line_end=30,
+        source_package_hash=_HASH_A,
+    )
+    extra_slice = CodeSliceEntry(
+        paragraph_id="p2",
+        paragraph="OTHER",
+        source_file="cobol/PROG1.cbl",
+        source_text="ADD 1 TO WS-CONTADOR",
+        line_start=30,
+        line_end=30,
+        inclusion_reason=InclusionReason.DATA_DEPENDENCY,
+        evidence_ids=["ev-2"],
+    )
+    return package.model_copy(
+        update={
+            "evidence": [*package.evidence, extra_evidence],
+            "code_slice": [*package.code_slice, extra_slice],
+        }
+    )
+
+
 def _filename(candidate_id: str) -> str:
     return hashlib.sha256(candidate_id.encode("utf-8")).hexdigest() + ".json"
 
 
 def _valid_draft(*, evidence_id: str = "ev-1") -> RuleDraft:
+    # evidence_paths usa el path de CONTENEDOR ("$.decision", no un campo
+    # escalar interno): asi coincide con la granularidad que
+    # `build_evidence_catalog` usa para sus entradas, y `evidence_id="ev-1"`
+    # (el caso valido) resuelve a un alias real cuando
+    # `redact_rule_draft_for_prompt` lo redacta para el prompt de
+    # reparacion de guardrail.
     return RuleDraft(
         schema_version="2.0",
         title="Titulo",
@@ -158,13 +199,13 @@ def _valid_draft(*, evidence_id: str = "ev-1") -> RuleDraft:
         parameters=[],
         effect="Efecto",
         parameter_source=None,
-        traceability=["ev-1"],
+        traceability=["Evidencia trazada mediante el catalogo de alias del candidato"],
         limitations=["Requiere revision funcional"],
         claims=[
             Claim(
                 claim_id="c1",
                 field=ClaimField.CONDITION,
-                evidence_paths=["$.decision.expression"],
+                evidence_paths=["$.decision"],
                 evidence_ids=[evidence_id],
             )
         ],
@@ -269,10 +310,18 @@ def _write_repair_prompt_files(tmp_path: Path) -> tuple[Path, Path]:
     user_path.write_text(
         "CONTEXT:\n{{CONTEXT_PACKAGE_JSON}}\n\n"
         "REJECTED:\n{{REJECTED_RULE_DRAFT_JSON}}\n\n"
-        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n",
+        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n\n"
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n",
         encoding="utf-8",
     )
     return system_path, user_path
+
+
+def _decision_alias() -> str:
+    catalog = build_evidence_catalog(_package("cand-1"))
+    alias = catalog.find_alias("ev-1", "$.decision")
+    assert alias is not None
+    return alias
 
 
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:
@@ -301,19 +350,28 @@ def _valid_repair_payload(**overrides: Any) -> dict[str, Any]:
         "parameters": [],
         "effect": "Efecto",
         "parameter_source": None,
-        "traceability": ["ev-1"],
+        "traceability": ["Evidencia trazada mediante el catalogo de alias del candidato"],
         "limitations": ["Requiere revision funcional"],
         "claims": [
             {
                 "claim_id": "c1",
                 "field": "condition",
-                "evidence_paths": ["$.decision.expression"],
-                "evidence_ids": ["ev-1"],
+                "evidence_refs": [_decision_alias()],
             }
         ],
     }
     payload.update(overrides)
     return payload
+
+
+def _still_bad_repair_payload() -> dict[str, Any]:
+    """Respuesta de reparacion que sigue siendo invalida (checkpoint
+    correctivo: un alias inexistente, nunca un evidence_id/evidence_path
+    directo -- el modelo ya no puede inventar esos valores, solo un
+    alias que no resuelve contra el catalogo)."""
+    return _valid_repair_payload(
+        claims=[{"claim_id": "c1", "field": "condition", "evidence_refs": ["E999"]}]
+    )
 
 
 def _install_fake_client(
@@ -525,6 +583,40 @@ def test_repair_succeeds_within_budget(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert len(record.repair_response_hashes) == 1
 
 
+def test_repair_prompt_rejected_draft_never_exposes_real_evidence_id_or_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """checkpoint correctivo (catalogo de alias): `current_draft.
+    to_stable_json()` ya NO se envia directo al modelo durante una
+    reparacion de guardrail -- `redact_rule_draft_for_prompt` lo
+    convierte primero a `evidence_refs` (alias), para que el propio
+    ejemplo de "borrador rechazado" nunca filtre el evidence_id/
+    evidence_path real (lo que reintroduciria el problema original en
+    esta capa). El ContextPackage completo SI viaja en este prompt (por
+    diseno, siempre lo hizo: la reparacion de guardrail necesita
+    contexto funcional completo) -- por eso la asercion se limita a la
+    seccion REJECTED, no al mensaje completo."""
+    bad_draft = _valid_draft(evidence_id="ev-nonexistent")
+    alias = _decision_alias()
+    calls = _install_fake_client(monkeypatch, [_valid_repair_payload()])
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
+    )
+
+    run_guardrails_applied_stage(**kwargs)
+
+    repair_user_message = calls[0][1].content
+    rejected_section = repair_user_message.split("REJECTED:\n", 1)[1].split(
+        "\n\nVIOLATIONS:", 1
+    )[0]
+    assert "evidence_ids" not in rejected_section
+    assert "evidence_paths" not in rejected_section
+    assert "ev-nonexistent" not in rejected_section
+    assert "evidence_refs" in rejected_section
+    # el catalogo de alias si viaja (checkpoint correctivo activo).
+    assert alias in repair_user_message
+
+
 def test_successful_repair_preserves_produced_hash_and_final_hash_differs_by_status(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -602,16 +694,7 @@ def test_exhausting_repairs_without_success_is_fatal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     bad_draft = _valid_draft(evidence_id="ev-nonexistent")
-    still_bad_payload = _valid_repair_payload(
-        claims=[
-            {
-                "claim_id": "c1",
-                "field": "condition",
-                "evidence_paths": ["$.decision.expression"],
-                "evidence_ids": ["ev-still-nonexistent"],
-            }
-        ]
-    )
+    still_bad_payload = _still_bad_repair_payload()
     _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
     kwargs = _base_kwargs(
         tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
@@ -623,6 +706,103 @@ def test_exhausting_repairs_without_success_is_fatal(
     assert not kwargs["guardrail_dir"].exists()
 
 
+# --- checkpoint correctivo: observabilidad de fallos de reparacion ---
+
+
+def _failure_diagnostics_path(kwargs: dict[str, Any]) -> Path:
+    return kwargs["guardrail_dir"].parent / "guardrails-failure-diagnostics.json"
+
+
+def test_exhausted_repair_persists_failure_diagnostics_without_promoting_guardrail_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """checkpoint correctivo (observabilidad de fallos de reparacion):
+    cuando un candidato agota LLM_REPAIR_ATTEMPTS, un artefacto de
+    diagnostico NO contractual (hermano de `09-guardrails/`, nunca
+    dentro) sobrevive con la violation real -- sin comprometer la
+    atomicidad del directorio contractual, que sigue sin promoverse."""
+    bad_draft = _valid_draft(evidence_id="ev-nonexistent")
+    still_bad_payload = _still_bad_repair_payload()
+    _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
+    )
+
+    with pytest.raises(GuardrailError):
+        run_guardrails_applied_stage(**kwargs)
+
+    assert not kwargs["guardrail_dir"].exists()
+    diagnostics_path = _failure_diagnostics_path(kwargs)
+    assert diagnostics_path.is_file()
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+
+    assert diagnostics["candidate_id"] == "cand-1"
+    assert diagnostics["attempt_count"] == 2
+    assert diagnostics["last_verdict"] == "REJECTED"
+    assert diagnostics["response_hashes"]
+    assert len(diagnostics["response_hashes"]) == 2
+    assert diagnostics["violations"]
+    violation = diagnostics["violations"][0]
+    assert {"violation_id", "rule", "field", "message", "severity"} <= violation.keys()
+    assert diagnostics["claims"]
+
+    # nunca se persiste el prompt efectivo ni la respuesta cruda: solo
+    # identificadores, hashes y mensajes ya sanitizados por el guardrail.
+    raw = json.dumps(diagnostics)
+    assert "EVIDENCE_CATALOG" not in raw
+    assert "Corrige el RuleDraft rechazado" not in raw
+
+
+def test_stale_failure_diagnostics_are_cleared_when_next_run_succeeds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Un diagnostico de una corrida ANTERIOR fallida no debe sobrevivir
+    indefinidamente: en cuanto se reintenta (con exito o no), el
+    artefacto se limpia primero y solo se reescribe si ESA corrida
+    tambien falla."""
+    bad_draft = _valid_draft(evidence_id="ev-nonexistent")
+    still_bad_payload = _still_bad_repair_payload()
+    _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
+    )
+    with pytest.raises(GuardrailError):
+        run_guardrails_applied_stage(**kwargs)
+    assert _failure_diagnostics_path(kwargs).is_file()
+
+    # Segunda corrida: el draft ahora es valido (sin violaciones) -- el
+    # diagnostico obsoleto de la corrida anterior debe desaparecer.
+    _write_rule_draft_directory(
+        kwargs["rule_draft_dir"], kwargs["context_dir"], {"cand-1": _valid_draft()}
+    )
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    run_guardrails_applied_stage(**kwargs)
+
+    assert not _failure_diagnostics_path(kwargs).is_file()
+    assert kwargs["guardrail_dir"].exists()
+
+
+def test_exhausted_repair_never_promotes_partial_guardrail_dir_even_with_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Doble verificacion de atomicidad: ni el directorio contractual ni
+    # ningun temporal huerfano sobreviven, incluso con el diagnostico
+    # nuevo escribiendose al lado.
+    bad_draft = _valid_draft(evidence_id="ev-nonexistent")
+    still_bad_payload = _still_bad_repair_payload()
+    _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
+    )
+
+    with pytest.raises(GuardrailError):
+        run_guardrails_applied_stage(**kwargs)
+
+    assert not kwargs["guardrail_dir"].exists()
+    assert list(tmp_path.glob("09-guardrails.tmp-*")) == []
+    assert _failure_diagnostics_path(kwargs).is_file()
+
+
 # --- fail-fast: no procesa candidatos restantes ---
 
 
@@ -631,16 +811,7 @@ def test_fail_fast_stops_before_remaining_candidates(
 ) -> None:
     bad_draft_1 = _valid_draft(evidence_id="ev-nonexistent")
     valid_draft_2 = _valid_draft()
-    still_bad_payload = _valid_repair_payload(
-        claims=[
-            {
-                "claim_id": "c1",
-                "field": "condition",
-                "evidence_paths": ["$.decision.expression"],
-                "evidence_ids": ["ev-still-nonexistent"],
-            }
-        ]
-    )
+    still_bad_payload = _still_bad_repair_payload()
     # cand-1 agota 2 reparaciones (siempre invalido); cand-2 nunca deberia
     # ser procesado (fail-fast). Si el fake client se llamara una tercera
     # vez, la cola vacia dispara un AssertionError.
@@ -678,16 +849,7 @@ def test_previous_valid_output_preserved_when_new_run_fails(
     _write_rule_draft_directory(
         kwargs["rule_draft_dir"], kwargs["context_dir"], {"cand-1": bad_draft}
     )
-    still_bad_payload = _valid_repair_payload(
-        claims=[
-            {
-                "claim_id": "c1",
-                "field": "condition",
-                "evidence_paths": ["$.decision.expression"],
-                "evidence_ids": ["ev-still-nonexistent"],
-            }
-        ]
-    )
+    still_bad_payload = _still_bad_repair_payload()
     _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
 
     with pytest.raises(GuardrailError):
@@ -802,6 +964,99 @@ def test_all_candidates_from_08_appear_exactly_once_in_09(
     assert len(candidate_ids) == len(set(candidate_ids))
     for record in manifest.records:
         assert (kwargs["guardrail_dir"] / record.relative_filename).is_file()
+
+
+def test_multiple_candidates_have_independent_evidence_catalogs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cand-1 y cand-2 tienen catalogos con distinta cantidad de entradas
+    (cand-2 cita evidencia adicional propia): cada candidato repara
+    contra SU propio catalogo, construido una vez y reutilizado en sus
+    propios intentos -- sin que la evidencia de un candidato perturbe la
+    numeracion de alias del otro."""
+    package_1 = _package("cand-1")
+    package_2 = _package_with_extra_evidence("cand-2")
+    bad_draft_1 = _valid_draft(evidence_id="ev-nonexistent")
+    bad_draft_2 = RuleDraft(
+        schema_version="2.0",
+        title="Titulo",
+        context="Contexto",
+        statement="Enunciado",
+        condition="WS-COD = 'R001'",
+        parameters=[],
+        effect="Efecto",
+        parameter_source=None,
+        traceability=["Evidencia trazada mediante el catalogo de alias del candidato"],
+        limitations=["Requiere revision funcional"],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[1]"],
+                evidence_ids=["ev-nonexistent"],
+            )
+        ],
+        evidence_validation_status=EvidenceValidationStatus.PENDING,
+    )
+
+    catalog_2 = build_evidence_catalog(package_2)
+    extra_alias = catalog_2.find_alias("ev-2", "$.code_slice[1]")
+    assert extra_alias is not None
+
+    calls = _install_fake_client(
+        monkeypatch,
+        [
+            _valid_repair_payload(),
+            _valid_repair_payload(
+                claims=[
+                    {"claim_id": "c1", "field": "condition", "evidence_refs": [extra_alias]}
+                ]
+            ),
+        ],
+    )
+    kwargs = _base_kwargs(
+        tmp_path,
+        packages=[package_1, package_2],
+        drafts={"cand-1": bad_draft_1, "cand-2": bad_draft_2},
+    )
+
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["2 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.guardrail_count == 2
+
+
+def test_final_guardrail_artifact_never_contains_evidence_refs_or_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El `GuardrailCandidateArtifact` persistido en
+    `artifacts/09-guardrails/` es siempre el contrato real: nunca
+    conserva `evidence_refs` ni un alias `E00N` (el catalogo es un
+    protocolo de conversacion en memoria, nunca se persiste)."""
+    bad_draft = _valid_draft(evidence_id="ev-nonexistent")
+    alias = _decision_alias()
+    _install_fake_client(monkeypatch, [_valid_repair_payload()])
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
+    )
+
+    run_guardrails_applied_stage(**kwargs)
+
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    record = manifest.records[0]
+    artifact_text = (kwargs["guardrail_dir"] / record.relative_filename).read_text(
+        encoding="utf-8"
+    )
+    assert "evidence_refs" not in artifact_text
+    assert alias not in artifact_text
+    assert re.search(r"\bE\d{3}\b", artifact_text) is None
+    assert "ev-1" in artifact_text
 
 
 def test_manifest_repair_response_hashes_match_persisted_artifact_history(

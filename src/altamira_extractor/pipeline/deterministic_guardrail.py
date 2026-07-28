@@ -28,7 +28,7 @@ from ..contracts.enums import BatchContextStatus, ClaimField, Severity
 from ..contracts.guardrail import GuardrailViolation
 from ..contracts.rule_draft import Claim, RuleDraft
 
-GUARDRAIL_VERSION = "1.1"
+GUARDRAIL_VERSION = "1.2"
 
 _PATH_TOKEN_RE = re.compile(r"\.(?P<field>[A-Za-z_][A-Za-z0-9_]*)|\[(?P<index>\d+)\]")
 
@@ -321,26 +321,52 @@ def _evidence_blob_for_claim(claim: Claim, context_dict: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _claims_by_field(claims: list[Claim]) -> dict[ClaimField, list[Claim]]:
+    grouped: dict[ClaimField, list[Claim]] = {}
+    for claim in claims:
+        grouped.setdefault(claim.field, []).append(claim)
+    return grouped
+
+
 def _check_numbers_and_dates(
     claims: list[Claim], rule_draft: RuleDraft, context_dict: dict[str, Any]
 ) -> list[GuardrailViolation]:
+    """checkpoint correctivo (paquete multiprograma, candidato CE10):
+    un `field` de `RuleDraft` puede estar respaldado por MAS DE UN claim
+    a la vez (p. ej. uno cita la evidencia de control-flow que llega al
+    paragraph, otro cita el statement exacto con el literal numerico) --
+    eso es una estructura de claims perfectamente valida, nunca prohibida
+    por el contrato. La version anterior de este check evaluaba cada
+    claim de forma AISLADA contra el texto COMPLETO del field, lo que
+    producia un falso positivo cuando el numero/fecha del field estaba
+    respaldado por la evidencia de OTRO claim del mismo field: el
+    `RuleDraft` quedaba indefinidamente irreparable (el modelo no puede
+    satisfacer una expectativa incorrecta sin borrar un claim
+    legitimo). La correccion agrega la evidencia de TODOS los claims que
+    comparten el mismo field antes de exigir que el numero/fecha
+    aparezca LITERALMENTE en ese conjunto -- nunca se relaja la exigencia
+    de aparicion literal, solo se corrige el alcance de "la evidencia
+    citada" de un unico claim al del field completo."""
     violations: list[GuardrailViolation] = []
-    for claim in claims:
-        text = _draft_text_for_claim_field(rule_draft, claim.field)
+    for field, field_claims in _claims_by_field(claims).items():
+        text = _draft_text_for_claim_field(rule_draft, field)
         if not text:
             continue
-        evidence_blob = _evidence_blob_for_claim(claim, context_dict)
+        evidence_blob = " ".join(
+            _evidence_blob_for_claim(claim, context_dict) for claim in field_claims
+        )
+        representative_claim_id = min(claim.claim_id for claim in field_claims)
 
         iso_dates = set(_ISO_DATE_TOKEN_RE.findall(text))
         for date_token in sorted(iso_dates):
             if date_token not in evidence_blob:
                 violations.append(
                     _violation(
-                        f"unsupported_explicit_date::{claim.claim_id}::{date_token}",
+                        f"unsupported_explicit_date::{representative_claim_id}::{date_token}",
                         "unsupported_explicit_date",
-                        claim.field.value,
+                        field.value,
                         f"la fecha {date_token!r} no aparece en la evidencia citada "
-                        "por el claim",
+                        "por los claims de este campo",
                         Severity.ERROR,
                     )
                 )
@@ -349,9 +375,9 @@ def _check_numbers_and_dates(
         for ambiguous_token in sorted(ambiguous_dates):
             violations.append(
                 _violation(
-                    f"ambiguous_date_format::{claim.claim_id}::{ambiguous_token}",
+                    f"ambiguous_date_format::{representative_claim_id}::{ambiguous_token}",
                     "ambiguous_date_format",
-                    claim.field.value,
+                    field.value,
                     f"formato de fecha ambiguo {ambiguous_token!r}: no se analiza de "
                     "forma determinista y segura",
                     Severity.WARNING,
@@ -366,11 +392,11 @@ def _check_numbers_and_dates(
             if number_token not in evidence_blob:
                 violations.append(
                     _violation(
-                        f"unsupported_explicit_number::{claim.claim_id}::{number_token}",
+                        f"unsupported_explicit_number::{representative_claim_id}::{number_token}",
                         "unsupported_explicit_number",
-                        claim.field.value,
+                        field.value,
                         f"el numero {number_token!r} no aparece en la evidencia citada "
-                        "por el claim",
+                        "por los claims de este campo",
                         Severity.ERROR,
                     )
                 )

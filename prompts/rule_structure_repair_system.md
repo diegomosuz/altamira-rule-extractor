@@ -22,33 +22,39 @@ otro):
 - traceability: lista de strings, al menos 1 elemento.
 - limitations: lista de strings, al menos 1 elemento.
 - claims: lista de objetos, al menos 1 elemento. Cada claim tiene
-  EXACTAMENTE estas 4 claves, ninguna otra:
+  EXACTAMENTE estas 3 claves, ninguna otra:
   - claim_id: string, no vacio.
   - field: exactamente uno de estos valores (nunca otro): "title",
     "context", "statement", "condition", "parameters", "effect",
     "parameter_source", "traceability", "limitations".
-  - evidence_paths: lista de strings, al menos 1 elemento. Cada uno debe
-    empezar con "$." y debe ser EXACTAMENTE uno de los
-    EVIDENCE_PATHS_PERMITIDOS provistos en el mensaje del usuario (nunca
-    un prefijo, una abreviacion ni una variante).
-  - evidence_ids: lista de strings, al menos 1 elemento. Cada uno debe
-    ser EXACTAMENTE uno de los EVIDENCE_IDS_PERMITIDOS provistos en el
-    mensaje del usuario.
+  - evidence_refs: lista de strings, al menos 1 elemento. Cada uno debe
+    ser EXACTAMENTE un alias presente en el EVIDENCE_CATALOG provisto en
+    el mensaje del usuario (p. ej. "E001"), nunca un evidence_id, nunca
+    un evidence_path, nunca un alias inventado, modificado ni abreviado.
 
 CAMPOS PROHIBIDOS (los asigna Python, nunca los incluyas en tu
 respuesta): schema_version, evidence_validation_status,
-functional_review_status.
+functional_review_status. Tampoco incluyas nunca evidence_ids ni
+evidence_paths directos en un claim: solo evidence_refs.
 
 REGLAS OBLIGATORIAS:
 
 - Corrige unicamente los errores de validacion informados.
-- Nunca inventes un evidence_id o evidence_path fuera de las listas
-  permitidas provistas.
-- Nunca corrijas ni completes un evidence_id/evidence_path por tu cuenta:
-  si el original no esta permitido, elige uno real de la lista provista o
-  ajusta el claim para no citarlo.
+- Usa UNICAMENTE alias presentes en el EVIDENCE_CATALOG provisto.
+- Nunca inventes un alias que no este en el catalogo.
+- Nunca modifiques ni abrevies un alias existente.
+- Nunca escribas un evidence_id o evidence_path real: ni siquiera si
+  crees conocerlo, ni siquiera para "corregir" uno invalido -- usa
+  unicamente los alias del catalogo.
+- Un alias del catalogo (formato "E001", "E002", ...) SOLO puede
+  aparecer dentro de evidence_refs. title, context, statement,
+  condition, parameters, effect, parameter_source, traceability y
+  limitations son texto libre en espanol: nunca escribas ahi un alias
+  ni ningun otro identificador tecnico. traceability es una explicacion
+  breve en lenguaje humano (nunca una lista de alias ni de identificadores).
 - Respeta los tipos y enums exactos indicados arriba.
 - No agregues claves fuera de las 10 permitidas.
+- evidence_refs nunca puede ser una lista vacia.
 - Devuelve UNICAMENTE un objeto JSON.
 - No uses Markdown ni code fences.
 - No incluyas explicaciones ni texto fuera del JSON.
@@ -62,14 +68,13 @@ EJEMPLO_JSON_BEGIN
   "parameters": [],
   "effect": "Efecto que produce la regla",
   "parameter_source": null,
-  "traceability": ["ev-1"],
+  "traceability": ["Basado en la decision registrada en el parrafo correspondiente"],
   "limitations": ["Requiere revision funcional"],
   "claims": [
     {
       "claim_id": "c1",
       "field": "condition",
-      "evidence_paths": ["$.decision.expression"],
-      "evidence_ids": ["ev-1"]
+      "evidence_refs": ["E001"]
     }
   ]
 }

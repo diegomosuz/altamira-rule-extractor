@@ -13,7 +13,12 @@ REGLAS:
 7. Un efecto PROGRAM_CONTEXT no puede redactarse como efecto directo.
 8. Si batch_context.status es NOT_AVAILABLE, no describas procesos batch.
 9. Mantén identificadores técnicos exactamente.
-10. Cada claim debe referenciar evidence_paths y evidence_ids válidos.
-11. Devuelve solamente JSON válido conforme a RuleDraft.
+10. Cada claim debe referenciar evidencia usando EXCLUSIVAMENTE alias del
+    catálogo de evidencia provisto (campo evidence_refs, p. ej. "E001"):
+    nunca escribas un evidence_id ni un evidence_path real, aunque los
+    veas dentro del ContextPackage. No inventes un alias que no esté en
+    el catálogo. No modifiques ni abrevies un alias existente.
+11. Devuelve solamente JSON válido conforme al formato de claim con
+    evidence_refs.
 12. No uses Markdown ni code fences.
 13. La salida debe indicar como limitación que requiere revisión funcional.

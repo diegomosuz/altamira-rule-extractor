@@ -12,7 +12,21 @@ FAILED, nunca se promueve un directorio parcial ni se habilita
 MarkdownRenderer (Prompt 13).
 
 `artifacts/08-rule-drafts/` nunca se sobrescribe desde aqui: es evidencia
-inmutable de la primera respuesta aceptada del modelo."""
+inmutable de la primera respuesta aceptada del modelo.
+
+Checkpoint correctivo (catalogo de alias de evidencia): el modelo tampoco
+escribe `evidence_id`/`evidence_path` reales durante una reparacion de
+guardrail. El catalogo se construye UNA vez por candidato
+(`build_evidence_catalog(package)`, ver `evidence_catalog.py`) y se
+reutiliza en todos los intentos de ese candidato. El `RuleDraft` YA
+RESUELTO que se le muestra al modelo como "borrador rechazado"
+(`current_draft`) se redacta primero con `redact_rule_draft_for_prompt`
+-- sin esto, el modelo veria IDs/paths reales en el propio ejemplo de
+borrador rechazado y podria copiarlos, reintroduciendo el problema
+original en esta capa. La respuesta de reparacion se resuelve con
+`assemble_rule_draft_with_evidence_catalog` (nunca `assemble_rule_draft`
+directo), que aplica las mismas validaciones de siempre sin relajar
+ninguna."""
 
 from __future__ import annotations
 
@@ -49,11 +63,12 @@ from .atomic_directory_swap import (
 )
 from .deterministic_guardrail import GUARDRAIL_VERSION, evaluate_guardrail
 from .errors import GuardrailError, LlmClientError, PromptTemplateError
+from .evidence_catalog import EvidenceCatalog, build_evidence_catalog, redact_rule_draft_for_prompt
 from .llm_client import ChatMessage, LlmProfile, OpenAICompatibleChatClient, resolve_llm_profile
 from .prompt_loader import load_prompt_template, render_prompt
 from .rule_draft_assembly import (
     RuleDraftAssemblyError,
-    assemble_rule_draft,
+    assemble_rule_draft_with_evidence_catalog,
     load_rule_draft_schema,
     rule_draft_json_hash,
 )
@@ -62,10 +77,18 @@ _DIR_NAME = "09-guardrails"
 _MANIFEST_FILENAME = "guardrail-manifest.json"
 _RULE_DRAFT_MANIFEST_FILENAME = "rule-draft-manifest.json"
 _FAILURE_SUMMARY_MAX_LENGTH = 500
+# Checkpoint correctivo (observabilidad de fallos de reparacion): artefacto
+# de diagnostico NO contractual, hermano de `09-guardrails/` pero fuera de
+# el -- se escribe directo (nunca via new_temp_directory/swap_directory),
+# asi que nunca compromete la atomicidad del directorio contractual. Se
+# limpia al comienzo de cada corrida y se reescribe unicamente si esa
+# corrida vuelve a fallar.
+_FAILURE_DIAGNOSTICS_FILENAME = "guardrails-failure-diagnostics.json"
 
 _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
 _REJECTED_DRAFT_PLACEHOLDER = "{{REJECTED_RULE_DRAFT_JSON}}"
 _VIOLATIONS_PLACEHOLDER = "{{GUARDRAIL_VIOLATIONS_JSON}}"
+_EVIDENCE_CATALOG_PLACEHOLDER = "{{EVIDENCE_CATALOG_JSON}}"
 
 
 def _verify_guardrails_applied_precondition(run_stages: list[StageExecution]) -> None:
@@ -193,6 +216,7 @@ def _load_repair_prompts(settings: Settings) -> tuple[str, str, str, str]:
                 _CONTEXT_PACKAGE_PLACEHOLDER: 1,
                 _REJECTED_DRAFT_PLACEHOLDER: 1,
                 _VIOLATIONS_PLACEHOLDER: 1,
+                _EVIDENCE_CATALOG_PLACEHOLDER: 1,
             },
         )
     except PromptTemplateError as exc:
@@ -306,10 +330,63 @@ def _violations_payload(
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _build_failure_diagnostics(
+    *,
+    candidate_id: str,
+    package: ContextPackage,
+    current_draft: RuleDraft,
+    violations: list[GuardrailViolation],
+    repair_history: list[RepairAttemptRecord],
+) -> dict[str, Any]:
+    """Resumen sanitizado (checkpoint correctivo: observabilidad de
+    fallos de reparacion) del ULTIMO estado de un candidato que agoto
+    `LLM_REPAIR_ATTEMPTS`: nunca incluye el prompt efectivo, el body
+    crudo de ninguna respuesta ni credenciales -- solo identificadores,
+    violations ya sanitizadas (`GuardrailViolation.message` nunca cita
+    el payload del modelo), los claims del ultimo `RuleDraft` intentado
+    (evidence_ids/evidence_paths reales -- el mismo contenido que ya se
+    habria persistido en `artifacts/09-guardrails/` de haber tenido
+    exito, nunca un secreto) y los `response_hash` ya calculados por
+    cada intento. El llamador decide donde persistir esto (nunca dentro
+    de `artifacts/09-guardrails/`, que debe permanecer atomico)."""
+    return {
+        "candidate_id": candidate_id,
+        "program": package.scope.program,
+        "paragraph": package.scope.paragraph,
+        "attempt_count": len(repair_history),
+        "last_verdict": GuardrailVerdict.REJECTED.value,
+        "violations": [
+            {
+                "violation_id": violation.violation_id,
+                "rule": violation.rule,
+                "field": violation.field,
+                "message": violation.message,
+                "severity": violation.severity.value,
+            }
+            for violation in violations
+        ],
+        "claims": [
+            {
+                "claim_id": claim.claim_id,
+                "field": claim.field.value,
+                "evidence_ids": list(claim.evidence_ids),
+                "evidence_paths": list(claim.evidence_paths),
+            }
+            for claim in current_draft.claims
+        ],
+        "response_hashes": [
+            attempt.response_hash
+            for attempt in repair_history
+            if attempt.response_hash is not None
+        ],
+    }
+
+
 async def _resolve_one_candidate(
     *,
     candidate_id: str,
     package: ContextPackage,
+    catalog: EvidenceCatalog,
     initial_draft: RuleDraft,
     client: OpenAICompatibleChatClient,
     repair_system_text: str,
@@ -323,7 +400,9 @@ async def _resolve_one_candidate(
     `llm_repair_attempts` veces. Devuelve el artefacto SOLO si el
     candidato alcanza EVIDENCE_VALIDATED; lanza `GuardrailError` en
     cuanto se agota el presupuesto sin exito (fail-fast: el llamador
-    detiene el procesamiento de inmediato)."""
+    detiene el procesamiento de inmediato). `catalog` -- construido UNA
+    vez por candidato por el llamador -- se reutiliza sin cambios en
+    todos los intentos de reparacion de este candidato."""
     initial_hash = rule_draft_json_hash(initial_draft)
     current_draft = initial_draft
     violations = evaluate_guardrail(current_draft, package)
@@ -361,21 +440,40 @@ async def _resolve_one_candidate(
                 repair_history=repair_history,
                 warnings=[],
             )
+            diagnostics = _build_failure_diagnostics(
+                candidate_id=candidate_id,
+                package=package,
+                current_draft=current_draft,
+                violations=violations,
+                repair_history=repair_history,
+            )
             raise GuardrailError(
                 f"candidato {candidate_id!r} agoto LLM_REPAIR_ATTEMPTS "
-                f"({llm_repair_attempts}) sin alcanzar EVIDENCE_VALIDATED"
+                f"({llm_repair_attempts}) sin alcanzar EVIDENCE_VALIDATED",
+                diagnostics=diagnostics,
             )
 
         error_count_before = sum(1 for v in violations if v.severity == Severity.ERROR)
+        # checkpoint correctivo: el borrador rechazado se muestra
+        # REDACTADO (evidence_refs, nunca IDs/paths reales) -- sin esto
+        # el modelo veria identificadores reales en su propio ejemplo de
+        # "borrador rechazado" y podria copiarlos, reintroduciendo el
+        # problema original en esta etapa.
+        redacted_current_draft = redact_rule_draft_for_prompt(current_draft, catalog)
+        redacted_current_draft_json = (
+            json.dumps(redacted_current_draft, ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n"
+        )
         rendered_user = render_prompt(
             repair_user_template_text,
             {
                 _CONTEXT_PACKAGE_PLACEHOLDER: package.to_stable_json(),
-                _REJECTED_DRAFT_PLACEHOLDER: current_draft.to_stable_json(),
+                _REJECTED_DRAFT_PLACEHOLDER: redacted_current_draft_json,
                 _VIOLATIONS_PLACEHOLDER: _violations_payload(
                     violations,
                     previous_attempt_failed_structurally=previous_attempt_failed_structurally,
                 ),
+                _EVIDENCE_CATALOG_PLACEHOLDER: catalog.to_prompt_json(),
             },
         )
         messages = [
@@ -391,7 +489,9 @@ async def _resolve_one_candidate(
             ) from exc
 
         try:
-            repaired_draft = assemble_rule_draft(payload, schema_validator=schema_validator)
+            repaired_draft = assemble_rule_draft_with_evidence_catalog(
+                payload, catalog=catalog, package=package, schema_validator=schema_validator
+            )
         except RuleDraftAssemblyError as exc:
             repair_history.append(
                 RepairAttemptRecord(
@@ -472,9 +572,15 @@ async def _resolve_all_candidates(
     records: list[GuardrailRecord] = []
     async with OpenAICompatibleChatClient(profile) as client:
         for candidate_id, package, initial_draft, context_hash in candidates:
+            # Construido UNA vez por candidato, antes de cualquier intento
+            # de reparacion: la numeracion de alias debe permanecer
+            # estable durante todo el ciclo de reparacion de este
+            # candidato.
+            catalog = build_evidence_catalog(package)
             artifact = await _resolve_one_candidate(
                 candidate_id=candidate_id,
                 package=package,
+                catalog=catalog,
                 initial_draft=initial_draft,
                 client=client,
                 repair_system_text=repair_system_text,
@@ -523,6 +629,11 @@ def run_guardrails_applied_stage(
 
     artifacts_dir = guardrail_dir.parent
     cleanup_orphan_directories(artifacts_dir, _DIR_NAME)
+    # Un diagnostico de una corrida ANTERIOR fallida queda obsoleto en
+    # cuanto se intenta de nuevo (exitosa o no): se limpia aqui y solo se
+    # reescribe si ESTA corrida tambien falla (ver el `except GuardrailError`
+    # mas abajo).
+    (artifacts_dir / _FAILURE_DIAGNOSTICS_FILENAME).unlink(missing_ok=True)
 
     context_manifest = _load_context_manifest(context_dir, source_package_hash=source_package_hash)
     context_records_by_id = {
@@ -613,10 +724,22 @@ def run_guardrails_applied_stage(
                 temp_dir=temp_dir,
             )
         )
-    except BaseException:
+    except GuardrailError as exc:
         # Fail-fast: cualquier candidato REJECTED (o fallo de
         # infraestructura) descarta TODO el directorio temporal de
         # inmediato; los candidatos restantes nunca llegan a llamarse.
+        # Si el candidato agoto la reparacion (ver `diagnostics`), el
+        # resumen sanitizado sobrevive en un artefacto NO contractual
+        # (nunca dentro de `09-guardrails/`) para que el fallo sea
+        # diagnosticable sin depender unicamente del mensaje de texto.
+        discard_temp_directory(temp_dir)
+        if exc.diagnostics is not None:
+            (artifacts_dir / _FAILURE_DIAGNOSTICS_FILENAME).write_text(
+                json.dumps(exc.diagnostics, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        raise
+    except BaseException:
         discard_temp_directory(temp_dir)
         raise
 

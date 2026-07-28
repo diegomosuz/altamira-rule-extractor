@@ -89,6 +89,7 @@ from altamira_extractor.contracts.guardrail_candidate import GuardrailCandidateA
 from altamira_extractor.contracts.guardrail_manifest import GuardrailDirectoryManifest
 from altamira_extractor.contracts.invariants import InvariantArtifact
 from altamira_extractor.contracts.rules_manifest import RulesDirectoryManifest
+from altamira_extractor.pipeline.evidence_catalog import build_evidence_catalog
 from altamira_extractor.pipeline.markdown_renderer import _MANDATORY_DISCLAIMER
 from altamira_extractor.pipeline.runner import run_ingestion
 
@@ -128,9 +129,12 @@ def _install_dynamic_rule_draft_fake_client(
     """Version de `e2e_support.install_fake_client` especifica de este
     E2E: en vez de responder con un payload fijo desde una cola, lee el
     ContextPackage real recibido en cada llamada y arma el RuleDraft
-    referenciando los `evidence_id` REALES de esta ejecucion (ver
-    docstring del modulo: son dinamicos porque `source_package_hash`
-    varia por ejecucion a proposito)."""
+    referenciando ALIAS reales del catalogo de evidencia de esta
+    ejecucion (checkpoint correctivo: `evidence_refs`, nunca
+    `evidence_id`/`evidence_path` reales -- ver docstring del modulo:
+    ambos son dinamicos porque `source_package_hash` varia por ejecucion
+    a proposito). `build_evidence_catalog` es la MISMA funcion que usa
+    produccion, nunca reimplementada aqui."""
     calls: list[list[Any]] = []
 
     class _DynamicFakeClient:
@@ -146,23 +150,35 @@ def _install_dynamic_rule_draft_fake_client(
         async def complete(self, messages: list[Any]) -> dict[str, Any]:
             calls.append(messages)
             user_message = next(message for message in messages if message.role == "user")
-            context_package = _extract_context_package_json(user_message.content)
-            decision_evidence_id = _evidence_id_for_kind(context_package, "decision")
-            return_code_evidence_id = _evidence_id_for_kind(context_package, "return_code_effect")
+            context_package_dict = _extract_context_package_json(user_message.content)
+            package = ContextPackage.model_validate(context_package_dict)
+            catalog = build_evidence_catalog(package)
+            decision_evidence_id = _evidence_id_for_kind(context_package_dict, "decision")
+            return_code_evidence_id = _evidence_id_for_kind(
+                context_package_dict, "return_code_effect"
+            )
+            decision_alias = next(
+                entry.alias
+                for entry in catalog.entries
+                if entry.evidence_id == decision_evidence_id
+            )
+            return_code_alias = next(
+                entry.alias
+                for entry in catalog.entries
+                if entry.evidence_id == return_code_evidence_id
+            )
             return valid_payload(
                 traceability=[decision_evidence_id],
                 claims=[
                     {
                         "claim_id": "c1",
                         "field": "condition",
-                        "evidence_paths": ["$.decision.expression"],
-                        "evidence_ids": [decision_evidence_id],
+                        "evidence_refs": [decision_alias],
                     },
                     {
                         "claim_id": "c2",
                         "field": "effect",
-                        "evidence_paths": ["$.effects.return_codes[0]"],
-                        "evidence_ids": [return_code_evidence_id],
+                        "evidence_refs": [return_code_alias],
                     },
                 ],
             )

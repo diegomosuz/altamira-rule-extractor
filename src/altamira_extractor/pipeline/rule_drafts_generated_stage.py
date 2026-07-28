@@ -17,22 +17,33 @@ ciclo acotado de reparacion (hasta `settings.llm_repair_attempts`) usando
 prompts DEDICADOS y versionados
 (`prompts/rule_structure_repair_system.md`/`rule_structure_repair_user.md`)
 -- nunca los prompts de GUARDRAILS_APPLIED (`rule_repair_*.md`), que
-reparan violaciones semanticas de guardrail, no forma. El prompt
-estructural recibe unicamente: candidate_id, el payload rechazado, los
-errores de validacion sanitizados (loc/type/msg, nunca el payload
-completo) y los evidence_id/evidence_path REALMENTE permitidos para ese
-candidato -- nunca el ContextPackage completo, nunca credenciales.
+reparan violaciones semanticas de guardrail, no forma.
 
-Solo si TODOS los intentos de reparacion tambien fallan (estructural o de
-evidencia) la etapa completa aborta: el directorio temporal se descarta
-entero, la salida canonica anterior (si existia) se conserva intacta, y
-nunca se promueve un draft parcial ni se alcanza GUARDRAILS_APPLIED. Un
-error de infraestructura (`LlmClientError`: 401/403/429/timeout/red/5xx)
-o de precondicion (perfil LLM invalido, ContextPackage/manifest con
-drift) sigue siendo SIEMPRE un fallo directo, en cualquier intento
-(inicial o de reparacion): nunca dispara ni consume el ciclo de
-reparacion, que existe unicamente para respuestas 2xx estructural o
-referencialmente invalidas.
+Checkpoint correctivo (catalogo de alias de evidencia): el modelo NUNCA
+escribe un `evidence_id`/`evidence_path` real, ni en la respuesta inicial
+ni en ninguna reparacion. Antes de la primera llamada, `build_evidence_
+catalog(package)` (ver `evidence_catalog.py`) construye, UNA sola vez por
+candidato y reutilizado en todos los intentos, un catalogo deterministico
+`E001, E002, ...` donde cada alias representa conjuntamente un
+`(evidence_id, evidence_path)` real. El modelo solo ve alias + una
+descripcion funcional (`EvidenceCatalog.to_prompt_json()`, nunca el
+ContextPackage se envia como fuente de identificadores para citar);
+`claims[].evidence_refs` (alias) se resuelve deterministicamente a
+`evidence_ids`/`evidence_paths` reales ANTES de ensamblar el RuleDraft
+(`rule_draft_assembly.assemble_rule_draft_with_evidence_catalog`). Un
+alias inexistente entra al mismo ciclo de reparacion acotado que
+cualquier otro fallo estructural -- nunca se corrige por similitud,
+prefijo o distancia de edicion.
+
+Solo si TODOS los intentos de reparacion tambien fallan (estructural,
+alias inexistente, o evidencia real inexistente) la etapa completa
+aborta: el directorio temporal se descarta entero, la salida canonica
+anterior (si existia) se conserva intacta, y nunca se promueve un draft
+parcial ni se alcanza GUARDRAILS_APPLIED. Un error de infraestructura
+(`LlmClientError`: 401/403/429/timeout/red/5xx) o de precondicion (perfil
+LLM invalido, ContextPackage/manifest con drift) sigue siendo SIEMPRE un
+fallo directo, en cualquier intento (inicial o de reparacion): nunca
+dispara ni consume el ciclo de reparacion.
 
 `RuleDraftGenerationBuilder` es de solo lectura sobre `artifacts/07-context/`:
 nunca reejecuta Q1-Q7 ni reconstruye ContextPackage."""
@@ -62,13 +73,13 @@ from .atomic_directory_swap import (
     swap_directory,
 )
 from .errors import LlmClientError, PromptTemplateError, RuleDraftGenerationError
+from .evidence_catalog import EvidenceCatalog, build_evidence_catalog
 from .llm_client import ChatMessage, LlmProfile, OpenAICompatibleChatClient, resolve_llm_profile
 from .prompt_loader import load_prompt_template, render_prompt
 from .rule_draft_assembly import (
     RuleDraftAssemblyError,
     ValidationIssue,
-    assemble_rule_draft,
-    check_evidence_references,
+    assemble_rule_draft_with_evidence_catalog,
     load_rule_draft_schema,
     rule_draft_json_hash,
 )
@@ -78,6 +89,13 @@ logger = logging.getLogger("altamira_extractor.pipeline.rule_drafts_generated_st
 _DIR_NAME = "08-rule-drafts"
 _MANIFEST_FILENAME = "rule-draft-manifest.json"
 _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
+# Catalogo de alias de evidencia (checkpoint correctivo): unico
+# placeholder compartido por el prompt de escritura inicial y el de
+# reparacion estructural -- reemplaza las dos listas independientes
+# (ALLOWED_EVIDENCE_IDS_JSON/ALLOWED_EVIDENCE_PATHS_JSON) que existian
+# antes, que nunca garantizaban que un id y un path elegidos por el
+# modelo realmente correspondieran a la misma evidencia.
+_EVIDENCE_CATALOG_PLACEHOLDER = "{{EVIDENCE_CATALOG_JSON}}"
 
 # Placeholders del prompt de reparacion ESTRUCTURAL dedicado (checkpoint
 # correctivo): deliberadamente distintos y separados de los que usa
@@ -87,8 +105,6 @@ _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
 _CANDIDATE_ID_PLACEHOLDER = "{{CANDIDATE_ID}}"
 _REJECTED_PAYLOAD_PLACEHOLDER = "{{REJECTED_PAYLOAD_JSON}}"
 _VALIDATION_ERRORS_PLACEHOLDER = "{{VALIDATION_ERRORS_JSON}}"
-_ALLOWED_EVIDENCE_IDS_PLACEHOLDER = "{{ALLOWED_EVIDENCE_IDS_JSON}}"
-_ALLOWED_EVIDENCE_PATHS_PLACEHOLDER = "{{ALLOWED_EVIDENCE_PATHS_JSON}}"
 _STRUCTURE_REPAIR_SYSTEM_FILENAME = "rule_structure_repair_system.md"
 _STRUCTURE_REPAIR_USER_FILENAME = "rule_structure_repair_user.md"
 
@@ -156,7 +172,10 @@ def _load_writer_prompts(
         user = load_prompt_template(
             settings.rule_writer_user_prompt_path,
             relative_path="prompts/rule_writer_user.md",
-            expected_placeholder_counts={_CONTEXT_PACKAGE_PLACEHOLDER: 1},
+            expected_placeholder_counts={
+                _CONTEXT_PACKAGE_PLACEHOLDER: 1,
+                _EVIDENCE_CATALOG_PLACEHOLDER: 1,
+            },
         )
     except PromptTemplateError as exc:
         raise RuleDraftGenerationError(str(exc)) from exc
@@ -178,8 +197,8 @@ def _load_structure_repair_prompts(settings: Settings) -> tuple[str, str]:
     (`rule_repair_system.md`/`rule_repair_user.md`, que reparan
     violaciones de guardrail, no forma). El prompt de usuario nunca recibe
     `{{CONTEXT_PACKAGE_JSON}}`: solo candidate_id, payload rechazado,
-    errores sanitizados y las listas de evidence_id/evidence_path
-    realmente permitidas."""
+    errores sanitizados y el catalogo de alias de evidencia (nunca
+    evidence_id/evidence_path reales)."""
     try:
         system = load_prompt_template(
             _structure_repair_prompt_path(settings, _STRUCTURE_REPAIR_SYSTEM_FILENAME),
@@ -193,8 +212,7 @@ def _load_structure_repair_prompts(settings: Settings) -> tuple[str, str]:
                 _CANDIDATE_ID_PLACEHOLDER: 1,
                 _REJECTED_PAYLOAD_PLACEHOLDER: 1,
                 _VALIDATION_ERRORS_PLACEHOLDER: 1,
-                _ALLOWED_EVIDENCE_IDS_PLACEHOLDER: 1,
-                _ALLOWED_EVIDENCE_PATHS_PLACEHOLDER: 1,
+                _EVIDENCE_CATALOG_PLACEHOLDER: 1,
             },
         )
     except PromptTemplateError as exc:
@@ -220,32 +238,6 @@ class _LazyStructureRepairPrompts:
         return self._cached
 
 
-def _collect_evidence_anchors(node: object, path: str) -> list[str]:
-    """Camina genericamente el `dict` de un ContextPackage (nunca conoce
-    un modelo Pydantic especifico) y, para cada contenedor con
-    `evidence_ids` no vacio, devuelve el path al contenedor mismo y a
-    cada uno de sus campos escalares hermanos -- exactamente el universo
-    de `evidence_path` que un claim legitimo podria citar. No inventa
-    ningun conocimiento estructural nuevo: es un recorrido puramente
-    generico sobre el JSON ya serializado."""
-    anchors: list[str] = []
-    if isinstance(node, dict):
-        evidence_ids = node.get("evidence_ids")
-        if isinstance(evidence_ids, list) and evidence_ids:
-            anchors.append(path)
-            for key, value in node.items():
-                if key == "evidence_ids":
-                    continue
-                if value is None or isinstance(value, str | int | float | bool):
-                    anchors.append(f"{path}.{key}")
-        for key, value in node.items():
-            anchors.extend(_collect_evidence_anchors(value, f"{path}.{key}"))
-    elif isinstance(node, list):
-        for index, item in enumerate(node):
-            anchors.extend(_collect_evidence_anchors(item, f"{path}[{index}]"))
-    return anchors
-
-
 def _classify_validation_issues(
     issues: tuple[ValidationIssue, ...],
 ) -> tuple[list[str], list[str], list[str]]:
@@ -260,9 +252,17 @@ def _classify_validation_issues(
     for issue in issues:
         if issue.type in ("missing", "required"):
             missing.append(issue.loc)
-        elif issue.type in ("extra_forbidden", "additionalProperties", "forbidden_self_assignment"):
+        elif issue.type in (
+            "extra_forbidden",
+            "additionalProperties",
+            "forbidden_self_assignment",
+            "forbidden_direct_evidence_reference",
+        ):
             extra.append(issue.loc)
         else:
+            # Incluye "unknown_evidence_alias": un alias que no existe en
+            # el catalogo se clasifica como valor invalido, nunca se
+            # aproxima ni se corrige.
             invalid.append(f"{issue.loc} ({issue.type})")
     return sorted(set(missing)), sorted(set(extra)), sorted(set(invalid))
 
@@ -400,16 +400,11 @@ def _validation_errors_payload(issues: tuple[ValidationIssue, ...]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _stable_string_list_json(values: list[str]) -> str:
-    return json.dumps(
-        sorted(set(values)), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-
-
 async def _generate_one_draft(
     *,
     candidate_id: str,
     package: ContextPackage,
+    catalog: EvidenceCatalog,
     client: OpenAICompatibleChatClient,
     system_text: str,
     user_template_text: str,
@@ -419,14 +414,18 @@ async def _generate_one_draft(
     max_context_package_json_chars: int,
 ) -> _AcceptedDraft:
     """Genera el draft de UN candidato: llamada inicial, y -- solo si la
-    respuesta es JSON valido pero no ensambla como RuleDraft, o ensambla
-    pero cita un evidence_id/evidence_path inexistente en el
-    ContextPackage real -- hasta `llm_repair_attempts` llamadas de
-    reparacion adicionales usando los prompts ESTRUCTURALES dedicados
-    (nunca los de GUARDRAILS_APPLIED). Un `LlmClientError` (en la llamada
-    inicial o en cualquier repair) SIEMPRE propaga de inmediato como fallo
-    directo: nunca se cuenta como intento de reparacion ni se reintenta
-    aqui (eso ya lo resuelve, con sus propios reintentos HTTP acotados,
+    respuesta es JSON valido pero no ensambla como RuleDraft, cita un
+    alias de evidencia inexistente, o cita un evidence_id/evidence_path
+    real inexistente en el ContextPackage -- hasta `llm_repair_attempts`
+    llamadas de reparacion adicionales usando los prompts ESTRUCTURALES
+    dedicados (nunca los de GUARDRAILS_APPLIED). `catalog` se construye
+    UNA vez por candidato en `_generate_all_drafts` y se reutiliza sin
+    cambios en todos los intentos: la numeracion de alias debe
+    mantenerse estable durante todo el ciclo de reparacion de un mismo
+    candidato. Un `LlmClientError` (en la llamada inicial o en cualquier
+    repair) SIEMPRE propaga de inmediato como fallo directo: nunca se
+    cuenta como intento de reparacion ni se reintenta aqui (eso ya lo
+    resuelve, con sus propios reintentos HTTP acotados,
     `OpenAICompatibleChatClient.complete()`)."""
     context_json = package.to_stable_json()
     if len(context_json) > max_context_package_json_chars:
@@ -435,15 +434,11 @@ async def _generate_one_draft(
             f"configurado ({max_context_package_json_chars} caracteres)"
         )
 
-    # Calculado UNA vez por candidato (no cambia entre intentos de
-    # reparacion): universo real de evidencia que el prompt estructural
-    # puede ofrecer como "permitido", derivado del ContextPackage real,
-    # nunca inventado ni enviado como el ContextPackage completo.
-    allowed_evidence_ids = sorted({entry.evidence_id for entry in package.evidence})
-    context_dict_for_anchors = package.model_dump(mode="json")
-    allowed_evidence_paths = sorted(set(_collect_evidence_anchors(context_dict_for_anchors, "$")))
-
-    rendered = render_prompt(user_template_text, {_CONTEXT_PACKAGE_PLACEHOLDER: context_json})
+    catalog_json = catalog.to_prompt_json()
+    rendered = render_prompt(
+        user_template_text,
+        {_CONTEXT_PACKAGE_PLACEHOLDER: context_json, _EVIDENCE_CATALOG_PLACEHOLDER: catalog_json},
+    )
     messages = [
         ChatMessage(role="system", content=system_text),
         ChatMessage(role="user", content=rendered.effective_text),
@@ -459,14 +454,9 @@ async def _generate_one_draft(
     repair_attempts_used = 0
     while True:
         try:
-            rule_draft = assemble_rule_draft(payload, schema_validator=schema_validator)
-            evidence_issues = check_evidence_references(rule_draft, package)
-            if evidence_issues:
-                raise RuleDraftAssemblyError(
-                    "el RuleDraft ensamblado cita evidence_id/evidence_path que no "
-                    "existen en el ContextPackage real",
-                    validation_errors=evidence_issues,
-                )
+            rule_draft = assemble_rule_draft_with_evidence_catalog(
+                payload, catalog=catalog, package=package, schema_validator=schema_validator
+            )
         except RuleDraftAssemblyError as exc:
             _log_structural_failure(
                 candidate_id, attempt=repair_attempts_used, issues=exc.validation_errors
@@ -491,12 +481,7 @@ async def _generate_one_draft(
                     _VALIDATION_ERRORS_PLACEHOLDER: _validation_errors_payload(
                         exc.validation_errors
                     ),
-                    _ALLOWED_EVIDENCE_IDS_PLACEHOLDER: _stable_string_list_json(
-                        allowed_evidence_ids
-                    ),
-                    _ALLOWED_EVIDENCE_PATHS_PLACEHOLDER: _stable_string_list_json(
-                        allowed_evidence_paths
-                    ),
+                    _EVIDENCE_CATALOG_PLACEHOLDER: catalog_json,
                 },
             )
             repair_messages = [
@@ -548,9 +533,15 @@ async def _generate_all_drafts(
     repair_summaries: list[str] = []
     async with OpenAICompatibleChatClient(profile) as client:
         for candidate_id, package in candidates:
+            # Construido UNA vez por candidato, antes de la llamada
+            # inicial, y reutilizado sin cambios en todos los intentos de
+            # reparacion de ese candidato: la numeracion de alias debe
+            # permanecer estable durante todo su ciclo de vida.
+            catalog = build_evidence_catalog(package)
             accepted = await _generate_one_draft(
                 candidate_id=candidate_id,
                 package=package,
+                catalog=catalog,
                 client=client,
                 system_text=system_text,
                 user_template_text=user_template_text,

@@ -400,6 +400,105 @@ def test_artifact_with_repairs_rejects_final_draft_not_matching_last_attempt(
         )
 
 
+def test_artifact_with_all_repairs_structurally_invalid_matches_initial_draft(
+    valid_rule_draft: RuleDraft,
+) -> None:
+    """checkpoint correctivo (catalogo de alias): antes de que
+    GUARDRAILS_APPLIED tambien rechazara estructuralmente un alias/
+    evidence_id que no resuelve, `repair_history` no vacio SIEMPRE tenia
+    al menos un intento `structurally_valid=True`. Ahora un candidato
+    puede agotar la reparacion con TODOS los intentos
+    `structurally_valid=False` -- en ese caso `current_draft` nunca
+    avanzo mas alla del original, asi que `final_rule_draft` (revertido
+    a PENDING) debe coincidir con `initial_rule_draft_hash`, no con
+    ningun `produced_rule_draft_hash` (que no existe)."""
+    attempt1 = RepairAttemptRecord(
+        attempt_number=1,
+        structurally_valid=False,
+        response_hash=_VALID_HASH,
+        produced_rule_draft_hash=None,
+        failure_code="structural_validation_failed",
+        failure_summary="alias de evidencia inexistente",
+        error_count_before=1,
+        error_count_after=None,
+        warning_count_after=None,
+    )
+    attempt2 = RepairAttemptRecord(
+        attempt_number=2,
+        structurally_valid=False,
+        response_hash=_OTHER_HASH,
+        produced_rule_draft_hash=None,
+        failure_code="structural_validation_failed",
+        failure_summary="alias de evidencia inexistente",
+        error_count_before=1,
+        error_count_after=None,
+        warning_count_after=None,
+    )
+    rejected_draft = _rejected(valid_rule_draft)
+    report = _report(
+        verdict=GuardrailVerdict.REJECTED,
+        violations=[
+            GuardrailViolation(
+                violation_id="v1", rule="x", field=None, message="m", severity=Severity.ERROR
+            )
+        ],
+        repair_attempts=2,
+    )
+    artifact = GuardrailCandidateArtifact(
+        candidate_id="cand-1",
+        source_package_hash=_VALID_HASH,
+        context_hash=_VALID_HASH,
+        initial_rule_draft_hash=_hash(_pending(valid_rule_draft)),
+        final_rule_draft_hash=_hash(rejected_draft),
+        final_rule_draft=rejected_draft,
+        guardrail_report=report,
+        repair_history=[attempt1, attempt2],
+        warnings=[],
+    )
+    assert artifact.repair_history[-1].structurally_valid is False
+    assert artifact.final_rule_draft_hash == _hash(rejected_draft)
+
+
+def test_artifact_with_all_repairs_structurally_invalid_rejects_drifted_final_draft(
+    valid_rule_draft: RuleDraft,
+) -> None:
+    attempt = RepairAttemptRecord(
+        attempt_number=1,
+        structurally_valid=False,
+        response_hash=_VALID_HASH,
+        produced_rule_draft_hash=None,
+        failure_code="structural_validation_failed",
+        failure_summary="alias de evidencia inexistente",
+        error_count_before=1,
+        error_count_after=None,
+        warning_count_after=None,
+    )
+    # final_rule_draft NO coincide con el original (ningun intento
+    # produjo este contenido -- todos fueron structurally_valid=False).
+    drifted_draft = _rejected(valid_rule_draft.model_copy(update={"title": "Otro titulo"}))
+    report = _report(
+        verdict=GuardrailVerdict.REJECTED,
+        violations=[
+            GuardrailViolation(
+                violation_id="v1", rule="x", field=None, message="m", severity=Severity.ERROR
+            )
+        ],
+        repair_attempts=1,
+    )
+    with pytest.raises(ValidationError):
+        GuardrailCandidateArtifact(
+            candidate_id="cand-1",
+            source_package_hash=_VALID_HASH,
+            context_hash=_VALID_HASH,
+            initial_rule_draft_hash=_hash(_pending(valid_rule_draft)),
+            final_rule_draft_hash=_hash(drifted_draft),
+            final_rule_draft=drifted_draft,
+            guardrail_report=report,
+            repair_history=[attempt],
+            warnings=[],
+        )
+
+
 def test_repair_history_rejects_duplicate_attempt_number(valid_rule_draft: RuleDraft) -> None:
     attempt1 = _repair_attempt(attempt_number=1, produced_rule_draft_hash=_OTHER_HASH)
     attempt2 = _repair_attempt(attempt_number=1, produced_rule_draft_hash=_OTHER_HASH)
