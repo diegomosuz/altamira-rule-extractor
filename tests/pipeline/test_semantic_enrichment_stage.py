@@ -363,7 +363,38 @@ def test_declared_csv_file_not_regular_is_fatal(tmp_path: Path) -> None:
         env.run()
 
 
+def require_symlink_capability(tmp_path: Path) -> None:
+    """Comprobacion REAL de capacidad, no una deteccion de plataforma:
+    intenta crear (y elimina de inmediato) un symlink inocuo dentro de
+    `tmp_path` antes de que la prueba real dependa de esa capacidad.
+
+    En Windows sin modo desarrollador ni privilegios elevados,
+    `Path.symlink_to` falla con `OSError [WinError 1314] A required
+    privilege is not held by the client` (falta
+    `SeCreateSymbolicLinkPrivilege`); algunas plataformas exponen
+    `NotImplementedError` directamente. En ambos casos se omite la
+    prueba con un mensaje explicito -- nunca se la deshabilita
+    solamente por detectar Windows, y nunca se ignora un `OSError` que
+    no corresponda a esta falta de capacidad especifica (p. ej. disco
+    lleno, ruta invalida): esos se propagan tal cual, como cualquier
+    otro fallo real de la prueba."""
+    probe_target = tmp_path / ".symlink-capability-target"
+    probe_link = tmp_path / ".symlink-capability-probe"
+    probe_target.write_text("probe", encoding="utf-8")
+    try:
+        probe_link.symlink_to(probe_target)
+    except NotImplementedError as exc:
+        pytest.skip(f"symlinks no soportados en este entorno (NotImplementedError: {exc})")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314 or isinstance(exc, PermissionError):
+            pytest.skip(f"symlinks no soportados en este entorno (sin privilegio): {exc}")
+        raise
+    else:
+        probe_link.unlink()
+
+
 def test_declared_ddl_symlink_escaping_extracted_dir_is_fatal(tmp_path: Path) -> None:
+    require_symlink_capability(tmp_path)
     env = _Env(tmp_path)
     outside_target = tmp_path / "outside-extracted" / "evil.sql"
     outside_target.parent.mkdir(parents=True)

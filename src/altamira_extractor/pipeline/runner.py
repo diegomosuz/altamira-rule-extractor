@@ -99,16 +99,22 @@ import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from ..config import Settings
 from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.inventory import Inventory
 from ..contracts.run_state import RunState, StageExecution
+from ..contracts.run_state_recovery import (
+    EMERGENCY_RECORD_PREFIX,
+    RunStatePersistenceFailureRecord,
+)
 from .artifact_store import atomic_write_json
 from .candidates_detected_stage import run_candidates_detected_stage
 from .contexts_built_stage import run_contexts_built_stage
 from .dependencies_stage import run_dependencies_built_stage
 from .errors import (
+    AtomicWriteError,
     CandidateDetectionError,
     ContextBuildError,
     DependencyBuildError,
@@ -123,6 +129,7 @@ from .errors import (
     PipelineError,
     RuleDraftGenerationError,
     RunConflictError,
+    RunStatePersistenceError,
     SemanticEnrichmentBuildError,
     SemanticGraphBuildError,
 )
@@ -140,6 +147,159 @@ from .semantic_graph_load_stage import run_semantic_graph_load_stage
 from .semantic_graph_stage import run_semantic_graph_stage
 
 _COPY_CHUNK_SIZE = 1024 * 1024
+
+# Deadline critico para la transicion terminal de run.json (checkpoint
+# correctivo: defecto real de estabilizacion de baseline). Mas tolerante
+# que el deadline por defecto de un artefacto ordinario
+# (artifact_store._DEFAULT_REPLACE_DEADLINE_SECONDS, 1.0s): run.json es
+# el UNICO artefacto sometido a polling activo del cliente
+# (ui/templates/_status_fragment.html hace `hx-trigger="every 3s"`), asi
+# que 3.0s -- exactamente un ciclo de polling -- es el limite superior
+# razonable para que una transicion terminal alcance a persistirse antes
+# de que el cliente vuelva a preguntar, sin llegar a ser un reintento sin
+# limite.
+_RUN_STATE_CRITICAL_DEADLINE_SECONDS = 3.0
+
+
+def _emergency_record_filename() -> str:
+    """Nombre nuevo e inmutable por cada intento (timestamp de
+    microsegundo + sufijo aleatorio, mismo patron que `generate_run_id`):
+    nunca colisiona con un artefacto de emergencia previo ni con un
+    lector que pudiera tener un nombre anterior abierto -- el `os.replace`
+    de `atomic_write_json` promueve siempre a un destino que nadie vio
+    antes, por lo que la misma carrera de `WinError 5` que afecta a
+    `run.json` es estructuralmente imposible aqui."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    return f"{EMERGENCY_RECORD_PREFIX}{timestamp}-{secrets.token_hex(6)}.json"
+
+
+def _synthesize_emergency_state(
+    state: RunState, *, stage: PipelineStage, sanitized_message: str
+) -> RunState:
+    """Vista terminal FAILED para el artefacto de emergencia. Se aplica
+    SIEMPRE, incluso si la transicion que no pudo persistirse era en
+    realidad un SUCCEEDED: sin `run.json` durable no hay forma de afirmar
+    que ese exito quedo registrado, y el proyecto nunca presenta un
+    desenlace incierto como si fuera exitoso."""
+    finished_at = _now()
+    failed_execution = StageExecution(
+        stage=stage,
+        status=StageStatus.FAILED,
+        started_at=finished_at,
+        finished_at=finished_at,
+        duration_seconds=0.0,
+        error=sanitized_message,
+    )
+    stages = [s for s in state.stages if s.stage != stage]
+    stages.append(failed_execution)
+    return state.model_copy(
+        update={
+            "current_stage": PipelineStage.FAILED,
+            "stages": stages,
+            "updated_at": finished_at,
+        }
+    )
+
+
+def _write_emergency_record(
+    run_dir: Path,
+    state: RunState,
+    *,
+    stage: PipelineStage,
+    transition: Literal["FAILED", "SUCCEEDED"],
+    cause: BaseException,
+) -> Path:
+    """Escribe (best effort, atomicamente, a un nombre nuevo) el
+    artefacto NO contractual de `contracts/run_state_recovery.py`.
+    Nunca incluye `str(cause)` textual (revelaria la ruta destino del
+    reemplazo fallido): el mensaje es fijo y generico, solo el
+    `type(cause).__name__` identifica la causa tecnica."""
+    sanitized_message = (
+        "no se pudo persistir run.json tras agotar la politica critica de reemplazo "
+        f"atomico ({type(cause).__name__})"
+    )
+    emergency_state = _synthesize_emergency_state(
+        state, stage=stage, sanitized_message=sanitized_message
+    )
+    record = RunStatePersistenceFailureRecord(
+        run_id=state.run_id,
+        timestamp_utc=_now(),
+        stage=stage,
+        transition=transition,
+        error_type=type(cause).__name__,
+        error_message=sanitized_message,
+        attempted_state=emergency_state,
+    )
+    record_path = run_dir / _emergency_record_filename()
+    atomic_write_json(record_path, record, max_wait_seconds=_RUN_STATE_CRITICAL_DEADLINE_SECONDS)
+    return record_path
+
+
+def _cleanup_emergency_records(run_dir: Path) -> None:
+    """Best effort: se invoca solo cuando `run.json` ACABA de persistirse
+    correctamente en un estado terminal. Un fallo al borrar un artefacto
+    obsoleto nunca invalida el `run.json` ya persistido -- `read_run_state`
+    de todas formas ignora cualquier artefacto de emergencia mas antiguo
+    que un `run.json` terminal (ver `contracts/run_state_recovery.py`)."""
+    try:
+        candidates = list(run_dir.glob(f"{EMERGENCY_RECORD_PREFIX}*.json"))
+    except OSError:
+        return
+    for candidate in candidates:
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
+
+
+def _persist_run_state(
+    state: RunState,
+    run_json_path: Path,
+    *,
+    stage: PipelineStage,
+    transition: Literal["FAILED", "SUCCEEDED"],
+) -> RunState:
+    """Punto UNICO de persistencia critica de `run.json` (Fase 4): tanto
+    `_mark_failed` como `_mark_succeeded` pasan exclusivamente por aqui
+    -- ninguna otra llamada dispersa a `atomic_write_json(run_json_path,
+    ...)` existe en el modulo. Si `_replace_with_retry` agota su deadline
+    critico, escribe (best effort) el artefacto durable de emergencia y
+    SIEMPRE relanza `RunStatePersistenceError`: nunca devuelve como si el
+    estado terminal hubiera quedado persistido. `_mark_failed` nunca se
+    reinvoca aqui (evitaria una recursion sobre el mismo fallo): quien
+    atrapa esta excepcion mas arriba (`api/executor.py`, `cli.py::_guard`,
+    o el manejador generico de `api/app.py` para el camino sincrono de
+    RECEIVED) decide como traducirla."""
+    try:
+        atomic_write_json(
+            run_json_path, state, max_wait_seconds=_RUN_STATE_CRITICAL_DEADLINE_SECONDS
+        )
+    except AtomicWriteError as exc:
+        run_dir = run_json_path.parent
+        emergency_path: Path | None = None
+        try:
+            emergency_path = _write_emergency_record(
+                run_dir, state, stage=stage, transition=transition, cause=exc
+            )
+        except OSError:
+            # Fallo tambien la evidencia de emergencia: no hay NINGUN
+            # artefacto durable. emergency_path=None se lo dice
+            # explicitamente a quien atrape RunStatePersistenceError mas
+            # arriba (ver docstring de esa excepcion).
+            emergency_path = None
+        raise RunStatePersistenceError(
+            f"no se pudo persistir run.json para run_id={state.run_id!r} "
+            f"etapa={stage.value} transicion={transition}",
+            run_id=state.run_id,
+            stage=stage,
+            transition=transition,
+            emergency_artifact_path=emergency_path,
+            cause=exc,
+        ) from exc
+
+    if state.current_stage in (PipelineStage.FAILED, PipelineStage.COMPLETED):
+        _cleanup_emergency_records(run_json_path.parent)
+    return state
 
 
 def generate_run_id() -> str:
@@ -184,8 +344,7 @@ def _mark_failed(
     )
     state.current_stage = PipelineStage.FAILED
     state.updated_at = finished_at
-    atomic_write_json(run_json_path, state)
-    return state
+    return _persist_run_state(state, run_json_path, stage=stage, transition="FAILED")
 
 
 def _mark_succeeded(
@@ -209,8 +368,7 @@ def _mark_succeeded(
     )
     state.current_stage = stage
     state.updated_at = finished_at
-    atomic_write_json(run_json_path, state)
-    return state
+    return _persist_run_state(state, run_json_path, stage=stage, transition="SUCCEEDED")
 
 
 def _load_or_init_state(run_json_path: Path, run_id: str, package_filename: str) -> RunState:

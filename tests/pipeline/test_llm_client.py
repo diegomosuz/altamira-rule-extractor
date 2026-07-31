@@ -41,6 +41,31 @@ Handler = Callable[[httpx.Request], httpx.Response]
 
 _LOGGER_NAME = "altamira_extractor.pipeline.llm_client"
 
+# checkpoint correctivo (estabilizacion de baseline): `_isolated_settings`
+# solo neutraliza la fuente `.env` (`_env_file=None`) -- pydantic-settings
+# sigue leyendo `os.environ` para cualquier campo que el test no
+# sobreescriba explicitamente. Si el desarrollador tiene alguna de estas
+# variables exportada en su shell (uso manual habitual del proyecto), los
+# tests que afirman "ausente"/"debe fallar por falta de credenciales" se
+# vuelven no deterministicos. `_clear_llm_env` es un helper OPT-IN (nunca
+# un fixture autouse): cada test que verifica configuracion LLM ausente o
+# incompleta lo llama explicitamente, para no ocultar en silencio ningun
+# test futuro que verifique precedencia real de variables de entorno.
+_LLM_ENV_VARS = (
+    "LLM_PROVIDER",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "PWC_GENAI_API_KEY",
+    "PWC_GENAI_BASE_URL",
+    "PWC_GENAI_MODEL",
+)
+
+
+def _clear_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _LLM_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 def _profile(**overrides: Any) -> LlmProfile:
     defaults: dict[str, Any] = {
@@ -169,7 +194,8 @@ def _client_for(
 # --- Configuracion --------------------------------------------------------
 
 
-def test_resolve_profile_requires_provider() -> None:
+def test_resolve_profile_requires_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_llm_env(monkeypatch)
     settings = _isolated_settings()
     with pytest.raises(LlmConfigurationError):
         resolve_llm_profile(settings)
@@ -181,19 +207,24 @@ def test_resolve_profile_rejects_invalid_provider() -> None:
         resolve_llm_profile(settings)
 
 
-def test_resolve_profile_requires_openai_credentials() -> None:
+def test_resolve_profile_requires_openai_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_llm_env(monkeypatch)
     settings = _isolated_settings(LLM_PROVIDER="openai")
     with pytest.raises(LlmConfigurationError):
         resolve_llm_profile(settings)
 
 
-def test_resolve_profile_requires_pwc_credentials() -> None:
+def test_resolve_profile_requires_pwc_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_llm_env(monkeypatch)
     settings = _isolated_settings(LLM_PROVIDER="pwc_gateway")
     with pytest.raises(LlmConfigurationError):
         resolve_llm_profile(settings)
 
 
-def test_resolve_profile_only_requires_selected_provider() -> None:
+def test_resolve_profile_only_requires_selected_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_llm_env(monkeypatch)
     settings = _openai_settings()
     profile = resolve_llm_profile(settings)
     assert profile.provider == LlmProvider.OPENAI
@@ -201,7 +232,10 @@ def test_resolve_profile_only_requires_selected_provider() -> None:
     assert settings.pwc_genai_api_key is None
 
 
-def test_resolve_profile_pwc_gateway_only_requires_pwc_credentials() -> None:
+def test_resolve_profile_pwc_gateway_only_requires_pwc_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_llm_env(monkeypatch)
     settings = _isolated_settings(
         LLM_PROVIDER="pwc_gateway",
         PWC_GENAI_API_KEY="pwc-secret",
@@ -213,7 +247,10 @@ def test_resolve_profile_pwc_gateway_only_requires_pwc_credentials() -> None:
     assert settings.openai_api_key is None
 
 
-def test_settings_construction_never_requires_llm_config() -> None:
+def test_settings_construction_never_requires_llm_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_llm_env(monkeypatch)
     settings = _isolated_settings()
     assert settings.llm_provider is None
 

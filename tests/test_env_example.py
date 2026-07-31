@@ -12,11 +12,44 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from altamira_extractor.config import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
+
+# checkpoint correctivo (estabilizacion de baseline): `Settings(_env_file=...)`
+# solo elige QUE ARCHIVO dotenv se lee -- pydantic-settings sigue leyendo
+# `os.environ` para cualquier campo no cubierto por ese archivo. Si el
+# desarrollador tiene alguna de estas variables exportada en su shell (uso
+# manual habitual del proyecto), sobreescribiria en silencio los valores
+# esperados de la copia sanitizada de `.env.example` que estos tests
+# verifican explicitamente. Helper OPT-IN (nunca autouse): solo los tests
+# que verifican los valores exactos de la copia sanitizada lo necesitan.
+_ENV_EXAMPLE_SENSITIVE_VARS = (
+    "NEO4J_URI",
+    "NEO4J_USER",
+    "NEO4J_PASSWORD",
+    "NEO4J_DATABASE",
+    "LLM_PROVIDER",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "PWC_GENAI_API_KEY",
+    "PWC_GENAI_BASE_URL",
+    "PWC_GENAI_MODEL",
+    "LLM_TEMPERATURE",
+    "LLM_REPAIR_ATTEMPTS",
+    "LLM_HTTP_RETRIES",
+    "API_MAX_WORKERS",
+)
+
+
+def _clear_env_example_sensitive_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _ENV_EXAMPLE_SENSITIVE_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 _OBSOLETE_VARIABLE_NAMES = (
     "APP_ENV",
@@ -50,7 +83,10 @@ def _sanitized_env_example_copy(tmp_path: Path) -> Path:
     return env_path
 
 
-def test_env_example_sanitized_copy_loads_settings_without_error(tmp_path: Path) -> None:
+def test_env_example_sanitized_copy_loads_settings_without_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_env_example_sensitive_vars(monkeypatch)
     env_path = _sanitized_env_example_copy(tmp_path)
     settings = Settings(_env_file=str(env_path))
 
@@ -65,9 +101,12 @@ def test_env_example_sanitized_copy_loads_settings_without_error(tmp_path: Path)
     assert settings.llm_http_retries == 3
 
 
-def test_env_example_does_not_set_a_real_llm_provider_or_credentials(tmp_path: Path) -> None:
+def test_env_example_does_not_set_a_real_llm_provider_or_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Las credenciales LLM quedan comentadas: load_settings() no debe
     # terminar con un proveedor "configurado por accidente".
+    _clear_env_example_sensitive_vars(monkeypatch)
     env_path = _sanitized_env_example_copy(tmp_path)
     settings = Settings(_env_file=str(env_path))
 

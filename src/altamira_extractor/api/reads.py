@@ -20,6 +20,10 @@ from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.guardrail_candidate import GuardrailCandidateArtifact
 from ..contracts.guardrail_manifest import GuardrailDirectoryManifest
 from ..contracts.run_state import RunState
+from ..contracts.run_state_recovery import (
+    EMERGENCY_RECORD_PREFIX,
+    RunStatePersistenceFailureRecord,
+)
 from .errors import (
     ArtifactCorruptedError,
     CandidateNotFoundError,
@@ -31,15 +35,75 @@ _CANDIDATES_FILENAME = "06-candidates.json"
 _CONTEXT_MANIFEST_FILENAME = "context-manifest.json"
 _GUARDRAIL_MANIFEST_FILENAME = "guardrail-manifest.json"
 
+_TERMINAL_STAGES = frozenset({PipelineStage.FAILED, PipelineStage.COMPLETED})
+
+
+def _latest_emergency_record(run_dir: Path) -> RunStatePersistenceFailureRecord | None:
+    """Best effort: un artefacto de emergencia ausente, corrupto, o un
+    `run_dir` no listable nunca impide leer `run.json` normalmente --
+    solo se usa como fallback cuando `run.json` esta ausente/invalido o
+    no-terminal (ver `read_run_state`)."""
+    try:
+        candidate_paths = list(run_dir.glob(f"{EMERGENCY_RECORD_PREFIX}*.json"))
+    except OSError:
+        return None
+
+    latest: RunStatePersistenceFailureRecord | None = None
+    for path in candidate_paths:
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            record = RunStatePersistenceFailureRecord.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        if latest is None or record.timestamp_utc > latest.timestamp_utc:
+            latest = record
+    return latest
+
 
 def read_run_state(run_dir: Path) -> RunState:
+    """Lee `run.json`; si esta ausente, invalido, o su `current_stage` no
+    es terminal, consulta el artefacto de emergencia mas reciente (ver
+    `contracts/run_state_recovery.py`) y lo prefiere UNICAMENTE si es mas
+    reciente que `run.json.updated_at` -- un `run.json` terminal siempre
+    prevalece sobre cualquier artefacto de emergencia, por antiguo que
+    sea. Runs historicos sin ningun artefacto de emergencia (el caso
+    universal hasta ahora) se comportan exactamente igual que antes."""
     run_json_path = run_dir / "run.json"
+    state: RunState | None = None
+    parse_error: ValueError | None = None
+
+    if not run_json_path.is_symlink() and run_json_path.is_file():
+        try:
+            state = RunState.model_validate_json(run_json_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            parse_error = exc
+
+    if state is not None and state.current_stage in _TERMINAL_STAGES:
+        return state
+
+    emergency = _latest_emergency_record(run_dir)
+    if emergency is not None and (state is None or emergency.timestamp_utc > state.updated_at):
+        # Estrictamente `>`, deliberado: en un empate exacto (verificado
+        # empiricamente que `datetime.now(UTC)` puede resolver al mismo
+        # valor en llamadas consecutivas muy cercanas en Windows, reloj
+        # de sistema de ~15ms) se prefiere el `run.json` YA EN DISCO, la
+        # opcion conservadora -- nunca se presenta un run como FAILED sin
+        # evidencia CLARAMENTE posterior de que la emergencia lo
+        # supera. En produccion real esto no es ambiguo: el deadline
+        # critico que antecede a un artefacto de emergencia
+        # (`runner._RUN_STATE_CRITICAL_DEADLINE_SECONDS`, hasta 3s de
+        # reintentos) siempre separa ambos timestamps por mucho mas que
+        # la resolucion del reloj.
+        return emergency.attempted_state
+
+    if state is not None:
+        return state
     if run_json_path.is_symlink() or not run_json_path.is_file():
         raise RunNotFoundError()
-    try:
-        return RunState.model_validate_json(run_json_path.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        raise ArtifactCorruptedError("run.json invalido") from exc
+    raise ArtifactCorruptedError("run.json invalido") from parse_error
 
 
 def require_stage_succeeded(state: RunState, stage: PipelineStage) -> None:

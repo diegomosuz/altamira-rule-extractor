@@ -307,11 +307,18 @@ def _write_repair_prompt_files(tmp_path: Path) -> tuple[Path, Path]:
     system_path = tmp_path / "rule_repair_system.md"
     user_path = tmp_path / "rule_repair_user.md"
     system_path.write_text("Corrige el RuleDraft rechazado.", encoding="utf-8")
+    # checkpoint correctivo: los marcadores de prosa coinciden EXACTAMENTE
+    # con los del prompt productivo real (prompts/rule_repair_user.md:
+    # "REJECTED_RULE_DRAFT:"/"GUARDRAIL_VIOLATIONS:"), no con nombres
+    # arbitrarios de fixture -- asi la extraccion por marcador que hacen
+    # los tests de este archivo se ejercita contra el mismo texto que
+    # produciria el prompt real, en vez de una convencion solo-de-test
+    # que podia divergir en silencio.
     user_path.write_text(
-        "CONTEXT:\n{{CONTEXT_PACKAGE_JSON}}\n\n"
-        "REJECTED:\n{{REJECTED_RULE_DRAFT_JSON}}\n\n"
-        "VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n\n"
-        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n",
+        "CONTEXT_PACKAGE:\n{{CONTEXT_PACKAGE_JSON}}\n\n"
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\n"
+        "REJECTED_RULE_DRAFT:\n{{REJECTED_RULE_DRAFT_JSON}}\n\n"
+        "GUARDRAIL_VIOLATIONS:\n{{GUARDRAIL_VIOLATIONS_JSON}}\n",
         encoding="utf-8",
     )
     return system_path, user_path
@@ -595,7 +602,22 @@ def test_repair_prompt_rejected_draft_never_exposes_real_evidence_id_or_path(
     esta capa). El ContextPackage completo SI viaja en este prompt (por
     diseno, siempre lo hizo: la reparacion de guardrail necesita
     contexto funcional completo) -- por eso la asercion se limita a la
-    seccion REJECTED, no al mensaje completo."""
+    seccion REJECTED_RULE_DRAFT, no al mensaje completo.
+
+    checkpoint correctivo (estabilizacion de baseline): los marcadores
+    de extraccion coinciden con los del prompt productivo real
+    (`REJECTED_RULE_DRAFT:`/`GUARDRAIL_VIOLATIONS:`, ver
+    `_write_repair_prompt_files` arriba), y el mensaje se normaliza
+    `\\r\\n` -> `\\n` antes de buscarlos: `render_prompt` escribe el
+    texto del template tal cual lo lee `prompt_loader.load_prompt_template`
+    (via `Path.read_bytes()`, sin traduccion de saltos de linea), y
+    `_write_repair_prompt_files` escribe el archivo con `Path.write_text`
+    -- en Windows, el modo texto por defecto traduce cada `\\n` de la
+    cadena Python a `\\r\\n` en disco, asi que el contenido efectivo
+    puede llegar con `\\r\\n` sin que ningun paso lo normalice de vuelta.
+    Normalizar aqui hace la busqueda de marcadores portable sin depender
+    de la codificacion de saltos de linea de la plataforma que ejecuta
+    el test."""
     bad_draft = _valid_draft(evidence_id="ev-nonexistent")
     alias = _decision_alias()
     calls = _install_fake_client(monkeypatch, [_valid_repair_payload()])
@@ -606,15 +628,28 @@ def test_repair_prompt_rejected_draft_never_exposes_real_evidence_id_or_path(
     run_guardrails_applied_stage(**kwargs)
 
     repair_user_message = calls[0][1].content
-    rejected_section = repair_user_message.split("REJECTED:\n", 1)[1].split(
-        "\n\nVIOLATIONS:", 1
+    normalized_message = repair_user_message.replace("\r\n", "\n")
+
+    rejected_marker = "REJECTED_RULE_DRAFT:\n"
+    violations_marker = "\n\nGUARDRAIL_VIOLATIONS:"
+    assert rejected_marker in normalized_message, (
+        f"marcador {rejected_marker!r} ausente del prompt de reparacion renderizado"
+    )
+    assert violations_marker in normalized_message, (
+        f"marcador {violations_marker!r} ausente del prompt de reparacion renderizado"
+    )
+
+    rejected_section = normalized_message.split(rejected_marker, 1)[1].split(
+        violations_marker, 1
     )[0]
     assert "evidence_ids" not in rejected_section
     assert "evidence_paths" not in rejected_section
     assert "ev-nonexistent" not in rejected_section
     assert "evidence_refs" in rejected_section
-    # el catalogo de alias si viaja (checkpoint correctivo activo).
-    assert alias in repair_user_message
+    # el catalogo de alias si viaja (checkpoint correctivo activo) -- se
+    # busca en el mensaje normalizado completo, no solo en la seccion
+    # rechazada, porque el catalogo vive en su propio bloque separado.
+    assert alias in normalized_message
 
 
 def test_successful_repair_preserves_produced_hash_and_final_hash_differs_by_status(

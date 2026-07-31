@@ -7,11 +7,30 @@ decide como traducirlas a StageExecution.error.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+from ..contracts.enums import PipelineStage
 
 
 class PipelineError(Exception):
     """Base de todas las excepciones de dominio del pipeline de ingesta."""
+
+
+class AtomicWriteError(PipelineError, OSError):
+    """`atomic_write_json`/`_replace_with_retry` (pipeline/artifact_store.py)
+    agotaron el deadline monotonico reintentando exclusivamente errores de
+    reemplazo reconocidos como transitorios en Windows (WinError 5/32/33:
+    acceso denegado, violacion de uso compartido, violacion de bloqueo) sin
+    lograr `os.replace`. Nunca se lanza para un error permanente (esos
+    propagan sin envolver, con el tipo original) ni para otro `OSError` no
+    relacionado con el reemplazo (nunca se reintenta). Hereda tambien de
+    `OSError` a proposito: cada llamador existente de `atomic_write_json`
+    que ya capturaba `except OSError` (p. ej. `_run_inventoried` en
+    runner.py) sigue capturandola sin cambios -- ningun sitio de llamada
+    disperso necesita actualizarse. El mensaje incluye la ruta destino
+    (nunca el contenido del artefacto ni un secreto) y preserva la
+    excepcion original via `raise ... from`."""
 
 
 class PackageValidationError(PipelineError):
@@ -32,6 +51,39 @@ class ExtractionError(PipelineError):
 
 class RunConflictError(PipelineError):
     """Se intento reutilizar un run_id con un estado incompatible."""
+
+
+class RunStatePersistenceError(PipelineError):
+    """`run.json` no pudo persistirse para una transicion terminal
+    (SUCCEEDED o FAILED de una etapa) tras agotar la politica critica de
+    reemplazo atomico (ver `AtomicWriteError`). Se lanza SIEMPRE desde
+    `runner._persist_run_state` (nunca desde mas de un lugar disperso),
+    despues de intentar -- best effort -- escribir un artefacto durable
+    de emergencia adyacente a `run.json` (ver
+    `contracts/run_state_recovery.py`). `emergency_artifact_path` indica
+    si ese intento tuvo exito (`Path`) o tambien fallo (`None`): en este
+    ultimo caso no existe NINGUNA evidencia durable del desenlace del
+    run, y quien la atrapa (`api/executor.py`) debe registrar CRITICAL en
+    vez de WARNING. El mensaje nunca incluye prompts, credenciales,
+    contenido de RunState ni stacktrace completo -- solo run_id, la etapa
+    afectada y el tipo de la causa tecnica."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str,
+        stage: PipelineStage,
+        transition: str,
+        emergency_artifact_path: Path | None,
+        cause: BaseException,
+    ) -> None:
+        super().__init__(message)
+        self.run_id = run_id
+        self.stage = stage
+        self.transition = transition
+        self.emergency_artifact_path = emergency_artifact_path
+        self.cause = cause
 
 
 class ParserUnavailableError(PipelineError):

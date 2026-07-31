@@ -20,6 +20,8 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
+from ..pipeline.errors import RunStatePersistenceError
+
 logger = logging.getLogger(__name__)
 
 SubmitResult = Literal["submitted", "already_active", "at_capacity"]
@@ -51,6 +53,36 @@ class RunExecutor:
         def _wrapped() -> None:
             try:
                 fn()
+            except RunStatePersistenceError as exc:
+                # Checkpoint correctivo (defecto real de estabilizacion de
+                # baseline): distinto de un fallo generico -- run.json en
+                # si no pudo persistirse para esta transicion terminal.
+                # Nunca se trata igual que `except Exception` de mas
+                # abajo: aqui SI se confirma (o se desmiente) que existe
+                # evidencia durable del desenlace antes de decidir el
+                # nivel de severidad del log. Nunca incluye credenciales,
+                # prompts ni un path absoluto mas alla del propio
+                # `run_id` (ya publico) y el nombre corto del artefacto.
+                if exc.emergency_artifact_path is not None:
+                    logger.warning(
+                        "no se pudo persistir run.json para run_id=%s etapa=%s "
+                        "transicion=%s; el run quedara FAILED via el artefacto de "
+                        "emergencia %s",
+                        exc.run_id,
+                        exc.stage.value,
+                        exc.transition,
+                        exc.emergency_artifact_path.name,
+                    )
+                else:
+                    logger.critical(
+                        "no se pudo persistir run.json NI el artefacto de emergencia "
+                        "para run_id=%s etapa=%s transicion=%s: sin ninguna evidencia "
+                        "durable del desenlace de este run (causa=%s)",
+                        exc.run_id,
+                        exc.stage.value,
+                        exc.transition,
+                        type(exc.cause).__name__,
+                    )
             except Exception:
                 logger.exception("fallo no controlado ejecutando run_id=%s en background", run_id)
             finally:
