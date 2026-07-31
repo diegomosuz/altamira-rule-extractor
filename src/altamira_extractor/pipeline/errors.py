@@ -418,3 +418,15 @@ class SemanticCoverageError(PipelineError):
     (solo el nombre relativo del artefacto afectado) ni el contenido del
     JSON invalido. Nunca se persiste un `diagnostics/semantic-coverage.
     json` parcial cuando esta excepcion se lanza."""
+
+
+class SemanticEffectsError(PipelineError):
+    """Fallo de `semantic_effects_service.py` (Fase 2 de la ampliacion
+    semantica, no-contractual, diagnostico bajo demanda): el run no
+    existe, `run.json` es invalido, el run no alcanzo PARSED (SUCCEEDED),
+    o `artifacts/02-canonical/` esta ausente, vacio, no es JSON valido, o
+    no valida contra `CanonicalProgram`. El mensaje nunca incluye una
+    ruta absoluta (solo el nombre relativo del artefacto afectado) ni el
+    contenido del JSON invalido. Nunca se persiste un
+    `diagnostics/semantic-effects.json` parcial cuando esta excepcion se
+    lanza."""

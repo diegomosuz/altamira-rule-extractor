@@ -11,6 +11,7 @@ Uso:
     python -m altamira_extractor.cli rule <run_id> <candidate_id>
     python -m altamira_extractor.cli download <run_id> [--output PATH]
     python -m altamira_extractor.cli semantic-coverage <run_id> [--json]
+    python -m altamira_extractor.cli semantic-effects <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -20,6 +21,17 @@ CanonicalProgram recibio interpretacion semantica estructurada (ver
 `docs/SEMANTIC_COVERAGE.md`). Nunca se invoca automaticamente desde
 `ingest`/`resume`/la API/la UI; nunca modifica `run.json` ni ningun
 artefacto `artifacts/01-10`.
+
+`semantic-effects` (Fase 2 de la ampliacion semantica,
+`feat/semantic-effects-foundation`) calcula y persiste
+`<run_dir>/diagnostics/semantic-effects.json`: un artefacto NO
+contractual, generado exclusivamente bajo demanda, que traduce cada
+CanonicalStatement interpretado a un `SemanticEffect` normalizado
+(sin propagar valores entre sentencias -- ver `docs/SEMANTIC_EFFECTS.
+md`). Requiere unicamente que RUN_ID haya alcanzado PARSED
+(SUCCEEDED). Nunca se invoca automaticamente desde `ingest`/`resume`/
+la API/la UI; nunca modifica `run.json` ni ningun artefacto
+`artifacts/01-10`.
 
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
@@ -62,10 +74,15 @@ from .api.validation import validate_candidate_id, validate_run_id
 from .config import Settings, load_settings
 from .contracts.enums import PipelineStage
 from .contracts.run_state import RunState
+from .contracts.semantic_coverage import SemanticSupportStatus
 from .pipeline.runner import run_ingestion
 from .pipeline.semantic_coverage_service import (
     compute_semantic_coverage_report,
     write_semantic_coverage_report,
+)
+from .pipeline.semantic_effects_service import (
+    compute_semantic_effects_artifact,
+    write_semantic_effects_artifact,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,6 +119,10 @@ OutputOption = Annotated[
 SemanticCoverageJsonOption = Annotated[
     bool,
     typer.Option("--json", help="Imprime el SemanticCoverageReport completo en JSON estable"),
+]
+SemanticEffectsJsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Imprime el SemanticEffectsArtifact completo en JSON estable"),
 ]
 
 # Exit codes estables (Prompt 13c). Mapeados por `ApiError.code` (nunca por
@@ -398,6 +419,45 @@ def semantic_coverage(
 
     if json_output:
         typer.echo(report.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="semantic-effects")
+@_guard
+def semantic_effects(
+    run_id: RunIdArgument, json_output: SemanticEffectsJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/semantic-effects.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 2 de la ampliacion
+    semantica, ver docs/SEMANTIC_EFFECTS.md): traduce cada
+    CanonicalStatement interpretado a un SemanticEffect normalizado,
+    sin propagar valores entre sentencias. Requiere que RUN_ID ya haya
+    alcanzado PARSED (SUCCEEDED). Nunca modifica run.json ni ningun
+    artifacts/01-10; nunca accede a Neo4j ni invoca un proveedor LLM.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_semantic_effects_artifact(run_dir, run_id)
+    artifact_path = write_semantic_effects_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"programs: {summary.program_count}")
+    typer.echo(f"effects_total: {summary.effect_count}")
+    for kind in sorted(summary.counts_by_kind, key=lambda item: item.value):
+        typer.echo(f"  {kind.value}: {summary.counts_by_kind[kind]}")
+    status_counts = summary.counts_by_support_status
+    typer.echo(f"fully_supported: {status_counts.get(SemanticSupportStatus.FULLY_SUPPORTED, 0)}")
+    typer.echo(
+        f"partially_supported: {status_counts.get(SemanticSupportStatus.PARTIALLY_SUPPORTED, 0)}"
+    )
+    typer.echo(f"preserved: {status_counts.get(SemanticSupportStatus.PRESERVED_ONLY, 0)}")
+    typer.echo(f"unsupported: {status_counts.get(SemanticSupportStatus.UNSUPPORTED, 0)}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
 
 
 if __name__ == "__main__":
