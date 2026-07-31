@@ -401,3 +401,20 @@ class MarkdownRenderError(PipelineError):
     mensaje nunca incluye el contenido completo de un RuleDraft/claims/
     evidence_paths, paths absolutos ni stacktrace.
     """
+
+
+class SemanticCoverageError(PipelineError):
+    """Fallo de `semantic_coverage_service.py` (Fase 1 de la ampliacion
+    semantica, no-contractual, diagnostico bajo demanda): un artefacto
+    V1 requerido para calcular `SemanticCoverageReport`
+    (`artifacts/02-canonical/`, `artifacts/03-dependencies.json`,
+    `artifacts/04-semantic-graph.json`, `artifacts/06-candidates.json`)
+    esta ausente, no es JSON valido, o no valida contra su propio
+    contrato Pydantic. `RunNotFoundError`/`StageNotReachedError`
+    (`api/errors.py`, via `read_run_state`/`require_stage_succeeded`)
+    cubren la ausencia del run o que no alcanzo CANDIDATES_DETECTED --
+    esta excepcion es exclusivamente para los cuatro artefactos de
+    entrada del analizador. El mensaje nunca incluye una ruta absoluta
+    (solo el nombre relativo del artefacto afectado) ni el contenido del
+    JSON invalido. Nunca se persiste un `diagnostics/semantic-coverage.
+    json` parcial cuando esta excepcion se lanza."""
