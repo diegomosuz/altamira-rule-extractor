@@ -442,3 +442,18 @@ class SemanticPropagationError(PipelineError):
     mensaje nunca incluye una ruta absoluta ni el contenido de un JSON
     invalido. Nunca se persiste un `diagnostics/semantic-propagation.json`
     parcial cuando esta excepcion se lanza."""
+
+
+class V2ShadowCandidatesError(PipelineError):
+    """Fallo de `v2_shadow_candidates_service.py`/`v2_shadow_detector.py`/
+    `v2_detector_context.py` (Fase 5 de la ampliacion semantica,
+    no-contractual, diagnostico bajo demanda, shadow mode): el run no
+    existe, `run.json` es invalido, el run no alcanzo PARSED/
+    SEMANTIC_GRAPH_BUILT/CANDIDATES_DETECTED (SUCCEEDED),
+    `artifacts/02-canonical/`/`artifacts/04-semantic-graph.json`/
+    `artifacts/06-candidates.json` estan ausentes/vacios/invalidos, o los
+    artefactos cargados son inconsistentes entre si (p. ej. programas de
+    `SemanticGraph` que no corresponden a ningun `CanonicalProgram`
+    actual). El mensaje nunca incluye una ruta absoluta ni el contenido
+    de un JSON invalido. Nunca se persiste un `diagnostics/
+    v2-candidates-shadow.json` parcial cuando esta excepcion se lanza."""

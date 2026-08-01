@@ -13,6 +13,7 @@ Uso:
     python -m altamira_extractor.cli semantic-coverage <run_id> [--json]
     python -m altamira_extractor.cli semantic-effects <run_id> [--json]
     python -m altamira_extractor.cli semantic-propagation <run_id> [--json]
+    python -m altamira_extractor.cli v2-candidates-shadow <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -46,6 +47,22 @@ haya alcanzado PARSED (SUCCEEDED). Nunca se invoca automaticamente
 desde `ingest`/`resume`/la API/la UI; nunca modifica `run.json` ni
 ningun artefacto `artifacts/01-10`; esta fase todavia no usa la
 propagacion para detectar reglas.
+
+`v2-candidates-shadow` (Fase 5 de la ampliacion semantica,
+`feat/v2-detectors-shadow-mode`) calcula y persiste `<run_dir>/
+diagnostics/v2-candidates-shadow.json`: un artefacto NO contractual,
+generado exclusivamente bajo demanda, que ejecuta detectores V2
+experimentales (registry de `pipeline/v2_detector_registry.py`) en
+modo shadow y compara sus candidatos contra `CandidateArtifact` V1
+(`artifacts/06-candidates.json`) -- ver `docs/V2_DETECTORS_SHADOW_MODE.
+md`. Calcula `SemanticEffectsArtifact`/`SemanticPropagationArtifact`
+en memoria (nunca lee ni escribe sus diagnostics). Requiere que RUN_ID
+haya alcanzado PARSED, SEMANTIC_GRAPH_BUILT y CANDIDATES_DETECTED
+(SUCCEEDED). Nunca se invoca automaticamente desde `ingest`/`resume`/
+la API/la UI; nunca modifica `run.json`, ningun `artifacts/01-10` ni
+ningun `diagnostics/` preexistente; nunca alimenta ContextPackage, el
+LLM, los guardrails ni Neo4j; sus candidatos nunca se presentan como
+reglas.
 
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
@@ -102,6 +119,10 @@ from .pipeline.semantic_propagation_service import (
     compute_semantic_propagation_artifact,
     write_semantic_propagation_artifact,
 )
+from .pipeline.v2_shadow_candidates_service import (
+    compute_v2_shadow_candidates_artifact,
+    write_v2_shadow_candidates_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +166,10 @@ SemanticEffectsJsonOption = Annotated[
 SemanticPropagationJsonOption = Annotated[
     bool,
     typer.Option("--json", help="Imprime el SemanticPropagationArtifact completo en JSON estable"),
+]
+V2ShadowJsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Imprime el V2ShadowCandidatesArtifact completo en JSON estable"),
 ]
 
 # Exit codes estables (Prompt 13c). Mapeados por `ApiError.code` (nunca por
@@ -518,6 +543,51 @@ def semantic_propagation(
     typer.echo(f"invalidated: {summary.invalidated_count}")
     typer.echo(f"blocked: {summary.blocked_count}")
     typer.echo(f"barriers: {summary.barrier_count}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="v2-candidates-shadow")
+@_guard
+def v2_candidates_shadow(
+    run_id: RunIdArgument, json_output: V2ShadowJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/v2-candidates-shadow.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 5 de la ampliacion
+    semantica, ver docs/V2_DETECTORS_SHADOW_MODE.md): ejecuta detectores
+    V2 experimentales en modo shadow sobre CanonicalProgram/
+    SemanticGraph/SemanticEffectsArtifact (en memoria)/
+    SemanticPropagationArtifact (en memoria) y compara sus candidatos
+    contra CandidateArtifact V1 (Q0). Requiere que RUN_ID ya haya
+    alcanzado PARSED, SEMANTIC_GRAPH_BUILT y CANDIDATES_DETECTED
+    (SUCCEEDED). Nunca modifica run.json, ningun artifacts/01-10 ni
+    ningun diagnostics/ preexistente; nunca accede a Neo4j ni invoca un
+    proveedor LLM; sus candidatos nunca alimentan ContextPackage, el
+    LLM, los guardrails ni la generacion de reglas.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_v2_shadow_candidates_artifact(run_dir, run_id)
+    artifact_path = write_v2_shadow_candidates_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"detectors_executed: {summary.detector_count}")
+    typer.echo(f"v1_candidates: {summary.v1_candidate_count}")
+    typer.echo(f"v2_candidates: {summary.v2_candidate_count}")
+    typer.echo(f"deterministic: {summary.deterministic_count}")
+    typer.echo(f"partial: {summary.partial_count}")
+    typer.echo(f"blocked: {summary.blocked_count}")
+    typer.echo(f"matched: {summary.matched_count}")
+    typer.echo(f"v1_only: {summary.v1_only_count}")
+    typer.echo(f"v2_only: {summary.v2_only_count}")
+    typer.echo(f"related_not_equivalent: {summary.related_not_equivalent_count}")
+    for rule_type in sorted(summary.counts_by_rule_type, key=lambda item: item.value):
+        typer.echo(f"  {rule_type.value}: {summary.counts_by_rule_type[rule_type]}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:

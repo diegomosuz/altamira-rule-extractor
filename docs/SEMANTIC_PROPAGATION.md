@@ -201,6 +201,16 @@ registran la versión del `SemanticEffectsArtifact` calculado en memoria
 que sirvió de entrada — nunca se lee `diagnostics/semantic-effects.json`
 del disco, así que este campo es la única procedencia disponible.
 
+## Uso posterior por los detectores V2 (Fase 5)
+
+`V2ShadowCandidatesArtifact` (`docs/V2_DETECTORS_SHADOW_MODE.md`,
+exclusivamente diagnóstico y bajo demanda) calcula este artefacto **en
+memoria** (nunca lee ni escribe `diagnostics/semantic-propagation.json`)
+y filtra sus `PropagatedValueFact` por `fact_kind` para proponer
+candidatos experimentales (`V2_RETURN_CODE_PROPAGATION`,
+`V2_STATE_CHANGE`) — nunca reimplementa el análisis de flujo descrito en
+este documento ni modifica ninguno de los modelos aquí definidos.
+
 ## Limitaciones
 
 - No detecta reglas ni candidatos: es exclusivamente diagnóstico.

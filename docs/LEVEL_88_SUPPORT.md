@@ -241,6 +241,15 @@ nuevos.
   `CONDITION_LITERAL`. Esta capa es enteramente opcional y posterior:
   nunca modifica `condition_names`, `SET_CONDITION_TRUE`/`FALSE`, ni
   ningún campo de `CanonicalProgram`.
+- **`V2ShadowCandidatesArtifact`** (Fase 5, `docs/
+  V2_DETECTORS_SHADOW_MODE.md`, exclusivamente diagnóstico y bajo
+  demanda) agrega el detector `V2_LEVEL_88_RETURN_CODE`, que consume el
+  mismo `CONDITION_LITERAL` para proponer un candidato experimental
+  cuando el padre de la condición es un `DataItem` con
+  `semantic_tag=return_code`. Nunca modifica `condition_names`,
+  `SemanticEffectsArtifact` ni `SemanticPropagationArtifact`, y sus
+  candidatos nunca alimentan `CandidateArtifact` V1 ni la generación de
+  reglas.
 
 ## Uso de Catherine como golden fixture
 
