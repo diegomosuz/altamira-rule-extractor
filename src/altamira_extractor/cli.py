@@ -12,6 +12,7 @@ Uso:
     python -m altamira_extractor.cli download <run_id> [--output PATH]
     python -m altamira_extractor.cli semantic-coverage <run_id> [--json]
     python -m altamira_extractor.cli semantic-effects <run_id> [--json]
+    python -m altamira_extractor.cli semantic-propagation <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -32,6 +33,19 @@ md`). Requiere unicamente que RUN_ID haya alcanzado PARSED
 (SUCCEEDED). Nunca se invoca automaticamente desde `ingest`/`resume`/
 la API/la UI; nunca modifica `run.json` ni ningun artefacto
 `artifacts/01-10`.
+
+`semantic-propagation` (Fase 4 de la ampliacion semantica,
+`feat/constant-copy-propagation`) calcula y persiste `<run_dir>/
+diagnostics/semantic-propagation.json`: un artefacto NO contractual,
+generado exclusivamente bajo demanda, que demuestra -- de forma
+conservadora, intraparrafo y trazable -- cadenas literal->copia y
+condicion-88->copia (ver `docs/SEMANTIC_PROPAGATION.md`). Calcula un
+`SemanticEffectsArtifact` en memoria (nunca lee ni escribe
+`diagnostics/semantic-effects.json`). Requiere unicamente que RUN_ID
+haya alcanzado PARSED (SUCCEEDED). Nunca se invoca automaticamente
+desde `ingest`/`resume`/la API/la UI; nunca modifica `run.json` ni
+ningun artefacto `artifacts/01-10`; esta fase todavia no usa la
+propagacion para detectar reglas.
 
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
@@ -84,6 +98,10 @@ from .pipeline.semantic_effects_service import (
     compute_semantic_effects_artifact,
     write_semantic_effects_artifact,
 )
+from .pipeline.semantic_propagation_service import (
+    compute_semantic_propagation_artifact,
+    write_semantic_propagation_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +141,10 @@ SemanticCoverageJsonOption = Annotated[
 SemanticEffectsJsonOption = Annotated[
     bool,
     typer.Option("--json", help="Imprime el SemanticEffectsArtifact completo en JSON estable"),
+]
+SemanticPropagationJsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Imprime el SemanticPropagationArtifact completo en JSON estable"),
 ]
 
 # Exit codes estables (Prompt 13c). Mapeados por `ApiError.code` (nunca por
@@ -454,6 +476,48 @@ def semantic_effects(
     )
     typer.echo(f"preserved: {status_counts.get(SemanticSupportStatus.PRESERVED_ONLY, 0)}")
     typer.echo(f"unsupported: {status_counts.get(SemanticSupportStatus.UNSUPPORTED, 0)}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="semantic-propagation")
+@_guard
+def semantic_propagation(
+    run_id: RunIdArgument, json_output: SemanticPropagationJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/semantic-propagation.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 4 de la ampliacion
+    semantica, ver docs/SEMANTIC_PROPAGATION.md): demuestra, dentro de un
+    unico paragraph, cadenas literal->copia (p. ej. `MOVE '0005' TO
+    WS-COD-AUX` seguido de `MOVE WS-COD-AUX TO WS-COD-RETORNO`) y
+    condicion-88->copia, de forma conservadora y trazable. Requiere que
+    RUN_ID ya haya alcanzado PARSED (SUCCEEDED). Nunca modifica run.json,
+    ningun artifacts/01-10, ni diagnostics/semantic-coverage.json/
+    diagnostics/semantic-effects.json; nunca accede a Neo4j ni invoca un
+    proveedor LLM; esta fase todavia no usa la propagacion para detectar
+    reglas.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_semantic_propagation_artifact(run_dir, run_id)
+    artifact_path = write_semantic_propagation_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"programs: {summary.program_count}")
+    typer.echo(f"paragraphs: {summary.paragraph_count}")
+    typer.echo(f"facts_total: {summary.fact_count}")
+    typer.echo(f"direct_literal: {summary.direct_literal_count}")
+    typer.echo(f"propagated_literal: {summary.propagated_literal_count}")
+    typer.echo(f"condition_literal: {summary.condition_literal_count}")
+    typer.echo(f"unresolved_copy: {summary.unresolved_copy_count}")
+    typer.echo(f"invalidated: {summary.invalidated_count}")
+    typer.echo(f"blocked: {summary.blocked_count}")
+    typer.echo(f"barriers: {summary.barrier_count}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:

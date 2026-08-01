@@ -177,6 +177,15 @@ contrato existe para expresar una cadena de asignaciones o un valor que
 `test_two_hop_move_chain_produces_no_propagation`
 (`tests/pipeline/test_semantic_effects_analyzer.py`).
 
+Esta ausencia deliberada es exactamente lo que la Fase 4 (`feat/constant-
+copy-propagation`, ver `docs/SEMANTIC_PROPAGATION.md`) cubre en una capa
+**separada y opcional**: `semantic_propagation_analyzer.py` consume estos
+mismos dos `SemanticEffect` (sin modificarlos ni reemplazarlos) y agrega
+`SemanticPropagationArtifact` (`diagnostics/semantic-propagation.json`)
+con la conclusión de que `WS-COD-RETORNO` puede demostrarse igual a
+`'0005'`. `SemanticEffectsArtifact` en sí mismo nunca cambia por la
+existencia de esa capa.
+
 ## Nivel 88: capturado nativamente cuando es demostrable (Fase 3)
 
 Desde la Fase 3 (`docs/LEVEL_88_SUPPORT.md`), un `SET condición TO TRUE`/

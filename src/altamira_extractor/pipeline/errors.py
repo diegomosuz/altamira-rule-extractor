@@ -430,3 +430,15 @@ class SemanticEffectsError(PipelineError):
     contenido del JSON invalido. Nunca se persiste un
     `diagnostics/semantic-effects.json` parcial cuando esta excepcion se
     lanza."""
+
+
+class SemanticPropagationError(PipelineError):
+    """Fallo de `semantic_propagation_analyzer.py`/`semantic_propagation_
+    service.py` (Fase 4 de la ampliacion semantica, no-contractual,
+    diagnostico bajo demanda): el run no existe, `run.json` es invalido,
+    el run no alcanzo PARSED (SUCCEEDED), `artifacts/02-canonical/` esta
+    ausente/vacio/invalido, o los programas de `SemanticEffectsArtifact`
+    (calculado en memoria) no coinciden con `CanonicalProgram[]`. El
+    mensaje nunca incluye una ruta absoluta ni el contenido de un JSON
+    invalido. Nunca se persiste un `diagnostics/semantic-propagation.json`
+    parcial cuando esta excepcion se lanza."""

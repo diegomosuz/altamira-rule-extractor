@@ -230,6 +230,17 @@ nuevos.
   cambios); y una dimensión nueva e independiente,
   `CONDITION_NAME_REFERENCE_RESOLVED`, para cada IF/EVALUATE con al menos
   una referencia verificada.
+- **`SemanticPropagationArtifact`** (Fase 4, `docs/SEMANTIC_PROPAGATION.md`)
+  usa `SET_CONDITION_TRUE` con `literal` poblado (condición con exactamente
+  un VALUE, sin THRU) para demostrar que el data item padre recibe ese
+  valor (`CONDITION_LITERAL`), y esa conclusión puede propagarse a un
+  `MOVE` posterior del mismo padre dentro del mismo paragraph
+  (`PROPAGATED_LITERAL`). `SET_CONDITION_TRUE` con múltiples VALUE/THRU
+  bloquea la propagación (`BLOCKED_PROPAGATION`) en vez de elegir un
+  valor del conjunto. `SET_CONDITION_FALSE` nunca produce un
+  `CONDITION_LITERAL`. Esta capa es enteramente opcional y posterior:
+  nunca modifica `condition_names`, `SET_CONDITION_TRUE`/`FALSE`, ni
+  ningún campo de `CanonicalProgram`.
 
 ## Uso de Catherine como golden fixture
 
