@@ -13,6 +13,8 @@ from pydantic import ValidationError
 
 from altamira_extractor.contracts import (
     BranchKind,
+    CanonicalConditionName,
+    CanonicalConditionValue,
     CanonicalDataItem,
     CanonicalParagraph,
     CanonicalProgram,
@@ -358,3 +360,296 @@ def test_statement_supports_multiple_target_paragraphs() -> None:
 def test_source_file_rejects_absolute_path() -> None:
     with pytest.raises(ValidationError):
         make_statement(source_file="/etc/passwd")
+
+
+# ---------------------------------------------------------------------------
+# Nivel 88 (Fase 3 de la ampliacion semantica): compatibilidad de contrato
+# ---------------------------------------------------------------------------
+
+
+def make_condition_value(**overrides: object) -> CanonicalConditionValue:
+    fields: dict[str, object] = {
+        "value": "0005",
+        "location_kind": LocationKind.UNKNOWN,
+    }
+    fields.update(overrides)
+    return CanonicalConditionValue(**fields)  # type: ignore[arg-type]
+
+
+def make_condition_name(**overrides: object) -> CanonicalConditionName:
+    fields: dict[str, object] = {
+        "name": "COD-CAMPO-INVALIDO",
+        "qualified_name": "WS-COD-RETORNO.COD-CAMPO-INVALIDO",
+        "parent_name": "WS-COD-RETORNO",
+        "parent_qualified_name": "WS-COD-RETORNO",
+        "values": [make_condition_value()],
+        "location_kind": LocationKind.UNKNOWN,
+    }
+    fields.update(overrides)
+    return CanonicalConditionName(**fields)  # type: ignore[arg-type]
+
+
+def test_historical_program_without_level_88_loads_without_condition_names_key() -> None:
+    """Un CanonicalProgram JSON historico (anterior a la Fase 3) no tiene
+    la clave `condition_names`: debe seguir cargando, con la lista vacia
+    por defecto -- nunca un error de campo faltante."""
+    program = make_program()
+    payload = program.model_dump(mode="json")
+    del payload["condition_names"]
+    loaded = CanonicalProgram.model_validate(payload)
+    assert loaded.condition_names == []
+
+
+def test_program_without_level_88_serializes_with_empty_condition_names() -> None:
+    program = make_program()
+    assert program.condition_names == []
+    assert '"condition_names": []' in program.to_stable_json()
+
+
+def test_program_with_single_condition_round_trips() -> None:
+    program = make_program()
+    program = CanonicalProgram(
+        **{
+            **program.model_dump(mode="json"),
+            "condition_names": [make_condition_name().model_dump(mode="json")],
+        }
+    )
+    assert len(program.condition_names) == 1
+    first = program.to_stable_json()
+    second = CanonicalProgram.model_validate_json(first).to_stable_json()
+    assert first == second
+
+
+def test_program_with_multiple_conditions_under_different_parents() -> None:
+    program = make_program()
+    a = make_condition_name(
+        name="COD-A", qualified_name="WS-X.COD-A", parent_name="WS-X", parent_qualified_name="WS-X"
+    )
+    b = make_condition_name(
+        name="COD-B", qualified_name="WS-Y.COD-B", parent_name="WS-Y", parent_qualified_name="WS-Y"
+    )
+    program = CanonicalProgram(
+        **{
+            **program.model_dump(mode="json"),
+            "condition_names": [a.model_dump(mode="json"), b.model_dump(mode="json")],
+        }
+    )
+    assert {c.name for c in program.condition_names} == {"COD-A", "COD-B"}
+
+
+def test_condition_value_single_value_has_no_through_value() -> None:
+    value = make_condition_value(value="0000")
+    assert value.value == "0000"
+    assert value.through_value is None
+
+
+def test_condition_name_supports_multiple_values() -> None:
+    condition = make_condition_name(
+        values=[
+            make_condition_value(value="01"),
+            make_condition_value(value="02"),
+            make_condition_value(value="03"),
+        ]
+    )
+    assert [v.value for v in condition.values] == ["01", "02", "03"]
+
+
+def test_condition_name_supports_thru_range() -> None:
+    condition = make_condition_name(
+        values=[make_condition_value(value="0010", through_value="0019")]
+    )
+    assert condition.values[0].through_value == "0019"
+
+
+def test_condition_name_requires_non_empty_values() -> None:
+    with pytest.raises(ValidationError):
+        make_condition_name(values=[])
+
+
+def test_condition_name_resolved_parent_is_captured() -> None:
+    condition = make_condition_name(parent_name="WS-SWITCHES", parent_qualified_name="WS-SWITCHES")
+    assert condition.parent_name == "WS-SWITCHES"
+    assert condition.parent_qualified_name == "WS-SWITCHES"
+
+
+def test_condition_name_requires_parent_name() -> None:
+    with pytest.raises(ValidationError):
+        make_condition_name(parent_name="")
+
+
+def test_condition_name_qualified_name_is_required() -> None:
+    with pytest.raises(ValidationError):
+        make_condition_name(qualified_name="")
+
+
+def test_program_rejects_homonymous_condition_names_with_same_qualified_name() -> None:
+    program = make_program()
+    duplicate = make_condition_name()
+    with pytest.raises(ValidationError):
+        CanonicalProgram(
+            **{
+                **program.model_dump(mode="json"),
+                "condition_names": [
+                    duplicate.model_dump(mode="json"),
+                    duplicate.model_dump(mode="json"),
+                ],
+            }
+        )
+
+
+def test_program_accepts_homonymous_condition_names_under_different_parents() -> None:
+    """Mismo `name` bajo padres distintos es valido a nivel de contrato
+    (qualified_name los distingue); la resolucion de ambiguedad por
+    nombre simple ocurre en el parser Java (ver
+    docs/LEVEL_88_SUPPORT.md), no aqui."""
+    program = make_program()
+    a = make_condition_name(
+        name="COD-DUP",
+        qualified_name="WS-X.COD-DUP",
+        parent_name="WS-X",
+        parent_qualified_name="WS-X",
+    )
+    b = make_condition_name(
+        name="COD-DUP",
+        qualified_name="WS-Y.COD-DUP",
+        parent_name="WS-Y",
+        parent_qualified_name="WS-Y",
+    )
+    program = CanonicalProgram(
+        **{
+            **program.model_dump(mode="json"),
+            "condition_names": [a.model_dump(mode="json"), b.model_dump(mode="json")],
+        }
+    )
+    assert len(program.condition_names) == 2
+
+
+def test_set_statement_with_condition_name_target_resolved() -> None:
+    statement = make_statement(
+        kind=StatementKind.SET,
+        source_text="SET COD-CAMPO-INVALIDO TO TRUE",
+        target_data_items=["COD-CAMPO-INVALIDO"],
+        variables_written=["COD-CAMPO-INVALIDO"],
+        assigned_literal="true",
+        condition_name_target="COD-CAMPO-INVALIDO",
+        condition_set_value=True,
+    )
+    assert statement.condition_name_target == "COD-CAMPO-INVALIDO"
+    assert statement.condition_set_value is True
+
+
+def test_set_condition_target_and_value_must_both_be_present_or_absent() -> None:
+    with pytest.raises(ValidationError):
+        make_statement(
+            kind=StatementKind.SET, condition_name_target="COD-X", condition_set_value=None
+        )
+    with pytest.raises(ValidationError):
+        make_statement(kind=StatementKind.SET, condition_name_target=None, condition_set_value=True)
+
+
+def test_ordinary_set_never_populates_condition_fields() -> None:
+    statement = make_statement(
+        kind=StatementKind.SET,
+        source_text="SET WS-INDICE TO 1",
+        target_data_items=["WS-INDICE"],
+        variables_written=["WS-INDICE"],
+        assigned_literal="1",
+    )
+    assert statement.condition_name_target is None
+    assert statement.condition_set_value is None
+
+
+def test_index_set_never_confused_with_condition_name() -> None:
+    statement = make_statement(
+        kind=StatementKind.SET,
+        source_text="SET WS-IDX TO 5",
+        target_data_items=["WS-IDX"],
+        variables_written=["WS-IDX"],
+        assigned_literal="5",
+    )
+    assert statement.condition_name_target is None
+
+
+def test_if_with_direct_condition_reference() -> None:
+    statement = make_statement(
+        kind=StatementKind.IF,
+        source_text="IF COD-CAMPO-INVALIDO",
+        expression="COD-CAMPO-INVALIDO",
+        referenced_condition_names=["COD-CAMPO-INVALIDO"],
+    )
+    assert statement.referenced_condition_names == ["COD-CAMPO-INVALIDO"]
+
+
+def test_if_with_ordinary_variable_has_no_condition_reference() -> None:
+    statement = make_statement(
+        kind=StatementKind.IF,
+        source_text="IF WS-MONTO > WS-LIMITE",
+        operands=["WS-MONTO", "WS-LIMITE"],
+    )
+    assert statement.referenced_condition_names == []
+
+
+def test_evaluate_when_branch_carries_referenced_condition_names() -> None:
+    statement = make_statement(
+        kind=StatementKind.OTHER,
+        source_text="DISPLAY 'OK'",
+        branch_kind=BranchKind.WHEN,
+        parent_statement_id="P1::A::0::EVALUATE",
+        referenced_condition_names=["COD-CAMPO-INVALIDO"],
+    )
+    assert statement.referenced_condition_names == ["COD-CAMPO-INVALIDO"]
+
+
+def test_referenced_condition_names_rejects_unsorted() -> None:
+    with pytest.raises(ValidationError):
+        make_statement(referenced_condition_names=["COD-B", "COD-A"])
+
+
+def test_referenced_condition_names_rejects_duplicates() -> None:
+    with pytest.raises(ValidationError):
+        make_statement(referenced_condition_names=["COD-A", "COD-A"])
+
+
+def test_condition_name_has_no_source_text_field() -> None:
+    assert "source_text" not in CanonicalConditionName.model_fields
+    assert "source_text" not in CanonicalConditionValue.model_fields
+
+
+def test_condition_value_rejects_absolute_source_file() -> None:
+    with pytest.raises(ValidationError):
+        make_condition_value(source_file="/etc/passwd")
+    with pytest.raises(ValidationError):
+        make_condition_value(source_file="C:/absolute/path.cbl")
+
+
+# --- schema_version (Fase 3, soporte nivel 88): "1.0"/"1.1" condicional ----
+
+
+def test_schema_version_defaults_to_1_0() -> None:
+    assert make_program().schema_version == "1.0"
+
+
+def test_schema_version_accepts_historical_1_0_explicitly() -> None:
+    program = CanonicalProgram(
+        **{**make_program().model_dump(mode="json"), "schema_version": "1.0"}
+    )
+    assert program.schema_version == "1.0"
+
+
+def test_schema_version_accepts_1_1_for_program_with_level_88_extension() -> None:
+    program = CanonicalProgram(
+        **{
+            **make_program().model_dump(mode="json"),
+            "schema_version": "1.1",
+            "condition_names": [make_condition_name().model_dump(mode="json")],
+        }
+    )
+    assert program.schema_version == "1.1"
+    assert len(program.condition_names) == 1
+
+
+def test_schema_version_rejects_unknown_version() -> None:
+    with pytest.raises(ValidationError):
+        CanonicalProgram(
+            **{**make_program().model_dump(mode="json"), "schema_version": "2.0"}
+        )

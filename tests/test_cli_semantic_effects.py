@@ -167,7 +167,7 @@ def test_semantic_effects_persists_the_artifact_file(patched_settings: Settings)
     assert artifact_path.is_file()
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert payload["run_id"] == _RUN_ID
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
 
 
 def test_semantic_effects_json_option_prints_full_artifact_after_persisting(
@@ -182,7 +182,7 @@ def test_semantic_effects_json_option_prints_full_artifact_after_persisting(
     json_start = result.stdout.index("{")
     payload = json.loads(result.stdout[json_start:])
     assert payload["run_id"] == _RUN_ID
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert (run_dir / "diagnostics" / "semantic-effects.json").is_file()
 
 

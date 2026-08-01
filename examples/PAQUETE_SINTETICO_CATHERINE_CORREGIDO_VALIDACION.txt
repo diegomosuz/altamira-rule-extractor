@@ -1,0 +1,34 @@
+VALIDACION DEL PAQUETE CATHERINE CORREGIDO
+================================================
+Archivo: PAQUETE_SINTETICO_CATHERINE_CORREGIDO_APP_ACTUAL.zip
+SHA-256: e8a41fc98ab54aa7cddaf7cb454129af1e5d3d82016b59135c6cb4a4938e34a3
+Entradas: 5
+CRC: OK
+Directorios explicitos: 0
+MOVE literal a WS-COD-RETORNO: 15
+Codigos encontrados: 0005, 0005, 0005, 0005, 9999, 0001, 9999, 0001, 0003, 0002, 9999, 0000, 0004, 9999, 0000
+SET de nivel 88 remanentes sobre COD-*: 0
+Candidatos esperados por el detector Q0 actual: 14
+
+CONTENIDO DEL ZIP
+- 01-codigo/cobol/CONSALDO.cbl
+- 02-parametria/ddl/CUENTAS.sql
+- 02-parametria/ddl/PRODUCTO_CLIENTE.sql
+- README.txt
+- manifest.xml
+
+COMPROBACIONES
+- manifest.xml en la raiz: OK
+- programa COBOL bajo 01-codigo/: OK
+- DDL bajo 02-parametria/ddl/: OK
+- no hay entradas terminadas en /: OK
+- todas las entradas son archivos regulares Unix: OK
+- no quedan SET COD-* TO TRUE: OK
+- 14 decisiones IF con MOVE literal a WS-COD-RETORNO: ESPERADO
+
+NOTA
+El programa original ya habia superado PARSED en la aplicacion. Esta version
+reemplaza semantica indirecta de nivel 88 por MOVE literales directos y usa
+decisiones IF explicitas, que son los patrones consumidos por el detector Q0
+de la version actual. La finalizacion completa del run depende de que Neo4j
+y el proveedor LLM esten correctamente configurados.

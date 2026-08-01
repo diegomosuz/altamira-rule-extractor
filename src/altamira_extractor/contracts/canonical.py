@@ -92,6 +92,52 @@ class CanonicalDataItem(AltamiraBaseModel):
         return self
 
 
+class CanonicalConditionValue(AltamiraBaseModel):
+    """Un unico VALUE (o intervalo VALUE ... THRU ...) de una condicion
+    nivel 88 (Fase 3 de la ampliacion semantica). `through_value` es
+    `None` para un VALUE simple; solo se declara cuando ProLeap expone un
+    intervalo THRU real -- nunca inferido."""
+
+    value: str = Field(min_length=1)
+    through_value: str | None = None
+    source_file: RelativePath | None = None
+    line: int | None = Field(default=None, ge=1)
+    location_kind: LocationKind
+
+    @model_validator(mode="after")
+    def _check_location(self) -> CanonicalConditionValue:
+        _check_single_line_location(
+            source_file=self.source_file, line=self.line, location_kind=self.location_kind
+        )
+        return self
+
+
+class CanonicalConditionName(AltamiraBaseModel):
+    """Una condicion nivel 88 (condition-name) declarada bajo un data item
+    padre (Fase 3 de la ampliacion semantica). `values` nunca esta vacia:
+    si el parser no pudo demostrar ningun VALUE, la condicion se omite
+    del artefacto y se registra en `unsupported_constructs` en su lugar
+    (nunca se inventa un valor). `parent_name`/`parent_qualified_name`
+    identifican el data item cuyo VALUE satisface la condicion, resuelto
+    estructuralmente por el parser -- nunca por coincidencia de texto."""
+
+    name: str = Field(min_length=1)
+    qualified_name: str = Field(min_length=1)
+    parent_name: str = Field(min_length=1)
+    parent_qualified_name: str = Field(min_length=1)
+    values: list[CanonicalConditionValue] = Field(min_length=1)
+    source_file: RelativePath | None = None
+    line: int | None = Field(default=None, ge=1)
+    location_kind: LocationKind
+
+    @model_validator(mode="after")
+    def _check_location(self) -> CanonicalConditionName:
+        _check_single_line_location(
+            source_file=self.source_file, line=self.line, location_kind=self.location_kind
+        )
+        return self
+
+
 class CanonicalSqlAccess(AltamiraBaseModel):
     """Acceso SQL conservado como texto/estructura suficiente para derivar
     la relacion directa Paragraph->Table en el grafo semantico."""
@@ -150,6 +196,9 @@ class CanonicalStatement(AltamiraBaseModel):
     assigned_literal: str | None = None
     target_paragraphs: list[str] = Field(default_factory=list)
     sql_access: list[CanonicalSqlAccess] = Field(default_factory=list)
+    condition_name_target: str | None = None
+    condition_set_value: bool | None = None
+    referenced_condition_names: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_location(self) -> CanonicalStatement:
@@ -165,6 +214,26 @@ class CanonicalStatement(AltamiraBaseModel):
     def _check_branch_requires_parent(self) -> CanonicalStatement:
         if self.branch_kind is not None and self.parent_statement_id is None:
             raise ValueError("branch_kind requiere parent_statement_id")
+        return self
+
+    @model_validator(mode="after")
+    def _check_condition_set_coherence(self) -> CanonicalStatement:
+        has_target = self.condition_name_target is not None
+        has_value = self.condition_set_value is not None
+        if has_target != has_value:
+            raise ValueError(
+                "condition_name_target y condition_set_value deben estar ambos presentes o "
+                "ambos ausentes (SET condition-name TO TRUE/FALSE resuelto de forma completa "
+                "o no resuelto en absoluto)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_referenced_condition_names_sorted_and_unique(self) -> CanonicalStatement:
+        if self.referenced_condition_names != sorted(set(self.referenced_condition_names)):
+            raise ValueError(
+                "referenced_condition_names debe estar ordenado alfabeticamente y sin duplicados"
+            )
         return self
 
 
@@ -242,7 +311,16 @@ class CanonicalParagraph(AltamiraBaseModel):
 
 
 class CanonicalProgram(AltamiraBaseModel):
-    schema_version: Literal["1.0"] = "1.0"
+    """`schema_version` (Fase 3 de la ampliacion semantica -- soporte
+    nivel 88, ver docs/LEVEL_88_SUPPORT.md): `"1.0"` para la forma
+    historica (sin ninguna extension de nivel 88 realmente presente);
+    `"1.1"` en cuanto el parser Java detecta `condition_names` no vacia o
+    algun `CanonicalStatement` con `condition_name_target`/
+    `referenced_condition_names` poblados. El contrato acepta ambos
+    valores en lectura; el parser decide cual emitir por programa (nunca
+    este modulo, que solo valida)."""
+
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     program_name: str = Field(min_length=1)
     source_file: RelativePath
     source_hash: Sha256Hex
@@ -250,9 +328,17 @@ class CanonicalProgram(AltamiraBaseModel):
     source_format: SourceFormat
     encoding: str = Field(min_length=1)
     data_items: list[CanonicalDataItem] = Field(default_factory=list)
+    condition_names: list[CanonicalConditionName] = Field(default_factory=list)
     paragraphs: list[CanonicalParagraph] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     unsupported_constructs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_condition_names_unique(self) -> CanonicalProgram:
+        qualified_names = [condition.qualified_name for condition in self.condition_names]
+        if len(qualified_names) != len(set(qualified_names)):
+            raise ValueError("condition_names contiene qualified_name duplicado")
+        return self
 
     @model_validator(mode="after")
     def _check_statement_ids_unique_across_program(self) -> CanonicalProgram:

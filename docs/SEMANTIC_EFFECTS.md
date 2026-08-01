@@ -92,7 +92,8 @@ No se invoca automáticamente desde `ingest`, `resume`, la API ni la UI.
 | `ASSIGN_LITERAL` | `MOVE` de un literal a uno o más destinos | Un efecto por destino cuando hay múltiples (`MULTIPLE_TARGET_ASSIGNMENT`). |
 | `COPY_VALUE` | `MOVE` variable-a-variable (uno o varios) | Nunca infiere correspondencia campo a campo entre grupos; lista todo lo declarado. |
 | `COMPUTE_VALUE` | `COMPUTE` | La expresión se conserva como texto, nunca se evalúa. |
-| `SET_VALUE` | `SET` | Nunca distingue `SET` ordinario de condición-88 `TO TRUE/FALSE` ni de `SET ... UP/DOWN BY`. |
+| `SET_VALUE` | `SET` ordinario, o `SET` no resuelto contra una condición 88 conocida | Nunca distingue `SET` de índice de `SET ... UP/DOWN BY`. |
+| `SET_CONDITION_TRUE` / `SET_CONDITION_FALSE` | `SET condición-88 TO TRUE`/`TO FALSE` resuelto estructuralmente (Fase 3, ver `docs/LEVEL_88_SUPPORT.md`) | Siempre `FULLY_SUPPORTED` cuando aparece; `condition_name`/`parent_data_item`/`condition_values` conservan la evidencia; `literal` solo se puebla para un VALUE simple sin THRU. |
 | `CONTROL_TRANSFER` | `GO TO`/`PERFORM` | `PERFORM` siempre `PARTIALLY_SUPPORTED` (UNTIL/VARYING pueden no estar representados). |
 | `EXECUTE_SQL` | Cada `CanonicalSqlAccess` de un `EXEC SQL` | `predicate_text` nunca se copia al efecto; `reads`/`writes` permanecen vacíos salvo evidencia inequívoca (ver "Variables host SQL: dirección no verificable" más abajo). |
 | `PRESERVED_STATEMENT` | `StatementKind.OTHER`, `MOVE CORRESPONDING`/grupo no resoluble, o precondiciones faltantes de `COMPUTE`/`GO TO`/`PERFORM`/`EXEC SQL` | Nunca afirma `writes`, `target_data_items` ni `literal`. |
@@ -103,10 +104,11 @@ No se invoca automáticamente desde `ingest`, `resume`, la API ni la UI.
 el vínculo con la decisión se preserva vía `source_reference` de esas hijas.
 Cero efectos para un `IF`/`EVALUATE` no es un error.
 
-Deliberadamente **no** existen todavía `SET_CONDITION_TRUE`,
-`SET_CONDITION_FALSE`, `CALL_PROGRAM`, `CICS_LINK`, `READ_FILE` ni
-`WRITE_FILE`: requieren información que el parser no conserva de forma
-confiable hoy.
+`SET_CONDITION_TRUE`/`SET_CONDITION_FALSE` se agregaron en la Fase 3 de la
+ampliación semántica (soporte nivel 88, ver `docs/LEVEL_88_SUPPORT.md`).
+Deliberadamente **siguen sin existir** `CALL_PROGRAM`, `CICS_LINK`,
+`READ_FILE` ni `WRITE_FILE`: requieren información que el parser no
+conserva de forma confiable hoy.
 
 ## Variables host SQL: dirección no verificable
 
@@ -175,16 +177,25 @@ contrato existe para expresar una cadena de asignaciones o un valor que
 `test_two_hop_move_chain_produces_no_propagation`
 (`tests/pipeline/test_semantic_effects_analyzer.py`).
 
-## Nivel 88: se reporta, nunca se interpreta
+## Nivel 88: capturado nativamente cuando es demostrable (Fase 3)
 
-Cuando un `SET` escribe sobre un `target_data_items` cuyo nombre coincide
-—por comparación directa, nunca inferencia— con un `CanonicalDataItem` de
-`level == 88` del mismo programa, el efecto `SET_VALUE` resultante agrega
-`diagnostic_code=LEVEL_88_VALUE_NOT_AVAILABLE`. El analizador **nunca**
-infiere la variable padre, el valor `VALUE`, si la semántica es `TRUE` o
-`FALSE`, ni un rango `THRU`: ningún campo del contrato los expresa. Si no se
-puede verificar por nombre que el target es nivel 88, no se afirma nada al
-respecto.
+Desde la Fase 3 (`docs/LEVEL_88_SUPPORT.md`), un `SET condición TO TRUE`/
+`TO FALSE` que el parser Java resolvió estructuralmente contra
+`CanonicalProgram.condition_names` (`CanonicalStatement.
+condition_name_target`/`condition_set_value` poblados) produce
+`SET_CONDITION_TRUE`/`SET_CONDITION_FALSE`, siempre `FULLY_SUPPORTED`, con
+`condition_name`/`parent_data_item`/`condition_values` conservados.
+
+El diagnóstico previo, `LEVEL_88_VALUE_NOT_AVAILABLE`, se mantiene
+exclusivamente para el caso **residual**: un `SET` cuyo `target_data_items`
+coincide por nombre con un `CanonicalDataItem` de `level == 88`, pero que
+el parser Java **no** pudo resolver como `TO TRUE`/`TO FALSE` contra una
+condición única de `condition_names` (p. ej. un nombre ambiguo entre
+condiciones homónimas bajo padres distintos — ver limitaciones en
+`docs/LEVEL_88_SUPPORT.md`). En ese caso el efecto sigue siendo `SET_VALUE`
+y el analizador **nunca** infiere la variable padre, el VALUE, ni un rango
+THRU por sí mismo: la comparación de nombre es la única señal, nunca una
+inferencia adicional.
 
 ## Identificadores determinísticos
 
@@ -201,6 +212,43 @@ Un run que nunca ejecutó `semantic-effects` no tiene
 `diagnostics/semantic-effects.json` y se comporta exactamente igual que antes
 de que esta funcionalidad existiera: ningún lector V1 (`read_run_state`, la
 API, la UI, el CLI) sabe de su existencia ni la requiere.
+
+## `schema_version` vs. `analyzer_version`
+
+Dos campos independientes, con significados distintos:
+
+- **`schema_version`** versiona la **forma** serializada del artefacto (qué
+  campos existen en `SemanticEffect`/`SemanticEffectKind`).
+- **`analyzer_version`** versiona la **lógica de interpretación** del
+  analizador (`pipeline/semantic_effects_analyzer.py`), incluso cuando la
+  forma no cambia.
+
+La Fase 3 de la ampliación semántica (soporte nivel 88,
+`docs/LEVEL_88_SUPPORT.md`) subió **ambos** a `"1.1"` — a diferencia de
+`SemanticCoverageReport` (Fase 8, más abajo), donde solo `analyzer_version`
+subió: aquí la forma también cambió (`SemanticEffect` ganó `condition_name`/
+`parent_data_item`/`condition_values`; `SemanticEffectKind` ganó
+`SET_CONDITION_TRUE`/`SET_CONDITION_FALSE`), y la lógica de `SET` cambió de
+forma inequívoca (un `SET condición-88 TO TRUE/FALSE` resuelto ya no cae en
+el `SET_VALUE` genérico de la Fase 2).
+
+**Compatibilidad con `semantic-effects.json` de la Fase 2**: el contrato
+acepta `schema_version`/`analyzer_version` `"1.0"` en lectura — un artefacto
+generado por el analizador anterior a la Fase 3 sigue cargando sin cambios
+(los campos nuevos son opcionales, con default `None`/lista vacía). Un
+analizador nuevo **siempre** emite `"1.1"` para ambos campos en cualquier
+artefacto que genere, independientemente de si el programa analizado usa o
+no nivel 88 — a diferencia de `CanonicalProgram.schema_version` (condicional
+por programa, ver `docs/LEVEL_88_SUPPORT.md`): aquí la versión describe la
+**capacidad del analizador**, no el contenido de un artefacto individual.
+
+**Regenerar el diagnóstico sobre un run histórico**: `semantic-effects.json`
+no es un artefacto versionado por run ni migrado in situ — volver a ejecutar
+`semantic-effects <run_id>` simplemente sobrescribe el archivo con un
+artefacto `"1.1"` nuevo, calculado desde `artifacts/02-canonical/` tal como
+existe hoy (si ese canónico es `schema_version="1.1"` con condiciones nivel
+88, el nuevo `semantic-effects.json` reflejará `SET_CONDITION_TRUE`/`FALSE`;
+si es `"1.0"` histórico, seguirá viendo `SET_VALUE` genérico como siempre).
 
 ## Idempotencia y hashing
 
@@ -222,20 +270,24 @@ futuro checkpoint lo conecta al resto del pipeline.
 
 ## Tests
 
-95 tests en total (`pytest -k "semantic_effect or semantic-effect"`):
+Ver también `docs/LEVEL_88_SUPPORT.md` para los tests específicos de
+`SET_CONDITION_TRUE`/`SET_CONDITION_FALSE` (Fase 3):
 
-- `tests/contracts/test_semantic_effects.py` (38) — contrato: versiones,
-  serialización estable, validadores de coherencia por `SemanticEffectKind`,
-  contadores, orden determinístico, campos extra, `sql_host_variables`
-  (default vacío, orden/unicidad, incompatibilidad con `reads`/`writes`
-  cuando la dirección es no resuelta).
-- `tests/pipeline/test_semantic_effects_analyzer.py` (31) — analizador puro:
-  las cinco variantes de `MOVE`, `SET` (incluido nivel 88 verificable),
-  `COMPUTE`, `GO TO`, `PERFORM`, `EXEC SQL` (SELECT/INSERT/UPDATE/DELETE,
-  sin inferir dirección, `sql_host_variables` ordenado y sin duplicados,
-  `predicate_text` nunca copiado), `IF`/`EVALUATE` sin efecto artificial,
-  `OTHER`, `unsupported_constructs`, múltiples programas, determinismo, y
-  el caso obligatorio de la cadena de dos `MOVE` sin propagación.
+- `tests/contracts/test_semantic_effects.py` — contrato: versiones,
+  serialización estable, validadores de coherencia por `SemanticEffectKind`
+  (incluido `SET_CONDITION_TRUE`/`FALSE`), contadores, orden determinístico,
+  campos extra, `sql_host_variables` (default vacío, orden/unicidad,
+  incompatibilidad con `reads`/`writes` cuando la dirección es no resuelta).
+- `tests/pipeline/test_semantic_effects_analyzer.py` — analizador puro:
+  las cinco variantes de `MOVE`, `SET` (ordinario, resuelto contra una
+  condición 88, y el residual no resuelto), `COMPUTE`, `GO TO`, `PERFORM`,
+  `EXEC SQL` (SELECT/INSERT/UPDATE/DELETE, sin inferir dirección,
+  `sql_host_variables` ordenado y sin duplicados, `predicate_text` nunca
+  copiado), `IF`/`EVALUATE` sin efecto artificial, `OTHER`,
+  `unsupported_constructs`, múltiples programas, determinismo, el caso
+  obligatorio de la cadena de dos `MOVE` sin propagación, y el caso
+  obligatorio `SET condición-88 TO TRUE` + `MOVE` de la variable padre sin
+  propagación.
 - `tests/pipeline/test_semantic_effects_service.py` (16) — servicio de
   filesystem: creación, determinismo, errores claros, no modificación de
   artefactos de entrada.

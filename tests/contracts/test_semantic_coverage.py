@@ -110,8 +110,15 @@ def test_schema_version_is_exactly_1_0() -> None:
     assert _report().schema_version == "1.0"
 
 
-def test_analyzer_version_is_exactly_1_0() -> None:
-    assert _report().analyzer_version == "1.0"
+def test_analyzer_version_defaults_to_1_1() -> None:
+    assert _report().analyzer_version == "1.1"
+
+
+def test_analyzer_version_accepts_historical_1_0() -> None:
+    # Fase 3 (soporte nivel 88) subio analyzer_version a "1.1" sin
+    # cambiar schema_version: reportes historicos con "1.0" (logica de
+    # clasificacion previa a nivel 88) deben seguir cargando.
+    assert _report(analyzer_version="1.0").analyzer_version == "1.0"
 
 
 def test_schema_version_rejects_other_values() -> None:
@@ -121,7 +128,7 @@ def test_schema_version_rejects_other_values() -> None:
 
 def test_analyzer_version_rejects_other_values() -> None:
     with pytest.raises(ValidationError):
-        _report(analyzer_version="1.1")
+        _report(analyzer_version="1.2")
 
 
 # ---------------------------------------------------------------------------

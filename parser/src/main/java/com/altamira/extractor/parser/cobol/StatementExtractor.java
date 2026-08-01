@@ -11,6 +11,7 @@ import io.proleap.cobol.asg.metamodel.procedure.Statement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.Store;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
+import io.proleap.cobol.asg.metamodel.procedure.evaluate.When;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.WhenPhrase;
 import io.proleap.cobol.asg.metamodel.procedure.execsql.ExecSqlStatement;
 import io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement;
@@ -20,9 +21,13 @@ import io.proleap.cobol.asg.metamodel.procedure.move.MoveToStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement;
 import io.proleap.cobol.asg.metamodel.procedure.set.SetStatement;
 import io.proleap.cobol.asg.metamodel.procedure.set.SetTo;
+import io.proleap.cobol.asg.metamodel.procedure.set.To;
+import io.proleap.cobol.asg.metamodel.procedure.set.Value;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.antlr.v4.runtime.ParserRuleContext;
 
 /**
@@ -36,12 +41,14 @@ final class StatementExtractor {
 
     private final ExtractionContext ctx;
     private final String paragraphName;
+    private final Set<String> knownConditionNames;
     private final List<CanonicalStatement> collected = new ArrayList<>();
     private final EmbeddedSqlExtractor sqlExtractor = new EmbeddedSqlExtractor();
 
-    StatementExtractor(ExtractionContext ctx, String paragraphName) {
+    StatementExtractor(ExtractionContext ctx, String paragraphName, Set<String> knownConditionNames) {
         this.ctx = ctx;
         this.paragraphName = paragraphName;
+        this.knownConditionNames = knownConditionNames;
     }
 
     List<CanonicalStatement> extract(List<Statement> topLevelStatements) {
@@ -85,11 +92,14 @@ final class StatementExtractor {
         String expression = ifStmt.getCondition() != null && ifStmt.getCondition().getCtx() != null
                 ? ifStmt.getCondition().getCtx().getText()
                 : null;
+        List<String> referencedConditionNames = ifStmt.getCondition() != null
+                ? ConditionNameReferences.fromCondition(ifStmt.getCondition(), knownConditionNames)
+                : List.of();
         String id = nextId(StatementKind.IF);
         collected.add(new CanonicalStatement(
                 id, StatementKind.IF, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), operands,
-                operands, List.of(), List.of(), null, List.of(), List.of()));
+                operands, List.of(), List.of(), null, List.of(), List.of(), null, null, referencedConditionNames));
 
         if (ifStmt.getThen() != null) {
             walk(ifStmt.getThen().getStatements(), id, BranchKind.THEN);
@@ -115,11 +125,12 @@ final class StatementExtractor {
                 id, StatementKind.EVALUATE, loc.sourceText(), loc.sourceFile(), loc.lineStart(),
                 loc.lineEnd(), loc.kind(), parentId, branchKind, null, expression,
                 normalizeExpression(expression), operands, operands, List.of(), List.of(), null, List.of(),
-                List.of()));
+                List.of(), null, null, List.of()));
 
         for (WhenPhrase whenPhrase : evaluateStmt.getWhenPhrases()) {
             String condition = whenPhrase.getCtx() != null ? whenPhrase.getCtx().getText() : null;
-            walkBranchWithCondition(whenPhrase.getStatements(), id, BranchKind.WHEN, condition);
+            List<String> referencedConditionNames = evaluateWhenPhraseConditionNames(whenPhrase);
+            walkBranchWithCondition(whenPhrase.getStatements(), id, BranchKind.WHEN, condition, referencedConditionNames);
         }
         if (evaluateStmt.getWhenOther() != null) {
             walk(evaluateStmt.getWhenOther().getStatements(), id, BranchKind.WHEN_OTHER);
@@ -127,34 +138,73 @@ final class StatementExtractor {
     }
 
     /**
+     * Referencias a condition-names 88 verificadas en TODAS las
+     * alternativas {@code WHEN a WHEN b ...} de una misma WhenPhrase
+     * (semantica OR: cualquiera satisface la rama). Verificado
+     * empiricamente: {@code When.getCondition().getConditionValueStmt()}
+     * es null para una referencia simple a un identificador -- el nombre
+     * aparece en cambio via {@code getValue().getValueStmt()} como un
+     * CallValueStmt generico (ProLeap no distingue aqui un condition-name
+     * de cualquier otro dato); solo se confirma cruzando contra
+     * knownConditionNames.
+     */
+    private List<String> evaluateWhenPhraseConditionNames(WhenPhrase whenPhrase) {
+        Set<String> names = new LinkedHashSet<>();
+        for (When when : whenPhrase.getWhens()) {
+            if (when.getCondition() == null) {
+                continue;
+            }
+            var condition = when.getCondition();
+            if (condition.getConditionValueStmt() instanceof io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt cvs) {
+                names.addAll(ConditionNameReferences.fromCondition(cvs, knownConditionNames));
+            }
+            if (condition.getValue() != null && condition.getValue().getValueStmt() != null) {
+                names.addAll(ConditionNameReferences.fromEvaluateValueStmt(
+                        condition.getValue().getValueStmt(), knownConditionNames));
+            }
+        }
+        return new ArrayList<>(names);
+    }
+
+    /**
      * Como walk(), pero el primer statement de la rama lleva branch_condition
-     * (el resto de la rama, si hay mas de un statement, no repite la
-     * condicion: ya quedo asociada al primero).
+     * y las referencias a condition-names de la clausula WHEN (el resto de
+     * la rama, si hay mas de un statement, no repite ninguna de las dos:
+     * ya quedaron asociadas al primero).
      */
     private void walkBranchWithCondition(
-            List<Statement> statements, String parentId, BranchKind branchKind, String condition) {
+            List<Statement> statements, String parentId, BranchKind branchKind, String condition,
+            List<String> referencedConditionNames) {
         if (statements.isEmpty()) {
             return;
         }
         int sizeBefore = collected.size();
         convertOne(statements.get(0), parentId, branchKind);
-        if (condition != null && collected.size() > sizeBefore) {
+        if (collected.size() > sizeBefore) {
             int lastIndex = collected.size() - 1;
-            collected.set(lastIndex, withBranchCondition(collected.get(lastIndex), condition));
+            collected.set(
+                    lastIndex,
+                    withBranchCondition(collected.get(lastIndex), condition, referencedConditionNames));
         }
         for (int i = 1; i < statements.size(); i++) {
             convertOne(statements.get(i), parentId, branchKind);
         }
     }
 
-    private static CanonicalStatement withBranchCondition(CanonicalStatement statement, String condition) {
+    private static CanonicalStatement withBranchCondition(
+            CanonicalStatement statement, String condition, List<String> whenReferencedConditionNames) {
+        Set<String> mergedReferences = new LinkedHashSet<>(statement.referencedConditionNames());
+        mergedReferences.addAll(whenReferencedConditionNames);
+        List<String> merged = new ArrayList<>(mergedReferences);
+        merged.sort(null);
         return new CanonicalStatement(
                 statement.statementId(), statement.kind(), statement.sourceText(), statement.sourceFile(),
                 statement.lineStart(), statement.lineEnd(), statement.locationKind(),
                 statement.parentStatementId(), statement.branchKind(), condition, statement.expression(),
                 statement.normalizedExpression(), statement.operands(), statement.variablesRead(),
                 statement.variablesWritten(), statement.targetDataItems(), statement.assignedLiteral(),
-                statement.targetParagraphs(), statement.sqlAccess());
+                statement.targetParagraphs(), statement.sqlAccess(), statement.conditionNameTarget(),
+                statement.conditionSetValue(), merged);
     }
 
     private void convertMove(MoveStatement moveStmt, String parentId, BranchKind branchKind) {
@@ -185,7 +235,7 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.MOVE, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.copyOf(targets),
-                List.copyOf(targets), literal, List.of(), List.of()));
+                List.copyOf(targets), literal, List.of(), List.of(), null, null, List.of()));
     }
 
     private void convertSet(SetStatement setStmt, String parentId, BranchKind branchKind) {
@@ -193,6 +243,8 @@ final class StatementExtractor {
         List<String> targets = new ArrayList<>();
         List<String> read = new ArrayList<>();
         String literal = null;
+        String conditionNameTarget = null;
+        Boolean conditionSetValue = null;
 
         for (SetTo setTo : setStmt.getSetTos()) {
             for (var to : setTo.getTos()) {
@@ -208,6 +260,12 @@ final class StatementExtractor {
                     literal = pureLiteral;
                 }
             }
+            Boolean booleanValue = singleSetToBooleanValue(setTo);
+            String singleTarget = singleSetToTarget(setTo);
+            if (booleanValue != null && singleTarget != null && knownConditionNames.contains(singleTarget)) {
+                conditionNameTarget = singleTarget;
+                conditionSetValue = booleanValue;
+            }
         }
         if (setStmt.getSetBy() != null) {
             ctx.unsupported(
@@ -219,7 +277,46 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.SET, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.copyOf(targets),
-                List.copyOf(targets), literal, List.of(), List.of()));
+                List.copyOf(targets), literal, List.of(), List.of(), conditionNameTarget, conditionSetValue,
+                List.of()));
+    }
+
+    /**
+     * {@code SET condition-name TO TRUE|FALSE}: verificado empiricamente
+     * que ProLeap representa TRUE/FALSE como un LiteralValueStmt generico
+     * cuyo texto crudo es exactamente "TRUE"/"true"/"FALSE"/"false" (segun
+     * mayusculas de origen) -- no existe un ValueType ni un ValueStmt
+     * booleano dedicado alcanzable desde esta forma gramatical. Solo se
+     * reconoce esta forma cuando hay exactamente un TO y un VALUE (nunca
+     * para {@code SET a, b TO TRUE}: se mantiene el comportamiento SET_VALUE
+     * ordinario para esos casos, sin inventar una asociacion unica).
+     */
+    private static Boolean singleSetToBooleanValue(SetTo setTo) {
+        List<Value> values = setTo.getValues();
+        if (values.size() != 1) {
+            return null;
+        }
+        ValueStmt valueStmt = values.get(0).getValueStmt();
+        if (valueStmt == null || valueStmt.getCtx() == null
+                || !ValueReferences.collectVariableNames(valueStmt).isEmpty()) {
+            return null;
+        }
+        String text = valueStmt.getCtx().getText();
+        if ("TRUE".equalsIgnoreCase(text)) {
+            return Boolean.TRUE;
+        }
+        if ("FALSE".equalsIgnoreCase(text)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    private static String singleSetToTarget(SetTo setTo) {
+        List<To> tos = setTo.getTos();
+        if (tos.size() != 1 || tos.get(0).getToCall() == null) {
+            return null;
+        }
+        return tos.get(0).getToCall().getName();
     }
 
     private void convertCompute(ComputeStatement computeStmt, String parentId, BranchKind branchKind) {
@@ -242,7 +339,8 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.COMPUTE, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
-                read, List.copyOf(targets), List.copyOf(targets), null, List.of(), List.of()));
+                read, List.copyOf(targets), List.copyOf(targets), null, List.of(), List.of(), null, null,
+                List.of()));
     }
 
     private void convertGoTo(GoToStatement gotoStmt, String parentId, BranchKind branchKind) {
@@ -275,7 +373,7 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.GO_TO, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.of(), List.of(),
-                null, List.copyOf(targets), List.of()));
+                null, List.copyOf(targets), List.of(), null, null, List.of()));
     }
 
     private void convertPerform(PerformStatement performStmt, String parentId, BranchKind branchKind) {
@@ -294,7 +392,7 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.PERFORM, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(), List.of(),
-                List.of(), null, List.copyOf(targets), List.of()));
+                List.of(), null, List.copyOf(targets), List.of(), null, null, List.of()));
 
         if (performStmt.getPerformInlineStatement() != null) {
             walk(performStmt.getPerformInlineStatement().getStatements(), id, null);
@@ -323,7 +421,7 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.EXEC_SQL, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(), List.of(),
-                List.of(), null, List.of(), List.copyOf(sqlAccess)));
+                List.of(), null, List.of(), List.copyOf(sqlAccess), null, null, List.of()));
     }
 
     private void convertOther(Statement statement, String parentId, BranchKind branchKind) {
@@ -336,7 +434,7 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.OTHER, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(), List.of(), List.of(),
-                null, List.of(), List.of()));
+                null, List.of(), List.of(), null, null, List.of()));
     }
 
     private String nextId(StatementKind kind) {

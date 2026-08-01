@@ -136,13 +136,22 @@ def _classify_move(stmt: CanonicalStatement) -> _Classification:
 
 
 def _classify_set(stmt: CanonicalStatement) -> _Classification:
+    if stmt.condition_name_target is not None:
+        verb = "TRUE" if stmt.condition_set_value else "FALSE"
+        return _Classification(
+            SemanticSupportStatus.FULLY_SUPPORTED,
+            "SET_CONDITION_RESOLVED",
+            f"SET condicion-88 TO {verb} resuelto estructuralmente contra "
+            "CanonicalProgram.condition_names (condition_name_target/condition_set_value); "
+            "ver docs/LEVEL_88_SUPPORT.md.",
+            CandidateImpact.NONE,
+        )
     return _Classification(
         SemanticSupportStatus.PARTIALLY_SUPPORTED,
         "SET_TARGET_KIND_AMBIGUOUS",
         "SET captura target_data_items/assigned_literal, pero no distingue "
-        "estructuralmente entre SET ordinario, SET condicion-88 TO TRUE, SET "
-        "condicion-88 TO FALSE ni SET ... UP/DOWN BY: las cuatro formas "
-        "producen el mismo StatementKind.SET sin un campo que las diferencie.",
+        "estructuralmente entre SET ordinario, SET condicion-88 TO TRUE/FALSE no resuelto "
+        "(p. ej. nombre ambiguo entre padres distintos) ni SET ... UP/DOWN BY.",
         CandidateImpact.MEDIUM,
     )
 
@@ -211,6 +220,18 @@ _UNSUPPORTED_CLASSIFICATION_EXPLANATION = (
 )
 
 LEVEL_88_DIAGNOSTIC_CODE = "LEVEL_88_SEMANTICS_NOT_MODELED"
+LEVEL_88_MODELED_DIAGNOSTIC_CODE = "LEVEL_88_CONDITION_FULLY_MODELED"
+
+_CONDITION_REFERENCE_CLASSIFICATION = _Classification(
+    SemanticSupportStatus.FULLY_SUPPORTED,
+    "CONDITION_REFERENCE_VERIFIED",
+    "Referencia directa a un condition-name nivel 88 verificada contra "
+    "CanonicalProgram.condition_names (CanonicalStatement.referenced_condition_names); "
+    "nunca se infiere que toda variable leida en un IF/EVALUATE sea una condicion 88. "
+    "Dimension independiente del conteo primario por StatementKind (una misma sentencia "
+    "IF/EVALUATE ya se cuenta una vez alli).",
+    CandidateImpact.NONE,
+)
 
 
 def _classify_statement(stmt: CanonicalStatement) -> _Classification:
@@ -385,6 +406,12 @@ def _analyze_program(
             )
             statement_reference = _statement_reference(program.program_name, paragraph.name, stmt)
             _accumulate(stmt.kind.value, classification, statement_reference)
+            if stmt.referenced_condition_names:
+                _accumulate(
+                    "CONDITION_NAME_REFERENCE_RESOLVED",
+                    _CONDITION_REFERENCE_CLASSIFICATION,
+                    statement_reference,
+                )
 
     for message in program.unsupported_constructs:
         construct_name, paragraph_name = _parse_unsupported_construct_message(message)
@@ -402,14 +429,25 @@ def _analyze_program(
         _accumulate(construct_name, classification, unsupported_reference)
 
     level_88_items = [item for item in program.data_items if item.level == 88]
+    modeled_qualified_names = {condition.qualified_name for condition in program.condition_names}
     if level_88_items:
-        level_88_classification = _Classification(
+        modeled_classification = _Classification(
+            SemanticSupportStatus.FULLY_SUPPORTED,
+            LEVEL_88_MODELED_DIAGNOSTIC_CODE,
+            "Condicion nivel 88 totalmente modelada: nombre, padre (parent_name/"
+            "parent_qualified_name) y al menos un VALUE (incluidos multiples VALUE y "
+            "rangos THRU) se conservan en CanonicalProgram.condition_names. "
+            "Ver docs/LEVEL_88_SUPPORT.md.",
+            CandidateImpact.NONE,
+        )
+        not_modeled_classification = _Classification(
             SemanticSupportStatus.PARTIALLY_SUPPORTED,
             LEVEL_88_DIAGNOSTIC_CODE,
-            "Nombre de condicion conservado, pero VALUE, multiples VALUE, rangos "
-            "THRU y la variable padre no estan modelados contractualmente; SET/IF "
-            "sobre la condicion no puede normalizarse con certeza a un predicado "
-            "equivalente. Ver docs/SEMANTIC_COVERAGE.md.",
+            "Condicion nivel 88 preservada como CanonicalDataItem(level=88), pero el "
+            "parser no pudo demostrar su padre y/o al menos un VALUE (ver "
+            "CanonicalProgram.unsupported_constructs para el motivo puntual); no se "
+            "modela en condition_names ni se infiere padre o valor. Ver "
+            "docs/LEVEL_88_SUPPORT.md.",
             CandidateImpact.MEDIUM,
         )
         for item in level_88_items:
@@ -419,7 +457,14 @@ def _analyze_program(
                 line=item.line,
                 location_kind=item.location_kind,
             )
-            _accumulate("LEVEL_88_CONDITION_NAME", level_88_classification, level_88_reference)
+            if item.qualified_name in modeled_qualified_names:
+                _accumulate(
+                    "LEVEL_88_CONDITION_NAME_MODELED", modeled_classification, level_88_reference
+                )
+            else:
+                _accumulate(
+                    "LEVEL_88_CONDITION_NAME", not_modeled_classification, level_88_reference
+                )
 
     construct_coverage = [
         ConstructCoverage(

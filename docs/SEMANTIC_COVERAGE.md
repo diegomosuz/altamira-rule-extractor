@@ -126,14 +126,23 @@ una coincidencia, o si sí la encontró.
   primera `FULLY_SUPPORTED`, la segunda `PARTIALLY_SUPPORTED`); el informe
   nunca afirma que `'0005'` llegó a `WS-COD-RETORNO`, porque el pipeline V1
   no lo puede demostrar.
-- **Nivel 88 se reporta, nunca se interpreta.** Cada `CanonicalDataItem`
-  con `level == 88` genera una entrada `PARTIALLY_SUPPORTED` con
-  `diagnostic_code=LEVEL_88_SEMANTICS_NOT_MODELED`, indicando
-  explícitamente que VALUE, múltiples VALUE, rangos THRU y la variable
-  padre no están modelados contractualmente hoy, y que `SET`/`IF` sobre la
-  condición no pueden normalizarse con certeza a un predicado equivalente.
-  Esta implementación **no agrega** soporte semántico para nivel 88 — esa
-  es una fase posterior de la hoja de ruta.
+- **Nivel 88: modelado nativamente cuando es demostrable (`analyzer_
+  version="1.1"`, Fase 3, ver `docs/LEVEL_88_SUPPORT.md`).** Una condición
+  nivel 88 con padre y al menos un VALUE capturados en
+  `CanonicalProgram.condition_names` genera una entrada
+  `LEVEL_88_CONDITION_NAME_MODELED`/`FULLY_SUPPORTED`
+  (`diagnostic_code=LEVEL_88_CONDITION_FULLY_MODELED`). El diagnóstico
+  previo, `LEVEL_88_SEMANTICS_NOT_MODELED`, se mantiene exclusivamente
+  para el residual: una condición preservada como `CanonicalDataItem
+  (level=88)` cuyo padre y/o VALUE el parser no pudo demostrar. `SET`
+  resuelto contra una condición conocida genera
+  `SET_CONDITION_RESOLVED`/`FULLY_SUPPORTED` en vez del
+  `SET_TARGET_KIND_AMBIGUOUS`/`PARTIALLY_SUPPORTED` anterior; referencias
+  `IF`/`EVALUATE` verificadas contra `condition_names` se cuentan aparte
+  en `CONDITION_NAME_REFERENCE_RESOLVED`. `analyzer_version` subió a
+  `"1.1"` (`schema_version` sin cambios: la forma del contrato es la
+  misma). Reportes históricos con `analyzer_version="1.0"` siguen
+  cargando.
 - **`candidate_impact` es categórico, nunca numérico.** Los valores
   (`NONE`/`LOW`/`MEDIUM`/`HIGH`/`UNKNOWN`) son un juicio determinístico y
   documentado por tipo de construcción (ver

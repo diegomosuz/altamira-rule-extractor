@@ -1,5 +1,7 @@
 package com.altamira.extractor.parser.cobol;
 
+import com.altamira.extractor.parser.model.CanonicalConditionName;
+import com.altamira.extractor.parser.model.CanonicalConditionValue;
 import com.altamira.extractor.parser.model.CanonicalDataItem;
 import com.altamira.extractor.parser.model.CanonicalParagraph;
 import com.altamira.extractor.parser.model.CanonicalProgram;
@@ -9,18 +11,25 @@ import com.altamira.extractor.parser.model.LocationKind;
 import io.proleap.cobol.asg.metamodel.ProgramUnit;
 import io.proleap.cobol.asg.metamodel.data.DataDivision;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntry;
+import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryCondition;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryGroup;
+import io.proleap.cobol.asg.metamodel.data.datadescription.ValueClause;
+import io.proleap.cobol.asg.metamodel.data.datadescription.ValueInterval;
 import io.proleap.cobol.asg.metamodel.data.workingstorage.WorkingStorageSection;
 import io.proleap.cobol.asg.metamodel.procedure.Paragraph;
 import io.proleap.cobol.asg.metamodel.procedure.ProcedureDivision;
+import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import org.antlr.v4.runtime.ParserRuleContext;
 
@@ -62,10 +71,12 @@ public final class CanonicalProgramExtractor {
         }
 
         List<CanonicalDataItem> dataItems = extractDataItems(programUnit, ctx);
-        List<CanonicalParagraph> paragraphs = extractParagraphs(programUnit, ctx);
+        List<CanonicalConditionName> conditionNames = extractConditionNames(programUnit, ctx);
+        List<CanonicalParagraph> paragraphs = extractParagraphs(programUnit, ctx, conditionNames);
+        String schemaVersion = schemaVersionFor(conditionNames, paragraphs);
 
         return new CanonicalProgram(
-                "1.0",
+                schemaVersion,
                 programName,
                 sourceFileIdentity,
                 sourceHash,
@@ -73,9 +84,32 @@ public final class CanonicalProgramExtractor {
                 parseResult.resolvedFormat(),
                 encoding.name(),
                 dataItems,
+                conditionNames,
                 paragraphs,
                 List.copyOf(ctx.warnings),
                 List.copyOf(ctx.unsupportedConstructs));
+    }
+
+    /**
+     * {@code "1.0"} para un programa que no usa NINGUNA extension de
+     * nivel 88 (Fase 3): produce el mismo JSON canonico, byte a byte,
+     * que el parser previo a esa fase (conditionNames vacia se omite del
+     * JSON via {@code @JsonInclude(NON_EMPTY)}, y ningun CanonicalStatement
+     * tiene conditionNameTarget/referencedConditionNames poblados, asi
+     * que esos campos tampoco aparecen). {@code "1.1"} en cuanto
+     * cualquiera de esas tres senales esta realmente presente en el
+     * programa. Ver docs/LEVEL_88_SUPPORT.md.
+     */
+    private static String schemaVersionFor(
+            List<CanonicalConditionName> conditionNames, List<CanonicalParagraph> paragraphs) {
+        if (!conditionNames.isEmpty()) {
+            return "1.1";
+        }
+        boolean anyStatementUsesLevel88 = paragraphs.stream()
+                .flatMap(paragraph -> paragraph.statements().stream())
+                .anyMatch(statement -> statement.conditionNameTarget() != null
+                        || !statement.referencedConditionNames().isEmpty());
+        return anyStatementUsesLevel88 ? "1.1" : "1.0";
     }
 
     // --- Data Division -------------------------------------------------
@@ -120,6 +154,112 @@ public final class CanonicalProgramExtractor {
                 name, qualifiedName, level, pic, usage, null, line, LocationKind.PREPROCESSED_STREAM);
     }
 
+    // --- Condiciones nivel 88 (Fase 3 de la ampliacion semantica) -------
+
+    private List<CanonicalConditionName> extractConditionNames(ProgramUnit programUnit, ExtractionContext ctx) {
+        List<CanonicalConditionName> conditions = new ArrayList<>();
+        DataDivision dataDivision = programUnit.getDataDivision();
+        if (dataDivision == null || dataDivision.getWorkingStorageSection() == null) {
+            return conditions;
+        }
+        WorkingStorageSection wss = dataDivision.getWorkingStorageSection();
+        for (DataDescriptionEntry entry : wss.getDataDescriptionEntries()) {
+            if (entry instanceof DataDescriptionEntryCondition condition) {
+                CanonicalConditionName converted = convertConditionName(condition, ctx);
+                if (converted != null) {
+                    conditions.add(converted);
+                }
+            }
+        }
+        return conditions;
+    }
+
+    private CanonicalConditionName convertConditionName(
+            DataDescriptionEntryCondition condition, ExtractionContext ctx) {
+        String name = dataItemName(condition);
+        DataDescriptionEntryGroup parent = condition.getParentDataDescriptionEntryGroup();
+        if (parent == null) {
+            ctx.unsupported(
+                    "condicion 88 " + name
+                            + " sin data item padre determinable (kind=CONDITION_NAME); omitida del artefacto");
+            return null;
+        }
+        List<CanonicalConditionValue> values = extractConditionValues(condition, ctx);
+        if (values.isEmpty()) {
+            ctx.unsupported(
+                    "condicion 88 " + name
+                            + " sin VALUE demostrable (kind=CONDITION_NAME); omitida del artefacto");
+            return null;
+        }
+
+        String parentName = dataItemName(parent);
+        String parentQualifiedName = qualifiedNameOf(parent);
+        String qualifiedName = parentQualifiedName + "." + name;
+
+        ParserRuleContext entryCtx = condition.getCtx();
+        if (entryCtx == null || entryCtx.getStart() == null) {
+            return new CanonicalConditionName(
+                    name, qualifiedName, parentName, parentQualifiedName, values, null, null, LocationKind.UNKNOWN);
+        }
+        int line = entryCtx.getStart().getLine();
+        if (ctx.programLocationKind == LocationKind.EXACT) {
+            return new CanonicalConditionName(
+                    name, qualifiedName, parentName, parentQualifiedName, values, ctx.sourceFileForExact, line,
+                    LocationKind.EXACT);
+        }
+        return new CanonicalConditionName(
+                name, qualifiedName, parentName, parentQualifiedName, values, null, line,
+                LocationKind.PREPROCESSED_STREAM);
+    }
+
+    private List<CanonicalConditionValue> extractConditionValues(
+            DataDescriptionEntryCondition condition, ExtractionContext ctx) {
+        ValueClause valueClause = condition.getValueClause();
+        if (valueClause == null) {
+            return List.of();
+        }
+        List<CanonicalConditionValue> values = new ArrayList<>();
+        for (ValueInterval interval : valueClause.getValueIntervals()) {
+            String value = literalTextOf(interval.getFromValueStmt());
+            if (value == null) {
+                // Intervalo sin FROM demostrable: se omite unicamente ese
+                // intervalo, nunca se inventa un valor sustituto.
+                continue;
+            }
+            String throughValue = literalTextOf(interval.getToValueStmt());
+            values.add(intervalToConditionValue(interval, value, throughValue, ctx));
+        }
+        return values;
+    }
+
+    private CanonicalConditionValue intervalToConditionValue(
+            ValueInterval interval, String value, String throughValue, ExtractionContext ctx) {
+        ParserRuleContext intervalCtx = interval.getCtx();
+        if (intervalCtx == null || intervalCtx.getStart() == null) {
+            return new CanonicalConditionValue(value, throughValue, null, null, LocationKind.UNKNOWN);
+        }
+        int line = intervalCtx.getStart().getLine();
+        if (ctx.programLocationKind == LocationKind.EXACT) {
+            return new CanonicalConditionValue(value, throughValue, ctx.sourceFileForExact, line, LocationKind.EXACT);
+        }
+        return new CanonicalConditionValue(value, throughValue, null, line, LocationKind.PREPROCESSED_STREAM);
+    }
+
+    /**
+     * Delega en {@link ValueReferences#canonicalLiteralText(Object)} --
+     * nunca reimplementa la conversion aqui -- para que un VALUE de
+     * constante figurativa (p. ej. {@code 88 X VALUE SPACE}) reciba la
+     * misma normalizacion canonica que el sending-area de un MOVE/SET, en
+     * lugar de repetir el patron {@code String.valueOf(stmt.getValue())}
+     * que filtraba {@code FigurativeConstantImpl@<hash-de-identidad>}.
+     */
+    private static String literalTextOf(ValueStmt stmt) {
+        if (stmt == null) {
+            return null;
+        }
+        return ValueReferences.canonicalLiteralText(stmt.getValue());
+    }
+
     private static String dataItemName(DataDescriptionEntry entry) {
         String name = entry.getName();
         if (name != null && !name.isBlank()) {
@@ -157,7 +297,30 @@ public final class CanonicalProgramExtractor {
 
     // --- Procedure Division ---------------------------------------------
 
-    private List<CanonicalParagraph> extractParagraphs(ProgramUnit programUnit, ExtractionContext ctx) {
+    /**
+     * Nombres de condicion 88 resolubles de forma inequivoca por nombre
+     * simple: si el mismo nombre aparece bajo mas de un padre (homonimos
+     * entre grupos/copybooks distintos), se excluye por completo de este
+     * conjunto -- ninguna referencia a ese nombre se resuelve, en vez de
+     * adivinar a cual de los padres pertenece (V1 no resuelve
+     * calificacion IN/OF; ver docs/LEVEL_88_SUPPORT.md).
+     */
+    private static Set<String> resolvableConditionNames(List<CanonicalConditionName> conditionNames) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (CanonicalConditionName condition : conditionNames) {
+            counts.merge(condition.name(), 1, Integer::sum);
+        }
+        Set<String> resolvable = new LinkedHashSet<>();
+        for (var entry : counts.entrySet()) {
+            if (entry.getValue() == 1) {
+                resolvable.add(entry.getKey());
+            }
+        }
+        return resolvable;
+    }
+
+    private List<CanonicalParagraph> extractParagraphs(
+            ProgramUnit programUnit, ExtractionContext ctx, List<CanonicalConditionName> conditionNames) {
         List<CanonicalParagraph> result = new ArrayList<>();
         ProcedureDivision procedureDivision = programUnit.getProcedureDivision();
         if (procedureDivision == null) {
@@ -166,8 +329,9 @@ public final class CanonicalProgramExtractor {
         List<Paragraph> paragraphs = new ArrayList<>(procedureDivision.getParagraphs());
         paragraphs.sort(Comparator.comparingInt(CanonicalProgramExtractor::startLineOf));
 
+        Set<String> knownConditionNames = resolvableConditionNames(conditionNames);
         for (Paragraph paragraph : paragraphs) {
-            result.add(convertParagraph(paragraph, ctx));
+            result.add(convertParagraph(paragraph, ctx, knownConditionNames));
         }
         return result;
     }
@@ -177,7 +341,8 @@ public final class CanonicalProgramExtractor {
         return pctx != null && pctx.getStart() != null ? pctx.getStart().getLine() : Integer.MAX_VALUE;
     }
 
-    private CanonicalParagraph convertParagraph(Paragraph paragraph, ExtractionContext ctx) {
+    private CanonicalParagraph convertParagraph(
+            Paragraph paragraph, ExtractionContext ctx, Set<String> knownConditionNames) {
         String name = paragraph.getParagraphName() != null
                 ? paragraph.getParagraphName().getName()
                 : "UNKNOWN-PARAGRAPH";
@@ -211,7 +376,8 @@ public final class CanonicalProgramExtractor {
             }
         }
 
-        List<CanonicalStatement> statements = new StatementExtractor(ctx, name).extract(paragraph.getStatements());
+        List<CanonicalStatement> statements = new StatementExtractor(ctx, name, knownConditionNames)
+                .extract(paragraph.getStatements());
         List<String> variablesRead = collectOrderedUnique(statements, CanonicalStatement::variablesRead);
         List<String> variablesWritten = collectOrderedUnique(statements, CanonicalStatement::variablesWritten);
         List<CanonicalSqlAccess> sqlAccess = collectSqlAccess(statements);

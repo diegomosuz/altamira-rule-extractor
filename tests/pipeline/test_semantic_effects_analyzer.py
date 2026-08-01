@@ -6,6 +6,8 @@ filesystem -- todo se construye en memoria."""
 from __future__ import annotations
 
 from altamira_extractor.contracts.canonical import (
+    CanonicalConditionName,
+    CanonicalConditionValue,
     CanonicalDataItem,
     CanonicalParagraph,
     CanonicalProgram,
@@ -668,6 +670,81 @@ def test_two_hop_move_chain_produces_no_propagation() -> None:
 
     # Nunca un ASSIGN_LITERAL sobre WS-COD-RETORNO.
     assert all("WS-COD-RETORNO" not in e.target_data_items for e in assign_literal_effects)
+
+
+# ---------------------------------------------------------------------------
+# Caso obligatorio (Fase 12, ampliacion nivel 88): SET condicion-88 TO TRUE
+# seguido de MOVE de la variable padre a otro destino, sin propagacion.
+# ---------------------------------------------------------------------------
+
+
+def test_set_condition_true_followed_by_move_of_parent_produces_no_propagation() -> None:
+    """01 WS-COD-AUX PIC X(4).
+          88 COD-AUX-INVALIDO VALUE '0005'.
+
+       SET COD-AUX-INVALIDO TO TRUE
+       MOVE WS-COD-AUX TO WS-COD-RETORNO
+
+    Debe producir: SET_CONDITION_TRUE sobre COD-AUX-INVALIDO asociado a
+    WS-COD-AUX con el valor declarado '0005' conservado; COPY_VALUE desde
+    WS-COD-AUX hacia WS-COD-RETORNO; ningun ASSIGN_LITERAL inventado
+    sobre WS-COD-RETORNO. (candidatos V1 y relaciones LEADS_TO son
+    responsabilidad de semantic_graph_builder.py/candidate_detector.py,
+    ninguno de los cuales este modulo consulta o modifica -- ver
+    docstring del modulo.)"""
+    condition = CanonicalConditionName(
+        name="COD-AUX-INVALIDO",
+        qualified_name="WS-COD-AUX.COD-AUX-INVALIDO",
+        parent_name="WS-COD-AUX",
+        parent_qualified_name="WS-COD-AUX",
+        values=[CanonicalConditionValue(value="0005", location_kind=LocationKind.UNKNOWN)],
+        location_kind=LocationKind.UNKNOWN,
+    )
+    stmt1 = _statement(
+        statement_id="P1::A::1::SET",
+        kind=StatementKind.SET,
+        source_text="SET COD-AUX-INVALIDO TO TRUE",
+        target_data_items=["COD-AUX-INVALIDO"],
+        variables_written=["COD-AUX-INVALIDO"],
+        assigned_literal="true",
+        condition_name_target="COD-AUX-INVALIDO",
+        condition_set_value=True,
+    )
+    stmt2 = _statement(
+        statement_id="P1::A::2::MOVE",
+        source_text="MOVE WS-COD-AUX TO WS-COD-RETORNO",
+        variables_read=["WS-COD-AUX"],
+        target_data_items=["WS-COD-RETORNO"],
+    )
+    program = _program(
+        "P1", [_paragraph("A", [stmt1, stmt2])], condition_names=[condition]
+    )
+    effects = _effects_of([program])
+
+    assert len(effects) == 2
+
+    set_condition_effects = [e for e in effects if e.kind == SemanticEffectKind.SET_CONDITION_TRUE]
+    copy_value_effects = [e for e in effects if e.kind == SemanticEffectKind.COPY_VALUE]
+    assert len(set_condition_effects) == 1
+    assert len(copy_value_effects) == 1
+
+    set_effect = set_condition_effects[0]
+    assert set_effect.condition_name == "WS-COD-AUX.COD-AUX-INVALIDO"
+    assert set_effect.parent_data_item == "WS-COD-AUX"
+    assert set_effect.condition_values == ["0005"]
+    assert set_effect.literal == "0005"
+    assert set_effect.support_status == SemanticSupportStatus.FULLY_SUPPORTED
+
+    copy_effect = copy_value_effects[0]
+    assert copy_effect.source_data_items == ["WS-COD-AUX"]
+    assert copy_effect.target_data_items == ["WS-COD-RETORNO"]
+    assert copy_effect.literal is None
+    assert "0005" not in copy_effect.model_dump_json()
+
+    # Ningun ASSIGN_LITERAL inventado sobre WS-COD-RETORNO (ni sobre
+    # ningun otro destino): el unico efecto con literal es el
+    # SET_CONDITION_TRUE sobre su propia condicion.
+    assert not any(e.kind == SemanticEffectKind.ASSIGN_LITERAL for e in effects)
 
 
 # ---------------------------------------------------------------------------

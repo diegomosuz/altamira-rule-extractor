@@ -15,6 +15,8 @@ from .base import (
 )
 from .candidate import CandidateArtifact, RuleCandidate
 from .canonical import (
+    CanonicalConditionName,
+    CanonicalConditionValue,
     CanonicalDataItem,
     CanonicalParagraph,
     CanonicalProgram,
@@ -151,6 +153,8 @@ __all__ = [
     "RunState",
     "StageExecution",
     # canonical
+    "CanonicalConditionName",
+    "CanonicalConditionValue",
     "CanonicalDataItem",
     "CanonicalParagraph",
     "CanonicalProgram",

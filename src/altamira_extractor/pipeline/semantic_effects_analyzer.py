@@ -27,7 +27,13 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from ..contracts.canonical import CanonicalDataItem, CanonicalProgram, CanonicalStatement
+from ..contracts.canonical import (
+    CanonicalConditionName,
+    CanonicalConditionValue,
+    CanonicalDataItem,
+    CanonicalProgram,
+    CanonicalStatement,
+)
 from ..contracts.enums import LocationKind, StatementKind, TableAccessOperation
 from ..contracts.semantic_coverage import SemanticSupportStatus
 from ..contracts.semantic_effects import (
@@ -54,6 +60,7 @@ class _NormalizeContext:
     paragraph_name: str
     stmt: CanonicalStatement
     level_88_names: frozenset[str]
+    conditions_by_name: dict[str, CanonicalConditionName]
 
     def is_level_88_target(self, names: Sequence[str]) -> bool:
         return bool(set(names) & self.level_88_names)
@@ -75,6 +82,9 @@ class _NormalizeContext:
         sql_operation: TableAccessOperation | None = None,
         sql_tables: list[str] | None = None,
         sql_host_variables: list[str] | None = None,
+        condition_name: str | None = None,
+        parent_data_item: str | None = None,
+        condition_values: list[str] | None = None,
         diagnostic_codes: list[str] | None = None,
     ) -> SemanticEffect:
         return SemanticEffect(
@@ -109,6 +119,9 @@ class _NormalizeContext:
             sql_operation=sql_operation,
             sql_tables=sql_tables or [],
             sql_host_variables=sql_host_variables or [],
+            condition_name=condition_name,
+            parent_data_item=parent_data_item,
+            condition_values=condition_values or [],
             diagnostic_codes=diagnostic_codes or [],
             explanation=explanation,
         )
@@ -237,11 +250,18 @@ def _normalize_move(ctx: _NormalizeContext) -> list[SemanticEffect]:
 
 def _normalize_set(ctx: _NormalizeContext) -> list[SemanticEffect]:
     stmt = ctx.stmt
+    if stmt.condition_name_target is not None:
+        return _normalize_set_condition(ctx)
+
     diagnostic_codes = ["SET_SEMANTIC_VARIANT_UNRESOLVED"]
-    # Fase 6: solo se agrega LEVEL_88_VALUE_NOT_AVAILABLE si el target
-    # coincide por NOMBRE con un CanonicalDataItem(level=88) real del
-    # programa -- nunca se afirma nivel 88 sin esa comprobacion directa,
-    # y nunca se infiere VALUE/TRUE/FALSE/THRU/variable padre.
+    # Fase 6 (previa a la Fase 3 de soporte nivel 88): solo se agrega
+    # LEVEL_88_VALUE_NOT_AVAILABLE si el target coincide por NOMBRE con
+    # un CanonicalDataItem(level=88) real del programa Y el SET no pudo
+    # resolverse estructuralmente contra condition_names (rama anterior).
+    # Nunca se infiere VALUE/TRUE/FALSE/THRU/variable padre en este caso
+    # -- solo se llega aqui cuando esa resolucion completa fallo (p. ej.
+    # homonimo ambiguo entre distintos padres, ver
+    # docs/LEVEL_88_SUPPORT.md).
     if ctx.is_level_88_target(stmt.target_data_items):
         diagnostic_codes.append("LEVEL_88_VALUE_NOT_AVAILABLE")
     return [
@@ -258,6 +278,72 @@ def _normalize_set(ctx: _NormalizeContext) -> list[SemanticEffect]:
                 "SET captura target_data_items/assigned_literal cuando estan presentes, "
                 "pero no distingue estructuralmente SET ordinario de condicion-88 TO "
                 "TRUE/FALSE ni de SET ... UP/DOWN BY."
+            ),
+        )
+    ]
+
+
+def _condition_value_text(value: CanonicalConditionValue) -> str:
+    if value.through_value is None:
+        return value.value
+    return f"{value.value}..{value.through_value}"
+
+
+def _normalize_set_condition(ctx: _NormalizeContext) -> list[SemanticEffect]:
+    """`CanonicalStatement.condition_name_target`/`condition_set_value`
+    ya fueron resueltos de forma estructural por el parser Java (target
+    unico, valor literal TRUE/FALSE verificado, nombre unico contra
+    `CanonicalProgram.condition_names`) -- ver docs/LEVEL_88_SUPPORT.md.
+    Si por algun motivo el nombre no aparece en el registro de este
+    analizador (artefacto desincronizado / editado a mano), no se
+    inventa padre ni valor: se declara UNSUPPORTED_STATEMENT explicito."""
+    stmt = ctx.stmt
+    assert stmt.condition_name_target is not None
+    condition = ctx.conditions_by_name.get(stmt.condition_name_target)
+    kind = (
+        SemanticEffectKind.SET_CONDITION_TRUE
+        if stmt.condition_set_value
+        else SemanticEffectKind.SET_CONDITION_FALSE
+    )
+    if condition is None:
+        return [
+            ctx.build(
+                SemanticEffectKind.UNSUPPORTED_STATEMENT,
+                SemanticSupportStatus.UNSUPPORTED,
+                ordinal=0,
+                diagnostic_codes=["CONDITION_NAME_TARGET_NOT_IN_REGISTRY"],
+                explanation=(
+                    f"SET declara condition_name_target={stmt.condition_name_target!r} pero "
+                    "ese nombre no existe en CanonicalProgram.condition_names; no se infiere "
+                    "padre ni valor."
+                ),
+            )
+        ]
+
+    condition_values = [_condition_value_text(value) for value in condition.values]
+    diagnostic_codes: list[str] = []
+    literal: str | None = None
+    if len(condition.values) == 1 and condition.values[0].through_value is None:
+        literal = condition.values[0].value
+    else:
+        diagnostic_codes.append("CONDITION_HAS_MULTIPLE_OR_RANGE_VALUES")
+
+    verb = "TRUE" if stmt.condition_set_value else "FALSE"
+    return [
+        ctx.build(
+            kind,
+            SemanticSupportStatus.FULLY_SUPPORTED,
+            ordinal=0,
+            writes=[condition.parent_qualified_name],
+            literal=literal,
+            condition_name=condition.qualified_name,
+            parent_data_item=condition.parent_qualified_name,
+            condition_values=condition_values,
+            diagnostic_codes=diagnostic_codes,
+            explanation=(
+                f"SET {condition.name} TO {verb}: condicion resuelta estructuralmente contra "
+                "CanonicalProgram.condition_names (padre y VALUE conservados); el valor "
+                "declarado nunca se propaga a sentencias posteriores."
             ),
         )
     ]
@@ -517,6 +603,17 @@ def _level_88_names(data_items: list[CanonicalDataItem]) -> frozenset[str]:
     return frozenset(names)
 
 
+def _conditions_by_name(
+    condition_names: list[CanonicalConditionName],
+) -> dict[str, CanonicalConditionName]:
+    """Indexado por nombre simple: `CanonicalStatement.condition_name_target`
+    ya fue resuelto por el parser Java contra nombres unicos (homonimos
+    entre distintos padres quedan excluidos alli, nunca llegan a poblar
+    `condition_name_target`), asi que esta busqueda es segura sin
+    necesidad de repetir esa deduplicacion aqui."""
+    return {condition.name: condition for condition in condition_names}
+
+
 # ---------------------------------------------------------------------------
 # Punto de entrada
 # ---------------------------------------------------------------------------
@@ -524,6 +621,7 @@ def _level_88_names(data_items: list[CanonicalDataItem]) -> frozenset[str]:
 
 def _analyze_program(program: CanonicalProgram) -> ProgramSemanticEffects:
     level_88_names = _level_88_names(program.data_items)
+    conditions_by_name = _conditions_by_name(program.condition_names)
     effects: list[SemanticEffect] = []
 
     for paragraph in program.paragraphs:
@@ -533,6 +631,7 @@ def _analyze_program(program: CanonicalProgram) -> ProgramSemanticEffects:
                 paragraph_name=paragraph.name,
                 stmt=stmt,
                 level_88_names=level_88_names,
+                conditions_by_name=conditions_by_name,
             )
             effects.extend(_normalize_statement(ctx))
 

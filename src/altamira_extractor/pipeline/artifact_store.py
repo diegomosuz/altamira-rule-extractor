@@ -91,10 +91,17 @@ def _replace_with_retry(tmp_path: Path, path: Path, *, deadline_seconds: float) 
             backoff = min(backoff * _BACKOFF_MULTIPLIER, _MAX_BACKOFF_SECONDS)
 
     assert last_error is not None  # el bucle siempre corrio >= 1 vez
+    # `winerror` es exclusivo de Windows: el stub de typeshed que usa mypy
+    # en esta plataforma no lo declara sobre `PermissionError`/`OSError`
+    # (aunque exista en runtime real de Windows), asi que un acceso
+    # directo `.winerror` es un error de tipos aqui aunque nunca falle en
+    # ejecucion. Mismo patron ya usado en `_is_transient_replace_error`:
+    # `getattr` con default, portable y sin cambiar el mensaje producido.
+    winerror = getattr(last_error, "winerror", None)
     raise AtomicWriteError(
         f"no se pudo reemplazar {path.name!r} de forma atomica: se agoto el deadline de "
         f"{deadline_seconds:.3f}s ({attempts} intento(s)) reintentando un error transitorio "
-        f"de reemplazo (WinError {last_error.winerror})"
+        f"de reemplazo (WinError {winerror})"
     ) from last_error
 
 

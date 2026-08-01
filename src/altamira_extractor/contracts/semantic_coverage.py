@@ -333,13 +333,18 @@ class SemanticCoverageReport(AltamiraBaseModel):
     y `analyzer_version` son independientes -- el primero versiona la
     FORMA de este contrato, el segundo versiona la LOGICA de
     clasificacion del analizador (`semantic_coverage_analyzer.py`);
-    ambos pueden evolucionar en momentos distintos.
+    ambos pueden evolucionar en momentos distintos. `analyzer_version`
+    subio a "1.1" en la Fase 3 de la ampliacion semantica (soporte nivel
+    88): la FORMA del contrato no cambio (mismos campos), solo la logica
+    de clasificacion de condiciones 88/SET/referencias IF-EVALUATE
+    (ver docs/LEVEL_88_SUPPORT.md) -- por eso `schema_version` permanece
+    en "1.0".
 
     Deliberadamente SIN ningun timestamp: dos ejecuciones sobre los
     mismos artefactos de entrada deben producir bytes identicos."""
 
     schema_version: Literal["1.0"] = "1.0"
-    analyzer_version: Literal["1.0"] = "1.0"
+    analyzer_version: Literal["1.0", "1.1"] = "1.1"
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(

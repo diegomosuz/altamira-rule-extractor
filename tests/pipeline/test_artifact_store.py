@@ -170,6 +170,60 @@ def test_atomic_write_json_raises_atomic_write_error_when_deadline_exhausted(
     assert _no_leftover_temp_files(tmp_path)
 
 
+def test_atomic_write_json_deadline_exhausted_message_reports_the_actual_winerror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El mensaje final de `AtomicWriteError` debe reportar el numero de
+    WinError real de la ultima excepcion (via `getattr(exc, "winerror",
+    None)`, nunca un acceso directo `.winerror`): typeshed no declara ese
+    atributo sobre `PermissionError`/`OSError` en la plataforma de este
+    entorno de tipos, asi que un acceso directo es un error de mypy aunque
+    nunca falle en ejecucion real de Windows -- ver docstring de
+    `artifact_store.py`."""
+    path = tmp_path / "run.json"
+
+    def always_fails(src: Any, dst: Any) -> None:
+        raise _transient_permission_error("always", winerror=32)
+
+    clock = _FakeClock()
+    monkeypatch.setattr(artifact_store.os, "replace", always_fails)
+    monkeypatch.setattr(artifact_store.time, "sleep", clock.sleep)
+    monkeypatch.setattr(artifact_store.time, "monotonic", clock.monotonic)
+
+    with pytest.raises(AtomicWriteError) as excinfo:
+        atomic_write_json(path, _DummyModel(value="new"), max_wait_seconds=0.3)
+
+    assert "WinError 32" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("winerror", [5, 32, 33])
+def test_atomic_write_json_retries_each_documented_transient_winerror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, winerror: int
+) -> None:
+    """WinError 5 (ERROR_ACCESS_DENIED), 32 (ERROR_SHARING_VIOLATION) y 33
+    (ERROR_LOCK_VIOLATION) son la familia documentada de fallos
+    transitorios de reemplazo (ver `_TRANSIENT_REPLACE_WINERRORS`): los
+    tres deben reintentarse y eventualmente tener exito, nunca propagarse
+    de inmediato."""
+    path = tmp_path / "run.json"
+    calls = {"count": 0}
+    real_replace = artifact_store.os.replace
+
+    def fails_once_then_succeeds(src: Any, dst: Any) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise _transient_permission_error("once", winerror=winerror)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(artifact_store.os, "replace", fails_once_then_succeeds)
+
+    atomic_write_json(path, _DummyModel(value="ok"))
+
+    assert calls["count"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["value"] == "ok"
+    assert _no_leftover_temp_files(tmp_path)
+
+
 def test_atomic_write_json_does_not_retry_other_os_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

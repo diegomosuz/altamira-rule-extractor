@@ -1,0 +1,36 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LEVEL88P.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-COD-RETORNO PIC X(4).
+          88 COD-OPERACION-VALIDA VALUE '0000'.
+          88 COD-CAMPO-INVALIDO VALUE '0005'.
+          88 COD-RANGO-ERROR VALUE '0010' THRU '0019'.
+       01 WS-COD-MULTI PIC X(2).
+          88 COD-MULTI-VALOR VALUE '01' '02' '03'.
+       01 WS-GRUPO-A.
+          05 WS-SUBCAMPO-A PIC X(1).
+             88 SUBCAMPO-A-ACTIVO VALUE 'A'.
+       01 WS-GRUPO-B.
+          05 WS-SUBCAMPO-B PIC X(1).
+             88 SUBCAMPO-B-ACTIVO VALUE 'B'.
+       01 WS-INDICE PIC 9(2).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           SET COD-CAMPO-INVALIDO TO TRUE
+           SET COD-OPERACION-VALIDA TO FALSE
+           IF COD-CAMPO-INVALIDO
+               DISPLAY 'INVALIDO'
+           END-IF
+           EVALUATE TRUE
+               WHEN COD-OPERACION-VALIDA
+                   DISPLAY 'VALIDO'
+               WHEN COD-RANGO-ERROR
+                   DISPLAY 'RANGO'
+               WHEN OTHER
+                   DISPLAY 'DESCONOCIDO'
+           END-EVALUATE
+           SET SUBCAMPO-A-ACTIVO TO TRUE
+           SET SUBCAMPO-B-ACTIVO TO TRUE
+           SET WS-INDICE TO 1
+           STOP RUN.

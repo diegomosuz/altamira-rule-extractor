@@ -1,5 +1,6 @@
 package com.altamira.extractor.parser.cobol;
 
+import io.proleap.cobol.asg.metamodel.FigurativeConstant;
 import io.proleap.cobol.asg.metamodel.valuestmt.ArithmeticValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.CallValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt;
@@ -128,7 +129,73 @@ final class ValueReferences {
         if (!collectVariableNames(stmt).isEmpty()) {
             return null;
         }
-        Object value = stmt.getValue();
-        return value != null ? String.valueOf(value) : null;
+        return canonicalLiteralText(stmt.getValue());
+    }
+
+    /**
+     * Convierte el {@code Object} devuelto por {@link ValueStmt#getValue()}
+     * (o por {@code Literal#getValue()}, su origen mas comun) en su
+     * representacion textual canonica.
+     *
+     * <p>Para literales ordinarios -- {@code String} (NON_NUMERIC),
+     * {@code Boolean} (BOOLEAN/SET condicion-88 TO TRUE) e
+     * {@code Integer}/{@code Double} (NUMERIC, incluida la evaluacion de
+     * expresiones aritmeticas puras sin variables) -- se delega en
+     * {@code String.valueOf}, exactamente el comportamiento previo: son
+     * tipos JDK con {@code toString()} estable, determinista y sin estado
+     * de identidad.
+     *
+     * <p>Para una constante figurativa (SPACES, ZERO, HIGH-VALUES, ...)
+     * ProLeap no devuelve un String: {@code Literal.getValue()} devuelve
+     * la instancia {@code FigurativeConstant}/{@code FigurativeConstantImpl}
+     * cruda (confirmado con {@code javap -c io.proleap.cobol.asg.metamodel.
+     * impl.LiteralImpl}, caso {@code FIGURATIVE_CONSTANT} del switch).
+     * Invocar {@code String.valueOf}/{@code toString()} sobre ese objeto es
+     * incorrecto: {@code FigurativeConstantImpl.toString()} antepone
+     * {@code Object.toString()} (nombre de clase + hash de identidad,
+     * dependiente del heap de cada JVM -- confirmado con
+     * {@code javap -c io.proleap.cobol.asg.metamodel.impl.
+     * FigurativeConstantImpl}, que invoca {@code java/lang/Object.toString}
+     * antes de concatenar {@code figurativeConstantType}). Esto rompe la
+     * reproducibilidad byte a byte entre procesos JVM distintos. En su
+     * lugar se usa {@link FigurativeConstant#getFigurativeConstantType()}
+     * (enum estable, sin identidad de objeto) mapeado a la forma canonica
+     * COBOL estandar via {@link #canonicalFigurativeConstantText}.
+     */
+    static String canonicalLiteralText(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof FigurativeConstant figurativeConstant) {
+            return canonicalFigurativeConstantText(figurativeConstant.getFigurativeConstantType());
+        }
+        return String.valueOf(value);
+    }
+
+    /**
+     * Forma canonica estandar COBOL por constante figurativa (singular,
+     * con guion donde el termino de referencia del lenguaje lo usa):
+     * {@code ZERO}, {@code SPACE}, {@code HIGH-VALUE}, {@code LOW-VALUE},
+     * {@code QUOTE}, {@code ALL}, {@code NULL}. ProLeap preserva la
+     * ortografia lexica exacta del programa fuente como constantes de
+     * enum separadas ({@code ZERO}/{@code ZEROS}/{@code ZEROES},
+     * {@code SPACE}/{@code SPACES}, ...) -- todas son sinonimos del mismo
+     * valor segun el estandar COBOL, asi que se pliegan a una unica forma
+     * canonica por familia en lugar de propagar la variante lexica
+     * (singular vs. plural) como si fuera informacion semantica distinta.
+     * El switch es exhaustivo sobre las 14 constantes reales de
+     * {@code FigurativeConstant.FigurativeConstantType} (confirmado con
+     * javap): el compilador rechaza cualquier caso faltante.
+     */
+    private static String canonicalFigurativeConstantText(FigurativeConstant.FigurativeConstantType type) {
+        return switch (type) {
+            case ZERO, ZEROS, ZEROES -> "ZERO";
+            case SPACE, SPACES -> "SPACE";
+            case HIGH_VALUE, HIGH_VALUES -> "HIGH-VALUE";
+            case LOW_VALUE, LOW_VALUES -> "LOW-VALUE";
+            case QUOTE, QUOTES -> "QUOTE";
+            case ALL -> "ALL";
+            case NULL, NULLS -> "NULL";
+        };
     }
 }

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from altamira_extractor.contracts.candidate import CandidateArtifact, RuleCandidate
 from altamira_extractor.contracts.canonical import (
+    CanonicalConditionName,
+    CanonicalConditionValue,
     CanonicalDataItem,
     CanonicalParagraph,
     CanonicalProgram,
@@ -83,6 +85,7 @@ def _program(
     paragraphs: list[CanonicalParagraph],
     *,
     data_items: list[CanonicalDataItem] | None = None,
+    condition_names: list[CanonicalConditionName] | None = None,
     unsupported_constructs: list[str] | None = None,
     source_file: str = "a.cbl",
 ) -> CanonicalProgram:
@@ -94,6 +97,7 @@ def _program(
         source_format=SourceFormat.FIXED,
         encoding="UTF-8",
         data_items=data_items or [],
+        condition_names=condition_names or [],
         paragraphs=paragraphs,
         unsupported_constructs=unsupported_constructs or [],
     )
@@ -329,6 +333,98 @@ def test_no_level_88_items_means_zero_count_and_no_entry() -> None:
     assert report.programs[0].level_88_data_item_count == 0
     names = {entry.construct_name for entry in report.programs[0].construct_coverage}
     assert "LEVEL_88_CONDITION_NAME" not in names
+
+
+def _condition(name: str, parent: str = "WS-COD-RETORNO") -> CanonicalConditionName:
+    return CanonicalConditionName(
+        name=name,
+        qualified_name=f"{parent}.{name}",
+        parent_name=parent,
+        parent_qualified_name=parent,
+        values=[CanonicalConditionValue(value="0005", location_kind=LocationKind.UNKNOWN)],
+        location_kind=LocationKind.UNKNOWN,
+    )
+
+
+def test_level_88_item_present_in_condition_names_is_fully_supported() -> None:
+    item = CanonicalDataItem(
+        name="COD-X",
+        qualified_name="WS-COD-RETORNO.COD-X",
+        level=88,
+        location_kind=LocationKind.UNKNOWN,
+    )
+    condition = CanonicalConditionName(
+        name="COD-X",
+        qualified_name="WS-COD-RETORNO.COD-X",
+        parent_name="WS-COD-RETORNO",
+        parent_qualified_name="WS-COD-RETORNO",
+        values=[CanonicalConditionValue(value="0005", location_kind=LocationKind.UNKNOWN)],
+        location_kind=LocationKind.UNKNOWN,
+    )
+    program = _program(
+        "P1", [_paragraph("A", [_statement()])], data_items=[item], condition_names=[condition]
+    )
+    report = _analyze([program])
+    coverage = _only_construct(report, "LEVEL_88_CONDITION_NAME_MODELED")
+    assert coverage.support_status == SemanticSupportStatus.FULLY_SUPPORTED
+    assert coverage.diagnostic_code == "LEVEL_88_CONDITION_FULLY_MODELED"
+    names = {entry.construct_name for entry in report.programs[0].construct_coverage}
+    assert "LEVEL_88_CONDITION_NAME" not in names
+
+
+def test_set_condition_resolved_is_fully_supported() -> None:
+    stmt = _statement(
+        statement_id="P1::A::1::SET",
+        kind=StatementKind.SET,
+        source_text="SET COD-X TO TRUE",
+        target_data_items=["COD-X"],
+        variables_written=["COD-X"],
+        assigned_literal="true",
+        condition_name_target="COD-X",
+        condition_set_value=True,
+    )
+    program = _program(
+        "P1", [_paragraph("A", [stmt])], condition_names=[_condition("COD-X")]
+    )
+    report = _analyze([program])
+    coverage = _only_construct(report, "SET")
+    assert coverage.support_status == SemanticSupportStatus.FULLY_SUPPORTED
+    assert coverage.diagnostic_code == "SET_CONDITION_RESOLVED"
+
+
+def test_ordinary_set_without_condition_target_stays_ambiguous() -> None:
+    stmt = _statement(
+        statement_id="P1::A::1::SET",
+        kind=StatementKind.SET,
+        source_text="SET WS-INDICE TO 1",
+        target_data_items=["WS-INDICE"],
+        variables_written=["WS-INDICE"],
+        assigned_literal="1",
+    )
+    program = _program("P1", [_paragraph("A", [stmt])])
+    report = _analyze([program])
+    coverage = _only_construct(report, "SET")
+    assert coverage.support_status == SemanticSupportStatus.PARTIALLY_SUPPORTED
+    assert coverage.diagnostic_code == "SET_TARGET_KIND_AMBIGUOUS"
+
+
+def test_referenced_condition_names_produce_condition_reference_resolved_entry() -> None:
+    stmt = _statement(
+        statement_id="P1::A::1::IF",
+        kind=StatementKind.IF,
+        source_text="IF COD-X",
+        expression="COD-X",
+        normalized_expression="COD-X",
+        referenced_condition_names=["COD-X"],
+    )
+    program = _program(
+        "P1", [_paragraph("A", [stmt])], condition_names=[_condition("COD-X")]
+    )
+    report = _analyze([program])
+    coverage = _only_construct(report, "CONDITION_NAME_REFERENCE_RESOLVED")
+    assert coverage.support_status == SemanticSupportStatus.FULLY_SUPPORTED
+    assert coverage.diagnostic_code == "CONDITION_REFERENCE_VERIFIED"
+    assert coverage.occurrence_count == 1
 
 
 # ---------------------------------------------------------------------------

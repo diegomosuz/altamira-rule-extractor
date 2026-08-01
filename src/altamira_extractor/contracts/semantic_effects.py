@@ -43,18 +43,23 @@ REQUIRED_SOURCE_ARTIFACT_KEYS: Final[frozenset[str]] = frozenset({"artifacts/02-
 
 
 class SemanticEffectKind(StrEnum):
-    """Efecto semantico normalizado. Conjunto INICIAL deliberadamente
-    acotado (Fase 2 de la ampliacion semantica): `SET_CONDITION_TRUE`,
-    `SET_CONDITION_FALSE`, `CALL_PROGRAM`, `CICS_LINK`, `READ_FILE`,
-    `WRITE_FILE` requieren informacion que el parser actual no conserva
-    con certeza (nivel 88, LINKAGE SECTION, CALL, EXEC CICS, FD/SELECT --
-    ver auditoria previa) y quedan fuera de este conjunto hasta que esa
-    informacion exista en `CanonicalProgram`."""
+    """Efecto semantico normalizado. `SET_CONDITION_TRUE`/
+    `SET_CONDITION_FALSE` (Fase 3 de la ampliacion semantica --
+    soporte nivel 88) se agregaron una vez que `CanonicalProgram`
+    conserva `condition_names` y `CanonicalStatement.condition_name_target`/
+    `condition_set_value` con evidencia estructural verificada por el
+    parser Java (ver docs/LEVEL_88_SUPPORT.md). `CALL_PROGRAM`,
+    `CICS_LINK`, `READ_FILE`, `WRITE_FILE` siguen fuera de este conjunto:
+    requieren informacion que el parser actual no conserva con certeza
+    (LINKAGE SECTION, CALL, EXEC CICS, FD/SELECT -- ver auditoria previa)
+    y quedan fuera hasta que esa informacion exista en `CanonicalProgram`."""
 
     ASSIGN_LITERAL = "ASSIGN_LITERAL"
     COPY_VALUE = "COPY_VALUE"
     COMPUTE_VALUE = "COMPUTE_VALUE"
     SET_VALUE = "SET_VALUE"
+    SET_CONDITION_TRUE = "SET_CONDITION_TRUE"
+    SET_CONDITION_FALSE = "SET_CONDITION_FALSE"
     CONTROL_TRANSFER = "CONTROL_TRANSFER"
     EXECUTE_SQL = "EXECUTE_SQL"
     PRESERVED_STATEMENT = "PRESERVED_STATEMENT"
@@ -116,6 +121,9 @@ class SemanticEffect(AltamiraBaseModel):
     sql_operation: TableAccessOperation | None = None
     sql_tables: list[str] = Field(default_factory=list)
     sql_host_variables: list[str] = Field(default_factory=list)
+    condition_name: str | None = None
+    parent_data_item: str | None = None
+    condition_values: list[str] = Field(default_factory=list)
     diagnostic_codes: list[str] = Field(default_factory=list)
     explanation: str = Field(min_length=1, max_length=2000)
 
@@ -133,6 +141,20 @@ class SemanticEffect(AltamiraBaseModel):
         elif self.kind == SemanticEffectKind.COMPUTE_VALUE:
             if self.expression is None or not self.target_data_items:
                 raise ValueError(f"{label}: COMPUTE_VALUE exige expression y target")
+        elif self.kind in (
+            SemanticEffectKind.SET_CONDITION_TRUE,
+            SemanticEffectKind.SET_CONDITION_FALSE,
+        ):
+            missing_condition_fields = (
+                self.condition_name is None
+                or self.parent_data_item is None
+                or not self.condition_values
+            )
+            if missing_condition_fields:
+                raise ValueError(
+                    f"{label}: SET_CONDITION_TRUE/FALSE exige condition_name, parent_data_item "
+                    "y al menos un condition_value"
+                )
         elif self.kind == SemanticEffectKind.CONTROL_TRANSFER:
             if not self.control_targets:
                 raise ValueError(f"{label}: CONTROL_TRANSFER exige control_targets")
@@ -225,10 +247,33 @@ class SemanticEffectsSummary(AltamiraBaseModel):
 class SemanticEffectsArtifact(AltamiraBaseModel):
     """Contenedor persistido en `<run_dir>/diagnostics/semantic-effects.json`.
     NO contractual, sin timestamps: dos ejecuciones sobre los mismos
-    artefactos de entrada deben producir bytes identicos."""
+    artefactos de entrada deben producir bytes identicos.
 
-    schema_version: Literal["1.0"] = "1.0"
-    analyzer_version: Literal["1.0"] = "1.0"
+    `schema_version` y `analyzer_version` subieron juntos a `"1.1"` en la
+    Fase 3 de la ampliacion semantica (soporte nivel 88, ver
+    docs/LEVEL_88_SUPPORT.md), a diferencia de `SemanticCoverageReport`
+    (donde solo `analyzer_version` subio): aqui la FORMA del artefacto
+    tambien cambio -- `SemanticEffect` gano tres campos nuevos
+    (`condition_name`/`parent_data_item`/`condition_values`) y
+    `SemanticEffectKind` gano dos valores nuevos
+    (`SET_CONDITION_TRUE`/`SET_CONDITION_FALSE`) -- y la logica de
+    interpretacion de `SET` cambio de forma inequivoca (un `SET
+    condicion-88 TO TRUE/FALSE` resuelto ya no cae en el `SET_VALUE`
+    generico de la Fase 2). El contrato acepta `"1.0"` en lectura (un
+    `semantic-effects.json` generado por el analizador de la Fase 2 sigue
+    cargando: los campos nuevos son opcionales/con default vacio); un
+    analizador nuevo SIEMPRE emite `"1.1"` para ambos campos,
+    independientemente de si el programa analizado usa o no nivel 88 (a
+    diferencia de `CanonicalProgram.schema_version`, que es condicional
+    por programa: aqui la version describe la CAPACIDAD del analizador,
+    no el contenido de un artefacto individual). Regenerar el diagnostico
+    sobre un run historico simplemente sobrescribe
+    `diagnostics/semantic-effects.json` con un artefacto `"1.1"` nuevo
+    (el archivo no es contractual ni se versiona por run; no hay
+    migracion in-place)."""
+
+    schema_version: Literal["1.0", "1.1"] = "1.1"
+    analyzer_version: Literal["1.0", "1.1"] = "1.1"
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(
