@@ -10,6 +10,12 @@ detectarían analizadores nuevos si se combinan `SemanticGraph`,
 evidencia ya calculada por fases anteriores y proponen candidatos
 adicionales, comparándolos explícitamente contra lo que Q0 ya detecta.
 
+Fase 8 (`docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md`) extiende esta
+misma idea al espacio **interprocedural**: sus candidatos se comparan,
+de forma conservadora y de solo lectura, contra `V2ShadowCandidate`
+cuando `artifacts/04-semantic-graph.json` está disponible — nunca
+modifica este artefacto ni sus detectores.
+
 ## Carácter diagnóstico y experimental
 
 `V2ShadowCandidatesArtifact` (`<run_dir>/diagnostics/

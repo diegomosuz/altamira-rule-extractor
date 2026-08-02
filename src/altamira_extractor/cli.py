@@ -16,6 +16,7 @@ Uso:
     python -m altamira_extractor.cli v2-candidates-shadow <run_id> [--json]
     python -m altamira_extractor.cli semantic-interprocedural <run_id> [--json]
     python -m altamira_extractor.cli semantic-interprocedural-propagation <run_id> [--json]
+    python -m altamira_extractor.cli interprocedural-candidates-shadow <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -106,6 +107,28 @@ preexistente; nunca accede a Neo4j ni invoca un proveedor LLM; su
 resultado nunca alimenta `SemanticGraph`, `CandidateArtifact` V1,
 candidatos V2, `ContextPackage` ni la generacion de reglas.
 
+`interprocedural-candidates-shadow` (Fase 8 de la ampliacion semantica,
+`feat/interprocedural-rule-detectors-shadow`) calcula y persiste
+`<run_dir>/diagnostics/interprocedural-rule-candidates-shadow.json`: un
+artefacto NO contractual, generado exclusivamente bajo demanda, que
+convierte hechos interprocedurales ya demostrados (Fase 6/7) en
+candidatos experimentales de regla de negocio -- RETURNING, BY
+REFERENCE y transiciones de estado observables entre programas -- ver
+docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md. Calcula
+`SemanticEffectsArtifact`/`SemanticPropagationArtifact`/
+`InterproceduralCallLinkageArtifact`/`InterproceduralPropagationArtifact`
+en memoria (nunca lee ni escribe sus diagnostics); carga opcionalmente
+`artifacts/06-candidates.json` (V1), `artifacts/04-semantic-graph.json`
+(unicamente para derivar V2 en memoria) y
+`artifacts/03b-semantic-enrichment.json` (unicamente para transiciones
+de estado) -- su ausencia nunca es un error. Requiere unicamente que
+RUN_ID haya alcanzado PARSED (SUCCEEDED). Nunca se invoca
+automaticamente desde `ingest`/`resume`/la API/la UI; nunca modifica
+`run.json`, ningun `artifacts/01-10`, `CandidateArtifact` V1 ni
+`SemanticGraph`; nunca accede a Neo4j ni invoca un proveedor LLM; sus
+candidatos nunca alimentan `ContextPackage`, el LLM, los guardrails, ni
+se presentan como regla aprobada.
+
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
 artefactos (`api/reads.py`, `api/downloads.py`, `api/validation.py`,
@@ -146,6 +169,7 @@ from .api.reads import (
 from .api.validation import validate_candidate_id, validate_run_id
 from .config import Settings, load_settings
 from .contracts.enums import PipelineStage
+from .contracts.interprocedural_rule_candidates import InterproceduralRuleType
 from .contracts.run_state import RunState
 from .contracts.semantic_coverage import SemanticSupportStatus
 from .pipeline.interprocedural_call_linkage_service import (
@@ -155,6 +179,10 @@ from .pipeline.interprocedural_call_linkage_service import (
 from .pipeline.interprocedural_propagation_service import (
     compute_interprocedural_propagation_artifact,
     write_interprocedural_propagation_artifact,
+)
+from .pipeline.interprocedural_rule_candidates_service import (
+    compute_interprocedural_rule_candidates_artifact,
+    write_interprocedural_rule_candidates_artifact,
 )
 from .pipeline.runner import run_ingestion
 from .pipeline.semantic_coverage_service import (
@@ -195,9 +223,7 @@ RunIdArgument = Annotated[str, typer.Argument(help="Identificador del run (run_i
 CandidateIdArgument = Annotated[
     str, typer.Argument(help="Identificador del candidato (candidate_id)")
 ]
-LimitOption = Annotated[
-    int, typer.Option(min=1, max=100, help="Cantidad maxima de runs a listar")
-]
+LimitOption = Annotated[int, typer.Option(min=1, max=100, help="Cantidad maxima de runs a listar")]
 OffsetOption = Annotated[
     int, typer.Option(min=0, help="Cantidad de runs a omitir desde el mas reciente")
 ]
@@ -231,6 +257,13 @@ InterproceduralPropagationJsonOption = Annotated[
     bool,
     typer.Option(
         "--json", help="Imprime el InterproceduralPropagationArtifact completo en JSON estable"
+    ),
+]
+InterproceduralRuleCandidatesJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el InterproceduralRuleCandidatesArtifact completo en JSON estable",
     ),
 ]
 
@@ -517,8 +550,7 @@ def semantic_coverage(
     typer.echo(f"statements: {summary.statement_count}")
     typer.echo(f"decisions: {summary.decision_count}")
     typer.echo(
-        "decisions_without_resolved_effect: "
-        f"{summary.decisions_without_resolved_effect_count}"
+        f"decisions_without_resolved_effect: {summary.decisions_without_resolved_effect_count}"
     )
     typer.echo(f"candidates_q0: {summary.candidate_count}")
     typer.echo(f"level_88_detected: {summary.level_88_data_item_count}")
@@ -532,9 +564,7 @@ def semantic_coverage(
 
 @app.command(name="semantic-effects")
 @_guard
-def semantic_effects(
-    run_id: RunIdArgument, json_output: SemanticEffectsJsonOption = False
-) -> None:
+def semantic_effects(run_id: RunIdArgument, json_output: SemanticEffectsJsonOption = False) -> None:
     """Calcula y persiste diagnostics/semantic-effects.json de RUN_ID.
 
     Artefacto NO contractual, bajo demanda (Fase 2 de la ampliacion
@@ -658,11 +688,63 @@ def semantic_interprocedural_propagation(
         typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
 
 
+@app.command(name="interprocedural-candidates-shadow")
+@_guard
+def interprocedural_candidates_shadow(
+    run_id: RunIdArgument, json_output: InterproceduralRuleCandidatesJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/interprocedural-rule-candidates-shadow.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 8 de la ampliacion
+    semantica, ver docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md):
+    ejecuta detectores experimentales que convierten hechos
+    interprocedurales ya demostrados (Fase 6/7: RETURNING, BY REFERENCE,
+    transiciones de estado observables entre programas) en candidatos de
+    regla de negocio, con proveniencia completa caller->call
+    site->binding->callee->output->caller, y los compara de forma
+    conservadora contra CandidateArtifact V1 y V2ShadowCandidatesArtifact
+    (ambos opcionales, cargados de solo lectura). Calcula
+    SemanticEffectsArtifact/SemanticPropagationArtifact/
+    InterproceduralCallLinkageArtifact/InterproceduralPropagationArtifact
+    en memoria (nunca lee ni escribe sus diagnostics). Requiere que
+    RUN_ID ya haya alcanzado PARSED (SUCCEEDED); la ausencia de
+    artifacts/06-candidates.json, artifacts/04-semantic-graph.json o
+    artifacts/03b-semantic-enrichment.json nunca es un error, solo reduce
+    la comparacion V1/V2 y/o deshabilita las transiciones de estado.
+    Nunca modifica run.json, ningun artifacts/01-10, CandidateArtifact V1
+    ni SemanticGraph; nunca accede a Neo4j ni invoca un proveedor LLM;
+    sus candidatos nunca alimentan ContextPackage, el LLM, los
+    guardrails, ni se presentan como regla aprobada.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_interprocedural_rule_candidates_artifact(run_dir, run_id)
+    artifact_path = write_interprocedural_rule_candidates_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"candidates_total: {summary.candidate_count}")
+    typer.echo(f"deterministic: {summary.deterministic_count}")
+    typer.echo(f"partial: {summary.partial_count}")
+    typer.echo(f"blocked: {summary.blocked_count}")
+    for rule_type in sorted(InterproceduralRuleType, key=lambda item: item.value):
+        typer.echo(f"  {rule_type.value}: {summary.counts_by_rule_type.get(rule_type, 0)}")
+    typer.echo(f"matched_v1: {summary.matched_v1_count}")
+    typer.echo(f"matched_v2: {summary.matched_v2_count}")
+    typer.echo(f"related_v1: {summary.related_v1_count}")
+    typer.echo(f"related_v2: {summary.related_v2_count}")
+    typer.echo(f"interprocedural_only: {summary.interprocedural_only_count}")
+    typer.echo(f"not_evaluated: {summary.not_evaluated_count}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
 @app.command(name="v2-candidates-shadow")
 @_guard
-def v2_candidates_shadow(
-    run_id: RunIdArgument, json_output: V2ShadowJsonOption = False
-) -> None:
+def v2_candidates_shadow(run_id: RunIdArgument, json_output: V2ShadowJsonOption = False) -> None:
     """Calcula y persiste diagnostics/v2-candidates-shadow.json de RUN_ID.
 
     Artefacto NO contractual, bajo demanda (Fase 5 de la ampliacion

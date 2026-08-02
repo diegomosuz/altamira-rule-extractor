@@ -26,6 +26,12 @@ modifica `SemanticGraph`, Neo4j, `queries/v1/`, candidatos V1 (`Q0`) ni V2
 reglas Markdown. No agrega un `PipelineStage`, no modifica `RunState`, no
 se integra en `ingest`/`resume`.
 
+Fase 8 (`docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md`) consume los
+`InterproceduralPropagationFact` de este artefacto como su fuente
+principal de evidencia para convertirlos en candidatos experimentales de
+regla de negocio (`RETURNING`/`BY REFERENCE`/transición de estado) —
+nunca modifica este analizador ni su artefacto.
+
 ## Relación con `docs/INTERPROCEDURAL_CALL_LINKAGE.md`
 
 `docs/INTERPROCEDURAL_CALL_LINKAGE.md` describe (sección "Ausencia

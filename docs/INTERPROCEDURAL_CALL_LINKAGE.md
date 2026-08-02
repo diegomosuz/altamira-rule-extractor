@@ -19,6 +19,12 @@ reglas Markdown. No hay propagación de **valores** entre programas: un
 `CALL` es siempre una barrera conservadora, nunca un puente para que un
 valor conocido en el caller "entre" al callee o viceversa.
 
+Fase 7 (`docs/INTERPROCEDURAL_PROPAGATION.md`) y Fase 8
+(`docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md`) consumen la resolución
+de programa, los bindings actual-formal y el call graph de este
+artefacto como entrada de solo lectura — ninguna de las dos modifica
+este analizador ni su artefacto.
+
 ## `CALL` literal vs. dinámico
 
 ```cobol

@@ -485,3 +485,21 @@ class InterproceduralPropagationError(PipelineError):
     absoluta ni el contenido de un JSON invalido. Nunca se persiste un
     `diagnostics/interprocedural-propagation.json` parcial cuando esta
     excepcion se lanza."""
+
+
+class InterproceduralRuleCandidatesError(PipelineError):
+    """Fallo de `interprocedural_rule_candidates_service.py`/
+    `interprocedural_rule_detector.py` (Fase 8 de la ampliacion
+    semantica, detectores de reglas interprocedurales en shadow mode,
+    no-contractual, diagnostico bajo demanda): el run no existe,
+    `run.json` es invalido, el run no alcanzo PARSED (SUCCEEDED),
+    `artifacts/02-canonical/` esta ausente/vacio/invalido, o los
+    artefactos calculados en memoria o cargados desde disco
+    (`SemanticEffectsArtifact`/`SemanticPropagationArtifact`/
+    `InterproceduralCallLinkageArtifact`/
+    `InterproceduralPropagationArtifact`/`CandidateArtifact`/
+    `V2ShadowCandidatesArtifact`/`SemanticEnrichmentArtifact`) son
+    inconsistentes entre si. El mensaje nunca incluye una ruta absoluta
+    ni el contenido de un JSON invalido. Nunca se persiste un
+    `diagnostics/interprocedural-rule-candidates-shadow.json` parcial
+    cuando esta excepcion se lanza."""
