@@ -338,13 +338,17 @@ class SemanticCoverageReport(AltamiraBaseModel):
     88): la FORMA del contrato no cambio (mismos campos), solo la logica
     de clasificacion de condiciones 88/SET/referencias IF-EVALUATE
     (ver docs/LEVEL_88_SUPPORT.md) -- por eso `schema_version` permanece
-    en "1.0".
+    en "1.0". `analyzer_version` subio a "1.2" en la Fase 6 (fundacion
+    interprocedural CALL/LINKAGE, ver docs/INTERPROCEDURAL_CALL_LINKAGE.md)
+    por el mismo motivo: `StatementKind.CALL` se clasifica via los
+    campos ya existentes (`statement_counts_by_kind`/`construct_coverage`/
+    `diagnostics`), sin agregar ningun campo nuevo al contrato.
 
     Deliberadamente SIN ningun timestamp: dos ejecuciones sobre los
     mismos artefactos de entrada deben producir bytes identicos."""
 
     schema_version: Literal["1.0"] = "1.0"
-    analyzer_version: Literal["1.0", "1.1"] = "1.1"
+    analyzer_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(

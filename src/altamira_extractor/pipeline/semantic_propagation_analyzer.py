@@ -37,7 +37,7 @@ from ..contracts.canonical import (
     CanonicalProgram,
     CanonicalStatement,
 )
-from ..contracts.enums import BranchKind, StatementKind
+from ..contracts.enums import BranchKind, CallPassingMode, CallTargetKind, StatementKind
 from ..contracts.semantic_coverage import SemanticSupportStatus
 from ..contracts.semantic_effects import (
     ProgramSemanticEffects,
@@ -821,6 +821,134 @@ def _handle_control_transfer(
     return _EffectOutcome(updates={key: None for key in affected})
 
 
+def _call_argument_shape_unresolved(argument: object) -> bool:
+    """`True` unicamente para el placeholder `"<unsupported>"` de
+    `StatementExtractor.convertCallArgument` (Fase 6): ni identificador
+    ni literal ni `OMITTED` -- no hay NADA sobre lo que razonar de forma
+    conservadora por argumento, asi que se limpia el entorno completo en
+    vez de invalidar solo esa posicion."""
+    return (
+        not argument.omitted  # type: ignore[attr-defined]
+        and argument.passing_mode == CallPassingMode.UNKNOWN  # type: ignore[attr-defined]
+        and argument.data_item_name is None  # type: ignore[attr-defined]
+        and argument.literal is None  # type: ignore[attr-defined]
+    )
+
+
+def _handle_call_program(
+    ctx: _ParagraphContext, stmt: CanonicalStatement, effect: SemanticEffect, env: _Environment,
+    region_id: str,
+) -> _EffectOutcome:
+    """CALL (Fase 6/9): SIEMPRE una barrera conservadora -- nunca se
+    propaga un valor a traves de una llamada, nunca se analiza el cuerpo
+    del subprograma, nunca se cruza de programa. BY REFERENCE/UNKNOWN
+    (con identidad conocida) y RETURNING invalidan su variable
+    (el subprograma podria modificarla); BY CONTENT/BY VALUE nunca
+    invalidan solo por el paso (el caller conserva su propia copia) ni
+    propagan informacion desde el callee. Un CALL dinamico sigue las
+    mismas reglas de invalidacion, mas un diagnostico adicional -- nunca
+    se intenta resolver el target usando el valor propagado del
+    identificador dinamico."""
+    source_ref = _source_reference(ctx, stmt)
+
+    if any(_call_argument_shape_unresolved(argument) for argument in effect.call_arguments):
+        affected = sorted(env.keys())
+        for target_raw in affected:
+            ctx.collector.add_fact(
+                fact_kind=PropagationFactKind.INVALIDATED_VALUE, paragraph=ctx.paragraph.name,
+                region_id=region_id, target_variable=target_raw,
+                target_qualified_name=env[target_raw].qualified_name, literal=None,
+                source_variable=None, source_qualified_name=None, source_reference=source_ref,
+                derivation_steps=(), support_status=SemanticSupportStatus.UNSUPPORTED,
+                diagnostic_codes=["CALL_ARGUMENT_SHAPE_UNRESOLVED"],
+                explanation=(
+                    "CALL con un argumento USING sin forma estructural identificable: "
+                    "entorno de propagacion completo invalidado de forma conservadora."
+                ),
+            )
+        ctx.collector.add_barrier(
+            paragraph=ctx.paragraph.name, region_id=region_id, source_reference=source_ref,
+            reason=PropagationBarrierReason.CALL_BOUNDARY, affected_variables=affected,
+            clears_entire_environment=True, diagnostic_code="CALL_ARGUMENT_SHAPE_UNRESOLVED",
+            explanation="CALL: argumento USING sin forma estructural identificable.",
+        )
+        return _EffectOutcome(updates={key: None for key in affected})
+
+    updates: dict[str, _KnownValue | None] = {}
+    invalidated: list[str] = []
+    for argument in effect.call_arguments:
+        if argument.omitted or argument.data_item_name is None:
+            continue  # OMITTED o literal puro: no hay variable que invalidar.
+        if argument.passing_mode in (CallPassingMode.CONTENT, CallPassingMode.VALUE):
+            continue
+        symbol = ctx.symbols.resolve(argument.data_item_name)
+        if symbol.identity_key in updates:
+            continue
+        updates[symbol.identity_key] = None
+        invalidated.append(argument.data_item_name)
+        ctx.collector.add_fact(
+            fact_kind=PropagationFactKind.INVALIDATED_VALUE, paragraph=ctx.paragraph.name,
+            region_id=region_id, target_variable=argument.data_item_name,
+            target_qualified_name=symbol.qualified_name, literal=None, source_variable=None,
+            source_qualified_name=None, source_reference=source_ref, derivation_steps=(),
+            support_status=SemanticSupportStatus.PARTIALLY_SUPPORTED,
+            diagnostic_codes=["CALL_ARGUMENT_BY_REFERENCE_INVALIDATED"],
+            explanation=(
+                f"CALL pasa {argument.data_item_name!r} con passing_mode="
+                f"{argument.passing_mode.value}: el subprograma podria modificarlo (nunca se "
+                "analiza su cuerpo), asi que el valor conocido se invalida de forma "
+                "conservadora."
+            ),
+        )
+
+    if effect.call_returning_data_item is not None:
+        symbol = ctx.symbols.resolve(effect.call_returning_data_item)
+        is_new = symbol.identity_key not in updates
+        updates[symbol.identity_key] = None
+        if is_new:
+            invalidated.append(effect.call_returning_data_item)
+        ctx.collector.add_fact(
+            fact_kind=PropagationFactKind.INVALIDATED_VALUE, paragraph=ctx.paragraph.name,
+            region_id=region_id, target_variable=effect.call_returning_data_item,
+            target_qualified_name=symbol.qualified_name, literal=None, source_variable=None,
+            source_qualified_name=None, source_reference=source_ref, derivation_steps=(),
+            support_status=SemanticSupportStatus.PARTIALLY_SUPPORTED,
+            diagnostic_codes=["CALL_RETURNING_INVALIDATED"],
+            explanation=(
+                f"CALL ... RETURNING {effect.call_returning_data_item!r}: el receptor se "
+                "invalida sin inventar un valor (nunca se ejecuta el programa invocado)."
+            ),
+        )
+
+    if not updates:
+        # CALL sigue siendo, conceptualmente, una barrera (regla 1: nunca
+        # se propaga a traves de ella) -- pero sin ningun valor conocido
+        # afectado (ningun argumento BY REFERENCE/UNKNOWN identificable
+        # ni RETURNING) nunca se registra un PropagationBarrier vacio.
+        return _EffectOutcome()
+
+    diagnostic_code = (
+        "CALL_DYNAMIC_TARGET_UNRESOLVED"
+        if effect.call_target_kind == CallTargetKind.DYNAMIC
+        else "CALL_BOUNDARY_ARGUMENTS_INVALIDATED"
+    )
+    ctx.collector.add_barrier(
+        paragraph=ctx.paragraph.name, region_id=region_id, source_reference=source_ref,
+        reason=PropagationBarrierReason.CALL_BOUNDARY, affected_variables=sorted(set(invalidated)),
+        clears_entire_environment=False, diagnostic_code=diagnostic_code,
+        explanation=(
+            "CALL: nunca se propagan valores a traves de una llamada a subprograma; "
+            "argumentos BY REFERENCE/UNKNOWN y RETURNING (si existen) quedan invalidados. "
+            "El target dinamico, si aplica, nunca se resuelve usando el valor propagado del "
+            "identificador."
+            if effect.call_target_kind == CallTargetKind.DYNAMIC
+            else "CALL: nunca se propagan valores a traves de una llamada a subprograma; "
+            "argumentos BY REFERENCE/UNKNOWN y RETURNING (si existen) quedan invalidados."
+        ),
+    )
+    return _EffectOutcome(updates=updates)
+
+
 def _handle_unknown_effect(
     ctx: _ParagraphContext, stmt: CanonicalStatement, effect: SemanticEffect, env: _Environment,
     region_id: str,
@@ -865,6 +993,7 @@ _HANDLERS = {
     SemanticEffectKind.COMPUTE_VALUE: _handle_compute_value,
     SemanticEffectKind.EXECUTE_SQL: _handle_execute_sql,
     SemanticEffectKind.CONTROL_TRANSFER: _handle_control_transfer,
+    SemanticEffectKind.CALL_PROGRAM: _handle_call_program,
     SemanticEffectKind.PRESERVED_STATEMENT: _handle_unknown_effect,
     SemanticEffectKind.UNSUPPORTED_STATEMENT: _handle_unknown_effect,
 }

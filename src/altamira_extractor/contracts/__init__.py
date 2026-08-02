@@ -15,9 +15,12 @@ from .base import (
 )
 from .candidate import CandidateArtifact, RuleCandidate
 from .canonical import (
+    CanonicalCallArgument,
     CanonicalConditionName,
     CanonicalConditionValue,
     CanonicalDataItem,
+    CanonicalEntryParameter,
+    CanonicalLinkageDataItem,
     CanonicalParagraph,
     CanonicalProgram,
     CanonicalSqlAccess,
@@ -50,6 +53,8 @@ from .enums import (
     AttributionScope,
     BatchContextStatus,
     BranchKind,
+    CallPassingMode,
+    CallTargetKind,
     CandidateStatus,
     ClaimField,
     CompletenessStatus,
@@ -115,6 +120,8 @@ __all__ = [
     "AttributionScope",
     "BatchContextStatus",
     "BranchKind",
+    "CallPassingMode",
+    "CallTargetKind",
     "CandidateStatus",
     "ClaimField",
     "CompletenessStatus",
@@ -153,9 +160,12 @@ __all__ = [
     "RunState",
     "StageExecution",
     # canonical
+    "CanonicalCallArgument",
     "CanonicalConditionName",
     "CanonicalConditionValue",
     "CanonicalDataItem",
+    "CanonicalEntryParameter",
+    "CanonicalLinkageDataItem",
     "CanonicalParagraph",
     "CanonicalProgram",
     "CanonicalSqlAccess",

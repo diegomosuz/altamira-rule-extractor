@@ -137,17 +137,27 @@ def _artifact(**overrides: object) -> SemanticPropagationArtifact:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_exactly_1_0() -> None:
-    assert _artifact().schema_version == "1.0"
+def test_schema_version_is_exactly_1_1() -> None:
+    assert _artifact().schema_version == "1.1"
 
 
-def test_analyzer_version_is_exactly_1_0() -> None:
-    assert _artifact().analyzer_version == "1.0"
+def test_analyzer_version_is_exactly_1_1() -> None:
+    assert _artifact().analyzer_version == "1.1"
+
+
+def test_schema_version_accepts_historical_1_0() -> None:
+    artifact = _artifact(schema_version="1.0")
+    assert artifact.schema_version == "1.0"
+
+
+def test_analyzer_version_accepts_historical_1_0() -> None:
+    artifact = _artifact(analyzer_version="1.0")
+    assert artifact.analyzer_version == "1.0"
 
 
 def test_schema_version_rejects_other_values() -> None:
     with pytest.raises(ValidationError):
-        _artifact(schema_version="1.1")
+        _artifact(schema_version="1.2")
 
 
 def test_analyzer_version_rejects_other_values() -> None:

@@ -191,6 +191,28 @@ def test_semantic_propagation_versions_reject_unknown_value() -> None:
         _artifact(semantic_propagation_analyzer_version="2.0")
 
 
+def test_semantic_effects_versions_accept_1_2() -> None:
+    """Fase 6 (fundacion interprocedural CALL/LINKAGE): SemanticEffectsArtifact
+    subio a "1.2" incondicionalmente (ver contracts/semantic_effects.py) --
+    cualquier corrida de v2-candidates-shadow, use o no CALL/LINKAGE el
+    paquete analizado, debe poder registrar esa version real como
+    procedencia, nunca rechazarla."""
+    schema_artifact = _artifact(semantic_effects_schema_version="1.2")
+    assert schema_artifact.semantic_effects_schema_version == "1.2"
+    analyzer_artifact = _artifact(semantic_effects_analyzer_version="1.2")
+    assert analyzer_artifact.semantic_effects_analyzer_version == "1.2"
+
+
+def test_semantic_propagation_versions_accept_1_1() -> None:
+    """Fase 6: SemanticPropagationArtifact subio a "1.1" incondicionalmente
+    (nuevo motivo de barrera CALL_BOUNDARY, ver contracts/semantic_propagation.py)
+    -- misma razon que el test anterior."""
+    schema_artifact = _artifact(semantic_propagation_schema_version="1.1")
+    assert schema_artifact.semantic_propagation_schema_version == "1.1"
+    analyzer_artifact = _artifact(semantic_propagation_analyzer_version="1.1")
+    assert analyzer_artifact.semantic_propagation_analyzer_version == "1.1"
+
+
 # ---------------------------------------------------------------------------
 # Rechazo de campos extra
 # ---------------------------------------------------------------------------

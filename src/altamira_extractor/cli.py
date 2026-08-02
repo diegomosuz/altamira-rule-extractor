@@ -14,6 +14,7 @@ Uso:
     python -m altamira_extractor.cli semantic-effects <run_id> [--json]
     python -m altamira_extractor.cli semantic-propagation <run_id> [--json]
     python -m altamira_extractor.cli v2-candidates-shadow <run_id> [--json]
+    python -m altamira_extractor.cli semantic-interprocedural <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -64,6 +65,25 @@ ningun `diagnostics/` preexistente; nunca alimenta ContextPackage, el
 LLM, los guardrails ni Neo4j; sus candidatos nunca se presentan como
 reglas.
 
+`semantic-interprocedural` (Fase 6 de la ampliacion semantica,
+`feat/interprocedural-call-linkage-foundation`) calcula y persiste
+`<run_dir>/diagnostics/interprocedural-call-linkage.json`: un artefacto
+NO contractual, generado exclusivamente bajo demanda, que construye una
+representacion interprocedural paralela y diagnostica -- interfaces de
+programa (LINKAGE SECTION/PROCEDURE DIVISION USING/RETURNING), call
+sites de CALL resueltos contra el paquete, bindings actual-formal
+posicionales y el call graph directo con deteccion de recursion/ciclos
+-- ver `docs/INTERPROCEDURAL_CALL_LINKAGE.md`. Calcula
+`SemanticEffectsArtifact` en memoria (nunca lee ni escribe sus
+diagnostics). Requiere unicamente que RUN_ID haya alcanzado PARSED
+(SUCCEEDED). Nunca se invoca automaticamente desde `ingest`/`resume`/la
+API/la UI; nunca modifica `run.json`, ningun `artifacts/01-10` ni ningun
+`diagnostics/` preexistente; nunca accede a Neo4j ni invoca un
+proveedor LLM; nunca propaga valores entre programas ni analiza el
+cuerpo de un programa invocado; sus call sites/bindings nunca alimentan
+`SemanticGraph`, `CandidateArtifact` V1, candidatos V2, `ContextPackage`
+ni la generacion de reglas.
+
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
 artefactos (`api/reads.py`, `api/downloads.py`, `api/validation.py`,
@@ -106,6 +126,10 @@ from .config import Settings, load_settings
 from .contracts.enums import PipelineStage
 from .contracts.run_state import RunState
 from .contracts.semantic_coverage import SemanticSupportStatus
+from .pipeline.interprocedural_call_linkage_service import (
+    compute_interprocedural_call_linkage_artifact,
+    write_interprocedural_call_linkage_artifact,
+)
 from .pipeline.runner import run_ingestion
 from .pipeline.semantic_coverage_service import (
     compute_semantic_coverage_report,
@@ -170,6 +194,12 @@ SemanticPropagationJsonOption = Annotated[
 V2ShadowJsonOption = Annotated[
     bool,
     typer.Option("--json", help="Imprime el V2ShadowCandidatesArtifact completo en JSON estable"),
+]
+InterproceduralJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json", help="Imprime el InterproceduralCallLinkageArtifact completo en JSON estable"
+    ),
 ]
 
 # Exit codes estables (Prompt 13c). Mapeados por `ApiError.code` (nunca por
@@ -588,6 +618,51 @@ def v2_candidates_shadow(
     typer.echo(f"related_not_equivalent: {summary.related_not_equivalent_count}")
     for rule_type in sorted(summary.counts_by_rule_type, key=lambda item: item.value):
         typer.echo(f"  {rule_type.value}: {summary.counts_by_rule_type[rule_type]}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="semantic-interprocedural")
+@_guard
+def semantic_interprocedural(
+    run_id: RunIdArgument, json_output: InterproceduralJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/interprocedural-call-linkage.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 6 de la ampliacion
+    semantica, ver docs/INTERPROCEDURAL_CALL_LINKAGE.md): construye la
+    fundacion interprocedural CALL/LINKAGE -- interfaces de programa,
+    call sites resueltos contra el paquete, bindings actual-formal
+    posicionales y el call graph directo con recursion/ciclos. Calcula
+    SemanticEffectsArtifact en memoria (nunca lee ni escribe
+    diagnostics/semantic-effects.json). Requiere que RUN_ID ya haya
+    alcanzado PARSED (SUCCEEDED). Nunca modifica run.json, ningun
+    artifacts/01-10 ni ningun diagnostics/ preexistente; nunca accede a
+    Neo4j ni invoca un proveedor LLM; nunca propaga valores entre
+    programas; su contenido nunca alimenta SemanticGraph, candidatos
+    V1/V2, ContextPackage ni la generacion de reglas.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_interprocedural_call_linkage_artifact(run_dir, run_id)
+    artifact_path = write_interprocedural_call_linkage_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"programs: {summary.program_count}")
+    typer.echo(f"interfaces: {summary.interface_count}")
+    typer.echo(f"call_sites: {summary.call_site_count}")
+    typer.echo(f"resolved_internal: {summary.resolved_internal_count}")
+    typer.echo(f"dynamic: {summary.dynamic_count}")
+    typer.echo(f"missing_program: {summary.missing_program_count}")
+    typer.echo(f"ambiguous_program: {summary.ambiguous_program_count}")
+    typer.echo(f"bindings_resolved: {summary.resolved_binding_count}")
+    typer.echo(f"bindings_unresolved: {summary.unresolved_binding_count}")
+    typer.echo(f"recursive_calls: {summary.recursive_call_count}")
+    typer.echo(f"cycles: {summary.cycle_count}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:

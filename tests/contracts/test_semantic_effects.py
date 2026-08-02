@@ -89,12 +89,12 @@ def _artifact(**overrides: object) -> SemanticEffectsArtifact:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_defaults_to_1_1() -> None:
-    assert _artifact().schema_version == "1.1"
+def test_schema_version_defaults_to_1_2() -> None:
+    assert _artifact().schema_version == "1.2"
 
 
-def test_analyzer_version_defaults_to_1_1() -> None:
-    assert _artifact().analyzer_version == "1.1"
+def test_analyzer_version_defaults_to_1_2() -> None:
+    assert _artifact().analyzer_version == "1.2"
 
 
 def test_schema_version_accepts_historical_1_0() -> None:
@@ -117,7 +117,7 @@ def test_schema_version_rejects_other_values() -> None:
 
 def test_analyzer_version_rejects_other_values() -> None:
     with pytest.raises(ValidationError):
-        _artifact(analyzer_version="1.2")
+        _artifact(analyzer_version="1.3")
 
 
 # ---------------------------------------------------------------------------

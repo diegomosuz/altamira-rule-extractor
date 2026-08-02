@@ -173,8 +173,8 @@ def test_semantic_propagation_persists_the_artifact_file(patched_settings: Setti
     assert artifact_path.is_file()
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert payload["run_id"] == _RUN_ID
-    assert payload["schema_version"] == "1.0"
-    assert payload["analyzer_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
+    assert payload["analyzer_version"] == "1.1"
     literals = {
         fact["target_variable"]: fact["literal"] for fact in payload["programs"][0]["facts"]
     }
@@ -194,7 +194,7 @@ def test_semantic_propagation_json_option_prints_full_artifact_after_persisting(
     json_start = result.stdout.index("{")
     payload = json.loads(result.stdout[json_start:])
     assert payload["run_id"] == _RUN_ID
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert (run_dir / "diagnostics" / "semantic-propagation.json").is_file()
 
 

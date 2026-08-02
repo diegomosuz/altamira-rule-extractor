@@ -224,9 +224,17 @@ exactamente igual que antes de esta fase.
   `PARAMETER_DEPENDENT_RULE` quedan deliberadamente fuera hasta que exista
   semántica equivalente a Fase 2/3/4 para esas categorías.
 - Hereda todas las limitaciones de `SemanticPropagation` (ver
-  `docs/SEMANTIC_PROPAGATION.md`): sin análisis interprocedural, sin
-  evaluación aritmética, sin alias por `REDEFINES`/`OCCURS`, sin
-  propagación entre `paragraph`s.
+  `docs/SEMANTIC_PROPAGATION.md`): sin evaluación aritmética, sin alias
+  por `REDEFINES`/`OCCURS`, sin propagación entre `paragraph`s, y sin
+  propagación de **valores** entre programas (Fase 6, fundación
+  interprocedural CALL/LINKAGE, ver
+  `docs/INTERPROCEDURAL_CALL_LINKAGE.md`: un `CALL` es siempre una
+  barrera de propagación, `CALL_BOUNDARY`, nunca un puente de valores).
+  Ningún detector V2 aquí descrito consume
+  `InterproceduralCallLinkageArtifact` ni genera un candidato a partir de
+  un `SemanticEffect(kind=CALL_PROGRAM)`: esa fundación es puramente
+  diagnóstica y paralela, sin ningún punto de integración con este
+  registry todavía.
 - `V2_STATE_CHANGE` nunca garantiza relevancia funcional: cualquier
   escritura determinista de un data item ordinario dentro de una decisión
   produce un candidato `PARTIAL`, sin importar si ese data item es o no

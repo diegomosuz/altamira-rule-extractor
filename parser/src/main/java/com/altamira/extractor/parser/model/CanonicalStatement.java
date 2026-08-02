@@ -39,6 +39,26 @@ import java.util.List;
  * assignedLiteral}/{@code branchCondition}), que siguen serializando
  * {@code null} exactamente como antes de la Fase 3 (ninguna anotacion
  * nueva los afecta).
+ *
+ * <p>Campos de la Fase 6 de la ampliacion semantica (fundacion
+ * interprocedural CALL/LINKAGE), poblados unicamente cuando
+ * {@code kind=CALL} (ver {@code CanonicalProgramExtractor}); todos
+ * anotados {@code @JsonInclude(NON_EMPTY)} para que cualquier statement
+ * de otro {@code kind} -- es decir, TODO programa anterior a esta fase --
+ * produzca JSON byte a byte identico al formato previo:
+ * <ul>
+ *   <li>{@code callTargetKind}/{@code calledProgramName}/
+ *   {@code calledProgramExpression}: forma del target de {@code CALL}
+ *   (literal resuelto estructuralmente vs. identificador dinamico, nunca
+ *   resuelto via propagacion).</li>
+ *   <li>{@code callArguments}: argumentos posicionales de
+ *   {@code USING}.</li>
+ *   <li>{@code callReturningDataItem}: receptor de {@code RETURNING}/
+ *   {@code GIVING} cuando es estructuralmente identificable.</li>
+ *   <li>{@code callHasOnException}/{@code callHasNotOnException}:
+ *   indicadores booleanos de presencia (nunca se modela el control flow
+ *   completo de esas clausulas en esta fase).</li>
+ * </ul>
  */
 public record CanonicalStatement(
         String statementId,
@@ -62,5 +82,51 @@ public record CanonicalStatement(
         List<CanonicalSqlAccess> sqlAccess,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) String conditionNameTarget,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) Boolean conditionSetValue,
-        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> referencedConditionNames) {
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> referencedConditionNames,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) CallTargetKind callTargetKind,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) String calledProgramName,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) String calledProgramExpression,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<CanonicalCallArgument> callArguments,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) String callReturningDataItem,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) Boolean callHasOnException,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) Boolean callHasNotOnException) {
+
+    /**
+     * Constructor de compatibilidad para todo statement que no sea
+     * {@code kind=CALL} (MOVE/SET/IF/EVALUATE/COMPUTE/GO_TO/PERFORM/
+     * EXEC_SQL/OTHER): delega en el constructor canonico con los siete
+     * campos de la Fase 6 en su valor "ausente" ({@code null}/lista
+     * vacia), evitando modificar cada sitio de construccion ya existente
+     * en {@code StatementExtractor}.
+     */
+    public CanonicalStatement(
+            String statementId,
+            StatementKind kind,
+            String sourceText,
+            String sourceFile,
+            Integer lineStart,
+            Integer lineEnd,
+            LocationKind locationKind,
+            String parentStatementId,
+            BranchKind branchKind,
+            String branchCondition,
+            String expression,
+            String normalizedExpression,
+            List<String> operands,
+            List<String> variablesRead,
+            List<String> variablesWritten,
+            List<String> targetDataItems,
+            String assignedLiteral,
+            List<String> targetParagraphs,
+            List<CanonicalSqlAccess> sqlAccess,
+            String conditionNameTarget,
+            Boolean conditionSetValue,
+            List<String> referencedConditionNames) {
+        this(
+                statementId, kind, sourceText, sourceFile, lineStart, lineEnd, locationKind,
+                parentStatementId, branchKind, branchCondition, expression, normalizedExpression,
+                operands, variablesRead, variablesWritten, targetDataItems, assignedLiteral,
+                targetParagraphs, sqlAccess, conditionNameTarget, conditionSetValue,
+                referencedConditionNames, null, null, null, List.of(), null, null, null);
+    }
 }

@@ -1,20 +1,26 @@
 package com.altamira.extractor.parser.cobol;
 
+import com.altamira.extractor.parser.model.CallPassingMode;
 import com.altamira.extractor.parser.model.CanonicalConditionName;
 import com.altamira.extractor.parser.model.CanonicalConditionValue;
 import com.altamira.extractor.parser.model.CanonicalDataItem;
+import com.altamira.extractor.parser.model.CanonicalEntryParameter;
+import com.altamira.extractor.parser.model.CanonicalLinkageDataItem;
 import com.altamira.extractor.parser.model.CanonicalParagraph;
 import com.altamira.extractor.parser.model.CanonicalProgram;
 import com.altamira.extractor.parser.model.CanonicalSqlAccess;
 import com.altamira.extractor.parser.model.CanonicalStatement;
 import com.altamira.extractor.parser.model.LocationKind;
+import com.altamira.extractor.parser.model.StatementKind;
 import io.proleap.cobol.asg.metamodel.ProgramUnit;
+import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.data.DataDivision;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntry;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryCondition;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryGroup;
 import io.proleap.cobol.asg.metamodel.data.datadescription.ValueClause;
 import io.proleap.cobol.asg.metamodel.data.datadescription.ValueInterval;
+import io.proleap.cobol.asg.metamodel.data.linkage.LinkageSection;
 import io.proleap.cobol.asg.metamodel.data.workingstorage.WorkingStorageSection;
 import io.proleap.cobol.asg.metamodel.procedure.Paragraph;
 import io.proleap.cobol.asg.metamodel.procedure.ProcedureDivision;
@@ -73,7 +79,12 @@ public final class CanonicalProgramExtractor {
         List<CanonicalDataItem> dataItems = extractDataItems(programUnit, ctx);
         List<CanonicalConditionName> conditionNames = extractConditionNames(programUnit, ctx);
         List<CanonicalParagraph> paragraphs = extractParagraphs(programUnit, ctx, conditionNames);
-        String schemaVersion = schemaVersionFor(conditionNames, paragraphs);
+        List<CanonicalLinkageDataItem> linkageDataItems = extractLinkageDataItems(programUnit, ctx);
+        List<CanonicalEntryParameter> entryParameters =
+                extractEntryParameters(programUnit, linkageDataItems, ctx);
+        String entryReturningDataItem = extractEntryReturningDataItem(programUnit);
+        String schemaVersion = schemaVersionFor(
+                conditionNames, paragraphs, linkageDataItems, entryParameters, entryReturningDataItem);
 
         return new CanonicalProgram(
                 schemaVersion,
@@ -87,29 +98,53 @@ public final class CanonicalProgramExtractor {
                 conditionNames,
                 paragraphs,
                 List.copyOf(ctx.warnings),
-                List.copyOf(ctx.unsupportedConstructs));
+                List.copyOf(ctx.unsupportedConstructs),
+                linkageDataItems,
+                entryParameters,
+                entryReturningDataItem);
     }
 
     /**
      * {@code "1.0"} para un programa que no usa NINGUNA extension de
-     * nivel 88 (Fase 3): produce el mismo JSON canonico, byte a byte,
-     * que el parser previo a esa fase (conditionNames vacia se omite del
-     * JSON via {@code @JsonInclude(NON_EMPTY)}, y ningun CanonicalStatement
-     * tiene conditionNameTarget/referencedConditionNames poblados, asi
-     * que esos campos tampoco aparecen). {@code "1.1"} en cuanto
-     * cualquiera de esas tres senales esta realmente presente en el
-     * programa. Ver docs/LEVEL_88_SUPPORT.md.
+     * nivel 88 (Fase 3) ni CALL/LINKAGE (Fase 6): produce el mismo JSON
+     * canonico, byte a byte, que el parser previo a esas fases
+     * (conditionNames/linkageDataItems/entryParameters vacios y
+     * entryReturningDataItem nulo se omiten del JSON via
+     * {@code @JsonInclude(NON_EMPTY)}, y ningun CanonicalStatement tiene
+     * sus campos nuevos poblados, asi que esas claves tampoco aparecen).
+     * {@code "1.1"} en cuanto cualquiera de las tres senales de nivel 88
+     * esta presente pero NINGUNA senal de CALL/LINKAGE lo esta (Fase 6
+     * regla 7: un programa nivel 88 puro nunca sube automaticamente a
+     * 1.2). {@code "1.2"} en cuanto aparece linkage_data_items no vacio,
+     * entry_parameters no vacio, entry_returning_data_item, o algun
+     * {@code StatementKind.CALL}. Ver docs/LEVEL_88_SUPPORT.md y
+     * docs/INTERPROCEDURAL_CALL_LINKAGE.md.
      */
     private static String schemaVersionFor(
-            List<CanonicalConditionName> conditionNames, List<CanonicalParagraph> paragraphs) {
-        if (!conditionNames.isEmpty()) {
-            return "1.1";
+            List<CanonicalConditionName> conditionNames,
+            List<CanonicalParagraph> paragraphs,
+            List<CanonicalLinkageDataItem> linkageDataItems,
+            List<CanonicalEntryParameter> entryParameters,
+            String entryReturningDataItem) {
+        boolean anyStatementIsCall = paragraphs.stream()
+                .flatMap(paragraph -> paragraph.statements().stream())
+                .anyMatch(statement -> statement.kind() == StatementKind.CALL);
+        boolean usesInterprocedural = !linkageDataItems.isEmpty()
+                || !entryParameters.isEmpty()
+                || entryReturningDataItem != null
+                || anyStatementIsCall;
+        if (usesInterprocedural) {
+            return "1.2";
         }
+
         boolean anyStatementUsesLevel88 = paragraphs.stream()
                 .flatMap(paragraph -> paragraph.statements().stream())
                 .anyMatch(statement -> statement.conditionNameTarget() != null
                         || !statement.referencedConditionNames().isEmpty());
-        return anyStatementUsesLevel88 ? "1.1" : "1.0";
+        if (!conditionNames.isEmpty() || anyStatementUsesLevel88) {
+            return "1.1";
+        }
+        return "1.0";
     }
 
     // --- Data Division -------------------------------------------------
@@ -260,7 +295,11 @@ public final class CanonicalProgramExtractor {
         return ValueReferences.canonicalLiteralText(stmt.getValue());
     }
 
-    private static String dataItemName(DataDescriptionEntry entry) {
+    // Visibilidad de paquete (no privados): reutilizados por
+    // StatementExtractor para resolver el qualified_name real de un
+    // argumento de CALL cuando ProLeap expone un DataDescriptionEntryCall
+    // (Fase 6, fundacion interprocedural).
+    static String dataItemName(DataDescriptionEntry entry) {
         String name = entry.getName();
         if (name != null && !name.isBlank()) {
             return name;
@@ -271,7 +310,7 @@ public final class CanonicalProgramExtractor {
         return "FILLER";
     }
 
-    private static String qualifiedNameOf(DataDescriptionEntry entry) {
+    static String qualifiedNameOf(DataDescriptionEntry entry) {
         List<String> parts = new ArrayList<>();
         DataDescriptionEntry current = entry;
         while (current != null) {
@@ -295,7 +334,203 @@ public final class CanonicalProgramExtractor {
         return null;
     }
 
+    // --- LINKAGE SECTION (Fase 6, fundacion interprocedural) -------------
+
+    /**
+     * Ruta de extraccion separada de {@link #extractDataItems}: LINKAGE
+     * SECTION describe la interfaz potencial de un programa, nunca se
+     * mezcla con {@code dataItems} (WORKING-STORAGE). No modela todavia
+     * REDEFINES/OCCURS/VALUE (mismo alcance que WORKING-STORAGE en V1);
+     * una condicion 88 dentro de LINKAGE se registra como no soportada en
+     * vez de perderse silenciosamente (el soporte de nivel 88 actual
+     * asume el padre resoluble via WorkingStorageSection).
+     */
+    private List<CanonicalLinkageDataItem> extractLinkageDataItems(ProgramUnit programUnit, ExtractionContext ctx) {
+        List<CanonicalLinkageDataItem> items = new ArrayList<>();
+        DataDivision dataDivision = programUnit.getDataDivision();
+        if (dataDivision == null || dataDivision.getLinkageSection() == null) {
+            return items;
+        }
+        LinkageSection linkageSection = dataDivision.getLinkageSection();
+        for (DataDescriptionEntry entry : linkageSection.getDataDescriptionEntries()) {
+            CanonicalLinkageDataItem item = convertLinkageItem(entry, ctx);
+            if (item != null) {
+                items.add(item);
+            }
+        }
+        return items;
+    }
+
+    private CanonicalLinkageDataItem convertLinkageItem(DataDescriptionEntry entry, ExtractionContext ctx) {
+        if (entry instanceof DataDescriptionEntryCondition) {
+            ctx.unsupported(
+                    "condicion 88 " + dataItemName(entry)
+                            + " dentro de LINKAGE SECTION no modelada en esta fase; omitida de "
+                            + "linkage_data_items (kind=CALL/LINKAGE, Fase 6)");
+            return null;
+        }
+        Integer level = entry.getLevelNumber();
+        if (level == null) {
+            ctx.unsupported(
+                    "DataDescriptionEntry en LINKAGE SECTION sin level number determinable; omitido "
+                            + "de linkage_data_items");
+            return null;
+        }
+        String name = dataItemName(entry);
+        String qualifiedName = qualifiedNameOf(entry);
+        String pic = pictureOf(entry);
+        String usage = usageOf(entry);
+        DataDescriptionEntryGroup parent = entry.getParentDataDescriptionEntryGroup();
+        String parentQualifiedName = parent != null ? qualifiedNameOf(parent) : null;
+
+        ParserRuleContext entryCtx = entry.getCtx();
+        if (entryCtx == null || entryCtx.getStart() == null) {
+            return new CanonicalLinkageDataItem(
+                    name, qualifiedName, level, parentQualifiedName, pic, usage, null, null, LocationKind.UNKNOWN);
+        }
+        int line = entryCtx.getStart().getLine();
+        if (ctx.programLocationKind == LocationKind.EXACT) {
+            return new CanonicalLinkageDataItem(
+                    name, qualifiedName, level, parentQualifiedName, pic, usage, ctx.sourceFileForExact, line,
+                    LocationKind.EXACT);
+        }
+        return new CanonicalLinkageDataItem(
+                name, qualifiedName, level, parentQualifiedName, pic, usage, null, line,
+                LocationKind.PREPROCESSED_STREAM);
+    }
+
     // --- Procedure Division ---------------------------------------------
+
+    /**
+     * {@code PROCEDURE DIVISION USING} (Fase 6): interfaz formal del
+     * programa, en el orden fuente exacto. Cada parametro se resuelve
+     * contra {@code linkageDataItems} preferiendo qualified_name exacto,
+     * y usando el nombre simple unicamente cuando es unico en LINKAGE
+     * (nunca se elige arbitrariamente ante homonimos -- ver
+     * {@link #resolveAgainstLinkage}).
+     */
+    private List<CanonicalEntryParameter> extractEntryParameters(
+            ProgramUnit programUnit, List<CanonicalLinkageDataItem> linkageDataItems, ExtractionContext ctx) {
+        List<CanonicalEntryParameter> parameters = new ArrayList<>();
+        ProcedureDivision procedureDivision = programUnit.getProcedureDivision();
+        if (procedureDivision == null || procedureDivision.getUsingClause() == null) {
+            return parameters;
+        }
+        int ordinal = 1;
+        for (io.proleap.cobol.asg.metamodel.procedure.UsingParameter parameter
+                : procedureDivision.getUsingClause().getUsingParameters()) {
+            if (parameter.getByReferencePhrase() != null) {
+                for (io.proleap.cobol.asg.metamodel.procedure.ByReference byReference
+                        : parameter.getByReferencePhrase().getByReferences()) {
+                    CanonicalEntryParameter converted = convertEntryParameter(
+                            ordinal, byReference.getReferenceCall(), CallPassingMode.REFERENCE,
+                            entryParameterCtx(byReference), linkageDataItems, ctx);
+                    if (converted != null) {
+                        parameters.add(converted);
+                        ordinal++;
+                    }
+                }
+            } else if (parameter.getByValuePhrase() != null) {
+                for (io.proleap.cobol.asg.metamodel.procedure.ByValue byValue
+                        : parameter.getByValuePhrase().getByValues()) {
+                    Call call = ValueReferences.singleCallIfSimple(byValue.getValueValueStmt());
+                    CanonicalEntryParameter converted = convertEntryParameter(
+                            ordinal, call, CallPassingMode.VALUE, entryParameterCtx(byValue), linkageDataItems, ctx);
+                    if (converted != null) {
+                        parameters.add(converted);
+                        ordinal++;
+                    }
+                }
+            } else {
+                ctx.unsupported(
+                        "PROCEDURE DIVISION USING con parametro sin phrase BY REFERENCE/BY VALUE "
+                                + "reconocible; omitido de entry_parameters");
+            }
+        }
+        return parameters;
+    }
+
+    private static ParserRuleContext entryParameterCtx(io.proleap.cobol.asg.metamodel.CobolDivisionElement element) {
+        return element.getCtx();
+    }
+
+    private CanonicalEntryParameter convertEntryParameter(
+            int ordinal, Call call, CallPassingMode mode, ParserRuleContext parameterCtx,
+            List<CanonicalLinkageDataItem> linkageDataItems, ExtractionContext ctx) {
+        if (call == null || call.getName() == null) {
+            ctx.unsupported(
+                    "parametro formal #" + ordinal + " de PROCEDURE DIVISION USING sin nombre "
+                            + "identificable de forma estructural; omitido de entry_parameters");
+            return null;
+        }
+        String name = call.getName();
+        String linkageQualifiedName = resolveAgainstLinkage(name, linkageDataItems);
+        if (linkageQualifiedName == null) {
+            ctx.unsupported(
+                    "parametro formal " + name + " de PROCEDURE DIVISION USING no resuelve de forma "
+                            + "inequivoca contra LINKAGE SECTION (ausente u homonimo ambiguo); nombre "
+                            + "conservado sin definicion inventada");
+        }
+
+        if (parameterCtx == null || parameterCtx.getStart() == null) {
+            return new CanonicalEntryParameter(
+                    ordinal, name, linkageQualifiedName, linkageQualifiedName, mode, null, null,
+                    LocationKind.UNKNOWN);
+        }
+        int line = parameterCtx.getStart().getLine();
+        if (ctx.programLocationKind == LocationKind.EXACT) {
+            return new CanonicalEntryParameter(
+                    ordinal, name, linkageQualifiedName, linkageQualifiedName, mode, ctx.sourceFileForExact, line,
+                    LocationKind.EXACT);
+        }
+        return new CanonicalEntryParameter(
+                ordinal, name, linkageQualifiedName, linkageQualifiedName, mode, null, line,
+                LocationKind.PREPROCESSED_STREAM);
+    }
+
+    /**
+     * Resuelve {@code name} contra {@code linkageDataItems}: coincidencia
+     * exacta de qualified_name primero; si no hay ninguna, nombre simple
+     * unicamente cuando es unico en toda la LINKAGE SECTION. Ausente o
+     * ambiguo -&gt; {@code null} (nunca se elige arbitrariamente).
+     */
+    private static String resolveAgainstLinkage(String name, List<CanonicalLinkageDataItem> linkageDataItems) {
+        List<CanonicalLinkageDataItem> exactQualified = new ArrayList<>();
+        List<CanonicalLinkageDataItem> bySimpleName = new ArrayList<>();
+        for (CanonicalLinkageDataItem item : linkageDataItems) {
+            if (item.qualifiedName().equals(name)) {
+                exactQualified.add(item);
+            }
+            if (item.name().equals(name)) {
+                bySimpleName.add(item);
+            }
+        }
+        if (exactQualified.size() == 1) {
+            return exactQualified.get(0).qualifiedName();
+        }
+        if (bySimpleName.size() == 1) {
+            return bySimpleName.get(0).qualifiedName();
+        }
+        return null;
+    }
+
+    /**
+     * {@code PROCEDURE DIVISION RETURNING}: capturado unicamente cuando
+     * ProLeap lo expone estructuralmente ({@link GivingClause}, que
+     * ProLeap reutiliza tanto para la palabra clave historica
+     * {@code GIVING} como para su sinonimo COBOL 2002+ {@code RETURNING}
+     * -- confirmado via javap sobre {@code ProcedureDivisionGivingClauseContext},
+     * que expone ambos terminales `GIVING()`/`RETURNING()` para la misma
+     * regla ASG).
+     */
+    private static String extractEntryReturningDataItem(ProgramUnit programUnit) {
+        ProcedureDivision procedureDivision = programUnit.getProcedureDivision();
+        if (procedureDivision == null || procedureDivision.getGivingClause() == null) {
+            return null;
+        }
+        Call givingCall = procedureDivision.getGivingClause().getGivingCall();
+        return givingCall != null ? givingCall.getName() : null;
+    }
 
     /**
      * Nombres de condicion 88 resolubles de forma inequivoca por nombre

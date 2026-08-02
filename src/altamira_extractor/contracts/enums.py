@@ -255,7 +255,33 @@ class StatementKind(StrEnum):
     GO_TO = "GO_TO"
     PERFORM = "PERFORM"
     EXEC_SQL = "EXEC_SQL"
+    CALL = "CALL"
     OTHER = "OTHER"
+
+
+class CallTargetKind(StrEnum):
+    """Forma del target de un `CALL` (Fase 6, fundacion interprocedural):
+    distingue `CALL 'PROG1'` (nombre de programa literal, resoluble
+    estructuralmente) de `CALL WS-PROGRAM-NAME` (identificador cuyo valor
+    en tiempo de ejecucion decide el programa invocado, nunca resuelto
+    via propagacion en esta fase) -- ver docs/INTERPROCEDURAL_CALL_LINKAGE.md."""
+
+    LITERAL = "LITERAL"
+    DYNAMIC = "DYNAMIC"
+    UNKNOWN = "UNKNOWN"
+
+
+class CallPassingMode(StrEnum):
+    """Modo de paso de un argumento de `CALL ... USING` (o de un
+    parametro formal de `PROCEDURE DIVISION USING`), tal como ProLeap lo
+    expone estructuralmente -- nunca inferido por texto. `UNKNOWN` cubre
+    formas que ProLeap no permite clasificar de forma fiable, nunca un
+    valor por defecto elegido arbitrariamente."""
+
+    REFERENCE = "REFERENCE"
+    CONTENT = "CONTENT"
+    VALUE = "VALUE"
+    UNKNOWN = "UNKNOWN"
 
 
 class LocationKind(StrEnum):

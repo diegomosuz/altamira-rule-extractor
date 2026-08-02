@@ -28,13 +28,20 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from ..contracts.canonical import (
+    CanonicalCallArgument,
     CanonicalConditionName,
     CanonicalConditionValue,
     CanonicalDataItem,
     CanonicalProgram,
     CanonicalStatement,
 )
-from ..contracts.enums import LocationKind, StatementKind, TableAccessOperation
+from ..contracts.enums import (
+    CallPassingMode,
+    CallTargetKind,
+    LocationKind,
+    StatementKind,
+    TableAccessOperation,
+)
 from ..contracts.semantic_coverage import SemanticSupportStatus
 from ..contracts.semantic_effects import (
     ProgramSemanticEffects,
@@ -86,6 +93,11 @@ class _NormalizeContext:
         parent_data_item: str | None = None,
         condition_values: list[str] | None = None,
         diagnostic_codes: list[str] | None = None,
+        call_target_kind: CallTargetKind | None = None,
+        called_program_name: str | None = None,
+        called_program_expression: str | None = None,
+        call_arguments: list[CanonicalCallArgument] | None = None,
+        call_returning_data_item: str | None = None,
     ) -> SemanticEffect:
         return SemanticEffect(
             effect_id=_effect_id(
@@ -124,6 +136,11 @@ class _NormalizeContext:
             condition_values=condition_values or [],
             diagnostic_codes=diagnostic_codes or [],
             explanation=explanation,
+            call_target_kind=call_target_kind,
+            called_program_name=called_program_name,
+            called_program_expression=called_program_expression,
+            call_arguments=call_arguments or [],
+            call_returning_data_item=call_returning_data_item,
         )
 
 
@@ -484,6 +501,108 @@ def _normalize_exec_sql(ctx: _NormalizeContext) -> list[SemanticEffect]:
     return effects
 
 
+def _call_arguments_fully_captured(arguments: list[CanonicalCallArgument]) -> bool:
+    """`True` unicamente cuando NINGUN argumento quedo en la forma
+    generica `passing_mode=UNKNOWN`/sin identidad estructural (ni
+    `omitted`, ni `data_item_name`, ni `literal`) -- ver
+    `StatementExtractor.convertCallArgument`, caso `"<unsupported>"`."""
+    return all(
+        argument.passing_mode != CallPassingMode.UNKNOWN
+        and (
+            argument.omitted or argument.data_item_name is not None or argument.literal is not None
+        )
+        for argument in arguments
+    )
+
+
+def _call_explanation(
+    stmt: CanonicalStatement, target_kind: CallTargetKind, arguments_complete: bool
+) -> str:
+    target_text = (
+        f"literal {stmt.called_program_name!r}"
+        if target_kind == CallTargetKind.LITERAL
+        else (
+            f"identificador dinamico {stmt.called_program_expression!r}"
+            if target_kind == CallTargetKind.DYNAMIC
+            else "target no identificable de forma estructural"
+        )
+    )
+    arguments_text = (
+        "argumentos USING completamente capturados"
+        if arguments_complete
+        else "uno o mas argumentos USING sin identidad estructural completa"
+    )
+    return (
+        f"CALL con target {target_text}; {arguments_text}. Nunca se ejecuta el programa "
+        "invocado ni se afirma un side effect real de su cuerpo (ver "
+        "docs/INTERPROCEDURAL_CALL_LINKAGE.md)."
+    )
+
+
+def _normalize_call(ctx: _NormalizeContext) -> list[SemanticEffect]:
+    stmt = ctx.stmt
+    target_kind = stmt.call_target_kind
+    if target_kind is None:
+        # Defensivo, nunca alcanzable en la practica: el contrato exige
+        # call_target_kind poblado para kind=CALL
+        # (_check_call_fields_only_on_call_statements).
+        return [
+            ctx.build(
+                SemanticEffectKind.UNSUPPORTED_STATEMENT,
+                SemanticSupportStatus.UNSUPPORTED,
+                ordinal=0,
+                diagnostic_codes=["CALL_WITHOUT_TARGET_KIND"],
+                explanation="CanonicalStatement kind=CALL sin call_target_kind poblado.",
+            )
+        ]
+
+    arguments_complete = _call_arguments_fully_captured(stmt.call_arguments)
+    diagnostic_codes: list[str] = []
+
+    if target_kind == CallTargetKind.LITERAL:
+        support_status = (
+            SemanticSupportStatus.FULLY_SUPPORTED
+            if arguments_complete
+            else SemanticSupportStatus.PARTIALLY_SUPPORTED
+        )
+    elif target_kind == CallTargetKind.DYNAMIC:
+        support_status = SemanticSupportStatus.PARTIALLY_SUPPORTED
+        diagnostic_codes.append("CALL_DYNAMIC_TARGET_UNRESOLVED")
+    else:
+        support_status = SemanticSupportStatus.PARTIALLY_SUPPORTED
+        diagnostic_codes.append("CALL_TARGET_NOT_IDENTIFIABLE")
+
+    if not arguments_complete:
+        support_status = SemanticSupportStatus.PARTIALLY_SUPPORTED
+        diagnostic_codes.append("CALL_ARGUMENT_PARTIAL")
+
+    if stmt.call_returning_data_item is not None:
+        # RETURNING nunca se trata como un valor conocido (ver
+        # SemanticPropagation, CALL_BOUNDARY): la extraccion en si puede
+        # ser completa, pero el receptor siempre queda marcado parcial.
+        support_status = SemanticSupportStatus.PARTIALLY_SUPPORTED
+        diagnostic_codes.append("CALL_RETURNING_PARTIAL")
+
+    if stmt.call_has_on_exception or stmt.call_has_not_on_exception:
+        diagnostic_codes.append("CALL_EXCEPTION_BRANCHES_NOT_MODELED")
+
+    return [
+        ctx.build(
+            SemanticEffectKind.CALL_PROGRAM,
+            support_status,
+            ordinal=0,
+            reads=list(stmt.variables_read),
+            call_target_kind=target_kind,
+            called_program_name=stmt.called_program_name,
+            called_program_expression=stmt.called_program_expression,
+            call_arguments=list(stmt.call_arguments),
+            call_returning_data_item=stmt.call_returning_data_item,
+            diagnostic_codes=sorted(set(diagnostic_codes)),
+            explanation=_call_explanation(stmt, target_kind, arguments_complete),
+        )
+    ]
+
+
 def _normalize_other(ctx: _NormalizeContext) -> list[SemanticEffect]:
     return [
         ctx.build(
@@ -509,6 +628,7 @@ _STATEMENT_NORMALIZERS: dict[StatementKind, Callable[[_NormalizeContext], list[S
     StatementKind.GO_TO: _normalize_go_to,
     StatementKind.PERFORM: _normalize_perform,
     StatementKind.EXEC_SQL: _normalize_exec_sql,
+    StatementKind.CALL: _normalize_call,
     StatementKind.OTHER: _normalize_other,
 }
 
@@ -517,7 +637,7 @@ def _normalize_statement(ctx: _NormalizeContext) -> list[SemanticEffect]:
     normalizer = _STATEMENT_NORMALIZERS.get(ctx.stmt.kind)
     if normalizer is None:
         # Defensivo, nunca alcanzable en la practica: StatementKind es un
-        # enum cerrado y sus 9 valores estan cubiertos arriba.
+        # enum cerrado y sus 10 valores estan cubiertos arriba.
         return [
             ctx.build(
                 SemanticEffectKind.UNSUPPORTED_STATEMENT,

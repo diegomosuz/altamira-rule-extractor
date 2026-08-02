@@ -379,10 +379,10 @@ class V2ShadowCandidatesArtifact(AltamiraBaseModel):
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(min_length=1)
-    semantic_effects_schema_version: Literal["1.0", "1.1"]
-    semantic_effects_analyzer_version: Literal["1.0", "1.1"]
-    semantic_propagation_schema_version: Literal["1.0"]
-    semantic_propagation_analyzer_version: Literal["1.0"]
+    semantic_effects_schema_version: Literal["1.0", "1.1", "1.2"]
+    semantic_effects_analyzer_version: Literal["1.0", "1.1", "1.2"]
+    semantic_propagation_schema_version: Literal["1.0", "1.1"]
+    semantic_propagation_analyzer_version: Literal["1.0", "1.1"]
     summary: V2ShadowSummary
     executions: list[V2DetectorExecution] = Field(default_factory=list)
     comparisons: list[V1V2CandidateComparison] = Field(default_factory=list)

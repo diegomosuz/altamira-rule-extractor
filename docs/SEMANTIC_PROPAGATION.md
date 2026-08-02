@@ -57,7 +57,13 @@ regresa con el entorno intacto.
 
 Explícitamente **fuera de alcance** en esta fase:
 
-- análisis interprocedural (`CALL`, `EXEC CICS`);
+- propagación de valores **entre programas**: `CALL` se modela como una
+  barrera conservadora (ver sección "CALL como barrera interprocedural",
+  Fase 6), pero nunca cruza a otro `CanonicalProgram` ni analiza el
+  cuerpo del subprograma invocado;
+- `EXEC CICS`, `LINK`/`XCTL`, `COMMAREA`, `CHANNEL`/`CONTAINER`
+  (fuera de alcance de toda la fundación interprocedural, no solo de
+  esta propagación);
 - evaluación aritmética (`COMPUTE` siempre invalida sus targets);
 - alias por `REDEFINES`, `OCCURS`, subscripts, reference modification;
 - propagación a través de `EXEC SQL` o archivos;
@@ -138,6 +144,45 @@ del proyecto). Reglas:
   estructuralmente): nunca se asume ausencia de side effects — limpian el
   entorno **completo** de la región actual.
 
+## CALL como barrera interprocedural (Fase 6)
+
+`CALL_PROGRAM` (`SemanticEffect.kind`, ver `docs/SEMANTIC_EFFECTS.md`)
+nunca propaga un valor a través de una llamada, nunca analiza el cuerpo
+del subprograma invocado y nunca cruza de `CanonicalProgram` — el
+`CanonicalProgram` completo del callee, si existe en el paquete, es
+irrelevante para esta fase (esa resolución es responsabilidad exclusiva
+de `docs/INTERPROCEDURAL_CALL_LINKAGE.md`, un artefacto distinto y
+posterior). Reglas de invalidación, por `CallPassingMode` del argumento:
+
+- **`BY REFERENCE`** (y `UNKNOWN` con identidad conocida): invalida la
+  variable — el subprograma podría modificarla, y su cuerpo nunca se
+  analiza — `INVALIDATED_VALUE`, diagnóstico
+  `CALL_ARGUMENT_BY_REFERENCE_INVALIDATED`.
+- **`BY CONTENT`/`BY VALUE`**: **nunca** invalida solo por el paso (el
+  caller conserva su propia copia intacta) ni propaga información
+  **desde** el callee — el valor conocido del caller, si existía antes
+  del `CALL`, sigue siendo válido después.
+- **`RETURNING`**: siempre invalida al receptor — nunca se inventa el
+  valor que devolvería el subprograma — `INVALIDATED_VALUE`, diagnóstico
+  `CALL_RETURNING_INVALIDATED`.
+- Un argumento `USING` sin forma estructural identificable (ni
+  identificador, ni literal, ni `OMITTED`) limpia el entorno
+  **completo** de la región, no solo su propia posición: no hay nada
+  conservador que razonar sobre un argumento sin forma reconocible
+  (diagnóstico `CALL_ARGUMENT_SHAPE_UNRESOLVED`).
+- Un `CALL` dinámico (`CallTargetKind.DYNAMIC`) sigue exactamente las
+  mismas reglas de invalidación de argumentos/`RETURNING` que un `CALL`
+  literal, más el diagnóstico `CALL_DYNAMIC_TARGET_UNRESOLVED` — el
+  identificador del target dinámico **nunca** se usa para "resolver" el
+  programa invocado, ni siquiera cuando su valor está propagado y
+  conocido en el entorno en ese punto (la propagación de constantes y la
+  resolución de programa, Fase 11 de `docs/INTERPROCEDURAL_CALL_LINKAGE.md`,
+  son completamente independientes).
+- Un `CALL` sin ningún argumento `BY REFERENCE`/`UNKNOWN` identificable
+  ni `RETURNING` nunca registra una `PropagationBarrier` vacía: sigue
+  siendo conceptualmente una barrera (nunca se propaga *a través* de
+  ella), pero sin ningún efecto observable que valga la pena persistir.
+
 ## Barreras
 
 Una `PropagationBarrier` nunca es un error del analizador: es la
@@ -152,7 +197,8 @@ condición que **realmente** declara más de un `VALUE`),
 `CONDITION_VALUE_RANGE` (exclusivo de `SET_CONDITION_TRUE` con `VALUE
 ... THRU ...`), `CONDITION_FALSE_VALUE_UNDETERMINED` (exclusivo de
 `SET_CONDITION_FALSE`, sin importar cuántos `VALUE` declare la
-condición — ver sección anterior).
+condición — ver sección anterior), `CALL_BOUNDARY` (Fase 6, ver sección
+"CALL como barrera interprocedural").
 
 ## Resolución de símbolos
 
@@ -194,9 +240,13 @@ ejecuciones sobre la misma entrada.
 
 ## Compatibilidad histórica
 
-`schema_version`/`analyzer_version` son `"1.0"` (primera versión de este
-artefacto: no hay forma histórica previa que preservar).
-`semantic_effects_schema_version`/`semantic_effects_analyzer_version`
+`schema_version`/`analyzer_version` son `"1.0"` (forma histórica, previa
+a la barrera `CALL_BOUNDARY`) o `"1.1"` (Fase 6: agrega el motivo de
+barrera `CALL_BOUNDARY`, sin cambiar ningún campo del modelo — la forma
+de `PropagationBarrier`/`PropagatedValueFact` es idéntica en ambas
+versiones, solo se amplía el conjunto de valores válidos de
+`PropagationBarrierReason`). El contrato acepta ambos valores en
+lectura. `semantic_effects_schema_version`/`semantic_effects_analyzer_version`
 registran la versión del `SemanticEffectsArtifact` calculado en memoria
 que sirvió de entrada — nunca se lee `diagnostics/semantic-effects.json`
 del disco, así que este campo es la única procedencia disponible.

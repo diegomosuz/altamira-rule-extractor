@@ -12,5 +12,6 @@ public enum StatementKind {
     GO_TO,
     PERFORM,
     EXEC_SQL,
+    CALL,
     OTHER
 }

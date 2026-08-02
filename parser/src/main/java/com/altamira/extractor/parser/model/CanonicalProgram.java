@@ -40,5 +40,34 @@ public record CanonicalProgram(
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<CanonicalConditionName> conditionNames,
         List<CanonicalParagraph> paragraphs,
         List<String> warnings,
-        List<String> unsupportedConstructs) {
+        List<String> unsupportedConstructs,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<CanonicalLinkageDataItem> linkageDataItems,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<CanonicalEntryParameter> entryParameters,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) String entryReturningDataItem) {
+
+    /**
+     * Constructor de compatibilidad para tests historicos que construyen
+     * {@code CanonicalProgram} sin los tres campos de la Fase 6 (LINKAGE
+     * SECTION/PROCEDURE DIVISION USING ausentes): delega en el
+     * constructor canonico con listas vacias y
+     * {@code entryReturningDataItem=null}.
+     */
+    public CanonicalProgram(
+            String schemaVersion,
+            String programName,
+            String sourceFile,
+            String sourceHash,
+            String sourcePackageHash,
+            SourceFormat sourceFormat,
+            String encoding,
+            List<CanonicalDataItem> dataItems,
+            List<CanonicalConditionName> conditionNames,
+            List<CanonicalParagraph> paragraphs,
+            List<String> warnings,
+            List<String> unsupportedConstructs) {
+        this(
+                schemaVersion, programName, sourceFile, sourceHash, sourcePackageHash,
+                sourceFormat, encoding, dataItems, conditionNames, paragraphs, warnings,
+                unsupportedConstructs, List.of(), List.of(), null);
+    }
 }

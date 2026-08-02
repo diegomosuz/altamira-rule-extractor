@@ -13,9 +13,14 @@ from pydantic import ValidationError
 
 from altamira_extractor.contracts import (
     BranchKind,
+    CallPassingMode,
+    CallTargetKind,
+    CanonicalCallArgument,
     CanonicalConditionName,
     CanonicalConditionValue,
     CanonicalDataItem,
+    CanonicalEntryParameter,
+    CanonicalLinkageDataItem,
     CanonicalParagraph,
     CanonicalProgram,
     CanonicalSqlAccess,
@@ -653,3 +658,383 @@ def test_schema_version_rejects_unknown_version() -> None:
         CanonicalProgram(
             **{**make_program().model_dump(mode="json"), "schema_version": "2.0"}
         )
+
+
+# ---------------------------------------------------------------------------
+# CALL / LINKAGE SECTION (Fase 6, fundacion interprocedural): schema 1.2
+# ---------------------------------------------------------------------------
+
+
+def make_call_argument(**overrides: object) -> CanonicalCallArgument:
+    fields: dict[str, object] = {
+        "ordinal": 1,
+        "expression": "WS-INPUT",
+        "data_item_name": "WS-INPUT",
+        "qualified_data_item_name": "WS-INPUT",
+        "passing_mode": CallPassingMode.REFERENCE,
+        "source_file": SOURCE_FILE,
+        "line": 15,
+        "location_kind": LocationKind.EXACT,
+    }
+    fields.update(overrides)
+    return CanonicalCallArgument(**fields)  # type: ignore[arg-type]
+
+
+def make_entry_parameter(**overrides: object) -> CanonicalEntryParameter:
+    fields: dict[str, object] = {
+        "ordinal": 1,
+        "name": "LK-INPUT",
+        "qualified_name": "LK-INPUT",
+        "linkage_item_qualified_name": "LK-INPUT",
+        "passing_mode": CallPassingMode.REFERENCE,
+        "source_file": SOURCE_FILE,
+        "line": 9,
+        "location_kind": LocationKind.EXACT,
+    }
+    fields.update(overrides)
+    return CanonicalEntryParameter(**fields)  # type: ignore[arg-type]
+
+
+def make_linkage_data_item(**overrides: object) -> CanonicalLinkageDataItem:
+    fields: dict[str, object] = {
+        "name": "LK-INPUT",
+        "qualified_name": "LK-INPUT",
+        "level": 1,
+        "pic": "X(10)",
+        "source_file": SOURCE_FILE,
+        "line": 8,
+        "location_kind": LocationKind.EXACT,
+    }
+    fields.update(overrides)
+    return CanonicalLinkageDataItem(**fields)  # type: ignore[arg-type]
+
+
+def make_call_statement(**overrides: object) -> CanonicalStatement:
+    fields: dict[str, object] = {
+        "statement_id": "ARTRFPROP01::PARA-1::0::CALL",
+        "kind": StatementKind.CALL,
+        "source_text": "CALL 'CALLEEP' USING WS-INPUT",
+        "source_file": SOURCE_FILE,
+        "line_start": 15,
+        "line_end": 15,
+        "location_kind": LocationKind.EXACT,
+        "call_target_kind": CallTargetKind.LITERAL,
+        "called_program_name": "CALLEEP",
+    }
+    fields.update(overrides)
+    return CanonicalStatement(**fields)  # type: ignore[arg-type]
+
+
+# --- CanonicalCallArgument ---------------------------------------------------
+
+
+def test_call_argument_round_trips() -> None:
+    argument = make_call_argument()
+    restored = CanonicalCallArgument.model_validate_json(argument.to_stable_json())
+    assert restored == argument
+
+
+def test_call_argument_location_kind_is_enforced() -> None:
+    with pytest.raises(ValidationError):
+        make_call_argument(source_file=None, location_kind=LocationKind.EXACT)
+
+
+def test_call_argument_omitted_forbids_data_item_and_literal() -> None:
+    with pytest.raises(ValidationError, match="omitted=True"):
+        make_call_argument(
+            omitted=True,
+            data_item_name="WS-INPUT",
+            qualified_data_item_name="WS-INPUT",
+        )
+
+
+def test_call_argument_omitted_true_with_no_other_fields_is_valid() -> None:
+    argument = make_call_argument(
+        expression="OMITTED",
+        data_item_name=None,
+        qualified_data_item_name=None,
+        omitted=True,
+    )
+    assert argument.omitted is True
+    assert argument.data_item_name is None
+
+
+def test_call_argument_literal_and_data_item_are_mutually_exclusive() -> None:
+    with pytest.raises(ValidationError, match="literal y data_item_name"):
+        make_call_argument(literal="'X'", data_item_name="WS-INPUT")
+
+
+def test_call_argument_pure_literal_is_valid() -> None:
+    argument = make_call_argument(
+        expression="'X'",
+        data_item_name=None,
+        qualified_data_item_name=None,
+        literal="'X'",
+        passing_mode=CallPassingMode.CONTENT,
+    )
+    assert argument.literal == "'X'"
+    assert argument.data_item_name is None
+
+
+# --- CanonicalEntryParameter --------------------------------------------------
+
+
+def test_entry_parameter_round_trips() -> None:
+    parameter = make_entry_parameter()
+    restored = CanonicalEntryParameter.model_validate_json(parameter.to_stable_json())
+    assert restored == parameter
+
+
+def test_entry_parameter_location_kind_is_enforced() -> None:
+    with pytest.raises(ValidationError):
+        make_entry_parameter(source_file=None, location_kind=LocationKind.EXACT)
+
+
+def test_entry_parameter_allows_unresolved_linkage_item() -> None:
+    """Cuando el nombre formal no puede resolverse contra
+    linkage_data_items (homonimo ambiguo o ausente), linkage_item_qualified_name
+    queda None -- nunca se inventa una definicion."""
+    parameter = make_entry_parameter(linkage_item_qualified_name=None, passing_mode=None)
+    assert parameter.linkage_item_qualified_name is None
+    assert parameter.passing_mode is None
+
+
+# --- CanonicalLinkageDataItem --------------------------------------------------
+
+
+def test_linkage_data_item_round_trips() -> None:
+    item = make_linkage_data_item()
+    restored = CanonicalLinkageDataItem.model_validate_json(item.to_stable_json())
+    assert restored == item
+
+
+def test_linkage_data_item_location_kind_is_enforced() -> None:
+    with pytest.raises(ValidationError):
+        make_linkage_data_item(source_file=None, location_kind=LocationKind.EXACT)
+
+
+def test_linkage_data_item_never_mixed_with_working_storage_field() -> None:
+    """linkage_data_items es un campo separado de data_items: WORKING-STORAGE
+    y LINKAGE nunca se mezclan en la misma lista (ver docstring de
+    CanonicalLinkageDataItem)."""
+    program = CanonicalProgram(
+        **{
+            **make_program().model_dump(mode="json"),
+            "linkage_data_items": [make_linkage_data_item().model_dump(mode="json")],
+        }
+    )
+    assert len(program.linkage_data_items) == 1
+    assert len(program.data_items) == 1
+    assert program.data_items[0].name != program.linkage_data_items[0].name
+
+
+# --- CanonicalStatement: campos estructurados de CALL -------------------------
+
+
+def test_call_statement_requires_call_target_kind() -> None:
+    with pytest.raises(ValidationError, match="call_target_kind"):
+        make_call_statement(call_target_kind=None, called_program_name=None)
+
+
+def test_non_call_statement_forbids_call_fields() -> None:
+    with pytest.raises(ValidationError, match="no puede declarar campos estructurados de CALL"):
+        make_statement(
+            kind=StatementKind.MOVE,
+            source_text="MOVE A TO B",
+            call_target_kind=CallTargetKind.LITERAL,
+            called_program_name="CALLEEP",
+        )
+
+
+def test_literal_call_requires_program_name_and_forbids_expression() -> None:
+    with pytest.raises(ValidationError, match="LITERAL requiere called_program_name"):
+        make_call_statement(called_program_name=None)
+    with pytest.raises(
+        ValidationError, match="LITERAL no puede declarar called_program_expression"
+    ):
+        make_call_statement(called_program_expression="WS-PROGRAM-NAME")
+
+
+def test_dynamic_call_requires_expression_and_forbids_name() -> None:
+    with pytest.raises(ValidationError, match="DYNAMIC requiere called_program_expression"):
+        make_call_statement(
+            call_target_kind=CallTargetKind.DYNAMIC,
+            called_program_name=None,
+            called_program_expression=None,
+        )
+    with pytest.raises(ValidationError, match="DYNAMIC no puede declarar called_program_name"):
+        make_call_statement(
+            call_target_kind=CallTargetKind.DYNAMIC,
+            called_program_expression="WS-PROGRAM-NAME",
+        )
+
+
+def test_dynamic_call_is_valid_with_only_expression() -> None:
+    statement = make_call_statement(
+        call_target_kind=CallTargetKind.DYNAMIC,
+        called_program_name=None,
+        called_program_expression="WS-PROGRAM-NAME",
+    )
+    assert statement.called_program_expression == "WS-PROGRAM-NAME"
+    assert statement.called_program_name is None
+
+
+def test_unknown_target_kind_forbids_name_and_expression() -> None:
+    with pytest.raises(ValidationError, match="UNKNOWN no puede declarar"):
+        make_call_statement(
+            call_target_kind=CallTargetKind.UNKNOWN,
+            called_program_name="CALLEEP",
+        )
+
+
+def test_unknown_target_kind_with_no_name_or_expression_is_valid() -> None:
+    statement = make_call_statement(
+        call_target_kind=CallTargetKind.UNKNOWN,
+        called_program_name=None,
+    )
+    assert statement.call_target_kind == CallTargetKind.UNKNOWN
+
+
+def test_call_never_populates_generic_write_targets() -> None:
+    """Fase 6: CALL nunca afirma un efecto de escritura CIERTO a nivel
+    canonico (a diferencia de MOVE/SET/COMPUTE) -- BY REFERENCE y
+    RETURNING solo describen un efecto POTENCIAL, capturado
+    exclusivamente via call_arguments/call_returning_data_item."""
+    statement = make_call_statement(
+        call_arguments=[make_call_argument().model_dump(mode="json")],
+        call_returning_data_item="WS-RESULT",
+    )
+    assert statement.target_data_items == []
+    assert statement.variables_written == []
+
+
+def test_call_arguments_require_consecutive_ordinals() -> None:
+    with pytest.raises(ValidationError, match="ordinal consecutivo"):
+        make_call_statement(
+            call_arguments=[
+                make_call_argument(ordinal=2).model_dump(mode="json"),
+            ]
+        )
+
+
+def test_call_arguments_reject_out_of_order_ordinals() -> None:
+    with pytest.raises(ValidationError, match="ordinal consecutivo"):
+        make_call_statement(
+            call_arguments=[
+                make_call_argument(ordinal=1).model_dump(mode="json"),
+                make_call_argument(
+                    ordinal=3,
+                    expression="WS-FLAG",
+                    data_item_name="WS-FLAG",
+                    qualified_data_item_name="WS-FLAG",
+                ).model_dump(mode="json"),
+            ]
+        )
+
+
+def test_call_statement_with_multiple_arguments_round_trips() -> None:
+    statement = make_call_statement(
+        call_arguments=[
+            make_call_argument().model_dump(mode="json"),
+            make_call_argument(
+                ordinal=2,
+                expression="WS-FLAG",
+                data_item_name="WS-FLAG",
+                qualified_data_item_name="WS-FLAG",
+                passing_mode=CallPassingMode.CONTENT,
+            ).model_dump(mode="json"),
+        ],
+        call_returning_data_item="WS-RESULT",
+    )
+    first = statement.to_stable_json()
+    second = CanonicalStatement.model_validate_json(first).to_stable_json()
+    assert first == second
+    assert len(statement.call_arguments) == 2
+
+
+def test_call_has_on_exception_flags_default_false() -> None:
+    statement = make_call_statement()
+    assert statement.call_has_on_exception is False
+    assert statement.call_has_not_on_exception is False
+
+
+# --- CanonicalProgram: linkage_data_items / entry_parameters ------------------
+
+
+def test_program_without_linkage_serializes_with_empty_lists() -> None:
+    program = make_program()
+    assert program.linkage_data_items == []
+    assert program.entry_parameters == []
+    assert program.entry_returning_data_item is None
+    assert '"linkage_data_items": []' in program.to_stable_json()
+    assert '"entry_parameters": []' in program.to_stable_json()
+
+
+def test_historical_program_without_linkage_loads_without_new_keys() -> None:
+    """Un CanonicalProgram JSON historico (anterior a la Fase 6) no tiene
+    las claves de LINKAGE/entry -- debe seguir cargando con listas vacias
+    por defecto, nunca un error de campo faltante."""
+    program = make_program()
+    payload = program.model_dump(mode="json")
+    del payload["linkage_data_items"]
+    del payload["entry_parameters"]
+    del payload["entry_returning_data_item"]
+    loaded = CanonicalProgram.model_validate(payload)
+    assert loaded.linkage_data_items == []
+    assert loaded.entry_parameters == []
+
+
+def test_linkage_data_items_reject_duplicate_qualified_name() -> None:
+    duplicate = make_linkage_data_item()
+    with pytest.raises(ValidationError, match="qualified_name duplicado"):
+        CanonicalProgram(
+            **{
+                **make_program().model_dump(mode="json"),
+                "linkage_data_items": [
+                    duplicate.model_dump(mode="json"),
+                    duplicate.model_dump(mode="json"),
+                ],
+            }
+        )
+
+
+def test_entry_parameters_require_consecutive_ordinals() -> None:
+    with pytest.raises(ValidationError, match="ordinal consecutivo"):
+        CanonicalProgram(
+            **{
+                **make_program().model_dump(mode="json"),
+                "entry_parameters": [
+                    make_entry_parameter(ordinal=2).model_dump(mode="json"),
+                ],
+            }
+        )
+
+
+def test_program_with_linkage_and_entry_parameters_round_trips() -> None:
+    program = CanonicalProgram(
+        **{
+            **make_program().model_dump(mode="json"),
+            "schema_version": "1.2",
+            "linkage_data_items": [
+                make_linkage_data_item().model_dump(mode="json"),
+                make_linkage_data_item(
+                    name="LK-RESULT", qualified_name="LK-RESULT", line=10
+                ).model_dump(mode="json"),
+            ],
+            "entry_parameters": [make_entry_parameter().model_dump(mode="json")],
+            "entry_returning_data_item": "LK-RESULT",
+        }
+    )
+    first = program.to_stable_json()
+    second = CanonicalProgram.model_validate_json(first).to_stable_json()
+    assert first == second
+    assert program.schema_version == "1.2"
+    assert program.entry_returning_data_item == "LK-RESULT"
+
+
+def test_schema_version_accepts_1_2_for_program_with_call_extension() -> None:
+    program = make_program(paragraphs=[make_paragraph(statements=[make_call_statement()])])
+    program = CanonicalProgram(
+        **{**program.model_dump(mode="json"), "schema_version": "1.2"}
+    )
+    assert program.schema_version == "1.2"

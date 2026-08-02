@@ -1,13 +1,23 @@
 package com.altamira.extractor.parser.cobol;
 
 import com.altamira.extractor.parser.model.BranchKind;
+import com.altamira.extractor.parser.model.CallPassingMode;
+import com.altamira.extractor.parser.model.CallTargetKind;
+import com.altamira.extractor.parser.model.CanonicalCallArgument;
 import com.altamira.extractor.parser.model.CanonicalSqlAccess;
 import com.altamira.extractor.parser.model.CanonicalStatement;
 import com.altamira.extractor.parser.model.LocationKind;
 import com.altamira.extractor.parser.model.StatementKind;
 import com.altamira.extractor.parser.sql.EmbeddedSqlExtractor;
 import io.proleap.cobol.asg.metamodel.call.Call;
+import io.proleap.cobol.asg.metamodel.call.DataDescriptionEntryCall;
 import io.proleap.cobol.asg.metamodel.procedure.Statement;
+import io.proleap.cobol.asg.metamodel.procedure.call.ByContent;
+import io.proleap.cobol.asg.metamodel.procedure.call.ByReference;
+import io.proleap.cobol.asg.metamodel.procedure.call.ByValue;
+import io.proleap.cobol.asg.metamodel.procedure.call.CallStatement;
+import io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter;
+import io.proleap.cobol.asg.metamodel.procedure.call.UsingPhrase;
 import io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.Store;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
@@ -79,6 +89,8 @@ final class StatementExtractor {
             convertPerform(performStmt, parentId, branchKind);
         } else if (statement instanceof ExecSqlStatement sqlStmt) {
             convertExecSql(sqlStmt, parentId, branchKind);
+        } else if (statement instanceof CallStatement callStmt) {
+            convertCall(callStmt, parentId, branchKind);
         } else {
             convertOther(statement, parentId, branchKind);
         }
@@ -197,6 +209,11 @@ final class StatementExtractor {
         mergedReferences.addAll(whenReferencedConditionNames);
         List<String> merged = new ArrayList<>(mergedReferences);
         merged.sort(null);
+        // Constructor completo (nunca el de compatibilidad de 22 args):
+        // el primer statement de una rama WHEN puede ser un CALL (Fase 6,
+        // caso obligatorio "llamada dentro de EVALUATE"), y el
+        // constructor de compatibilidad pondria sus 7 campos
+        // estructurados en null/vacio, perdiendo la extraccion ya hecha.
         return new CanonicalStatement(
                 statement.statementId(), statement.kind(), statement.sourceText(), statement.sourceFile(),
                 statement.lineStart(), statement.lineEnd(), statement.locationKind(),
@@ -204,7 +221,10 @@ final class StatementExtractor {
                 statement.normalizedExpression(), statement.operands(), statement.variablesRead(),
                 statement.variablesWritten(), statement.targetDataItems(), statement.assignedLiteral(),
                 statement.targetParagraphs(), statement.sqlAccess(), statement.conditionNameTarget(),
-                statement.conditionSetValue(), merged);
+                statement.conditionSetValue(), merged, statement.callTargetKind(),
+                statement.calledProgramName(), statement.calledProgramExpression(), statement.callArguments(),
+                statement.callReturningDataItem(), statement.callHasOnException(),
+                statement.callHasNotOnException());
     }
 
     private void convertMove(MoveStatement moveStmt, String parentId, BranchKind branchKind) {
@@ -422,6 +442,146 @@ final class StatementExtractor {
                 id, StatementKind.EXEC_SQL, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(), List.of(),
                 List.of(), null, List.of(), List.copyOf(sqlAccess), null, null, List.of()));
+    }
+
+    /**
+     * {@code CALL} (Fase 6, fundacion interprocedural). {@code
+     * variablesWritten}/{@code targetDataItems} se dejan deliberadamente
+     * vacios (a diferencia de MOVE/SET/COMPUTE, que representan una
+     * escritura CIERTA): un argumento BY REFERENCE o un RETURNING solo
+     * describen un efecto POTENCIAL (el subprograma puede o no
+     * modificarlo -- ver {@code PotentialDataFlow} del contrato
+     * interprocedural y {@code PropagationBarrierReason.CALL_BOUNDARY}),
+     * nunca una certeza equivalente a un MOVE. Esto tambien garantiza que
+     * CALL nunca alimenta {@code dependency_builder.py}/
+     * {@code semantic_graph_builder.py} con una nueva relacion
+     * DATA_DEPENDS_ON/LEADS_TO -- ninguno de los dos se modifica en esta
+     * fase.
+     */
+    private void convertCall(CallStatement callStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(callStmt.getCtx());
+
+        ValueStmt programValueStmt = callStmt.getProgramValueStmt();
+        CallTargetKind targetKind;
+        String calledProgramName = null;
+        String calledProgramExpression = null;
+        List<String> read = new ArrayList<>();
+
+        String literalTarget = ValueReferences.literalTextIfPure(programValueStmt);
+        List<String> targetVariableNames = programValueStmt != null
+                ? ValueReferences.collectVariableNames(programValueStmt)
+                : List.of();
+        if (literalTarget != null) {
+            targetKind = CallTargetKind.LITERAL;
+            calledProgramName = literalTarget;
+        } else if (!targetVariableNames.isEmpty()) {
+            targetKind = CallTargetKind.DYNAMIC;
+            calledProgramExpression = targetVariableNames.get(0);
+            read.addAll(targetVariableNames);
+        } else {
+            targetKind = CallTargetKind.UNKNOWN;
+            ctx.unsupported(
+                    "CALL en paragraph " + paragraphName
+                            + " con target no identificable de forma estructural (kind=CALL)");
+        }
+
+        List<CanonicalCallArgument> arguments = extractCallArguments(callStmt, read);
+
+        String returningItem = null;
+        if (callStmt.getGivingPhrase() != null && callStmt.getGivingPhrase().getGivingCall() != null) {
+            returningItem = callStmt.getGivingPhrase().getGivingCall().getName();
+        }
+
+        Boolean hasOnException = callStmt.getOnExceptionClause() != null ? Boolean.TRUE : null;
+        Boolean hasNotOnException = callStmt.getNotOnExceptionClause() != null ? Boolean.TRUE : null;
+
+        String expression = calledProgramName != null ? calledProgramName : calledProgramExpression;
+
+        String id = nextId(StatementKind.CALL);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.CALL, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
+                loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
+                List.copyOf(read), List.of(), List.of(), null, List.of(), List.of(), null, null, List.of(),
+                targetKind, calledProgramName, calledProgramExpression, arguments, returningItem, hasOnException,
+                hasNotOnException));
+    }
+
+    private List<CanonicalCallArgument> extractCallArguments(CallStatement callStmt, List<String> readAccumulator) {
+        List<CanonicalCallArgument> arguments = new ArrayList<>();
+        UsingPhrase usingPhrase = callStmt.getUsingPhrasePhrase();
+        if (usingPhrase == null) {
+            return arguments;
+        }
+        int ordinal = 1;
+        for (UsingParameter parameter : usingPhrase.getUsingParameters()) {
+            if (parameter.getByReferencePhrase() != null) {
+                for (ByReference byReference : parameter.getByReferencePhrase().getByReferences()) {
+                    boolean omitted = byReference.getByReferenceType() == ByReference.ByReferenceType.OMITTED;
+                    boolean addressOf = byReference.getByReferenceType() == ByReference.ByReferenceType.ADDRESS_OF;
+                    arguments.add(convertCallArgument(
+                            ordinal++, CallPassingMode.REFERENCE, byReference.getValueStmt(), omitted, addressOf,
+                            readAccumulator));
+                }
+            } else if (parameter.getByContentPhrase() != null) {
+                for (ByContent byContent : parameter.getByContentPhrase().getByContents()) {
+                    boolean addressOf = byContent.getByContentType() == ByContent.ByContentType.ADDRESS_OF;
+                    arguments.add(convertCallArgument(
+                            ordinal++, CallPassingMode.CONTENT, byContent.getValueStmt(), false, addressOf,
+                            readAccumulator));
+                }
+            } else if (parameter.getByValuePhrase() != null) {
+                for (ByValue byValue : parameter.getByValuePhrase().getByValues()) {
+                    boolean addressOf = byValue.getByValueType() == ByValue.ByValueType.ADDRESS_OF;
+                    arguments.add(convertCallArgument(
+                            ordinal++, CallPassingMode.VALUE, byValue.getValueStmt(), false, addressOf,
+                            readAccumulator));
+                }
+            } else {
+                ctx.unsupported(
+                        "CALL en paragraph " + paragraphName
+                                + " con argumento USING sin phrase BY REFERENCE/BY CONTENT/BY VALUE "
+                                + "reconocible (kind=CALL)");
+                Location argLoc = resolveLocation(null);
+                arguments.add(new CanonicalCallArgument(
+                        ordinal++, "<unsupported>", null, null, null, CallPassingMode.UNKNOWN, false,
+                        argLoc.sourceFile(), argLoc.lineStart(), argLoc.kind()));
+            }
+        }
+        return arguments;
+    }
+
+    private CanonicalCallArgument convertCallArgument(
+            int ordinal, CallPassingMode mode, ValueStmt valueStmt, boolean omitted, boolean addressOf,
+            List<String> readAccumulator) {
+        Location loc = resolveLocation(valueStmt != null ? valueStmt.getCtx() : null);
+        if (omitted) {
+            return new CanonicalCallArgument(
+                    ordinal, "OMITTED", null, null, null, mode, true, loc.sourceFile(), loc.lineStart(), loc.kind());
+        }
+        String literal = ValueReferences.literalTextIfPure(valueStmt);
+        if (literal != null) {
+            String expr = addressOf ? "ADDRESS OF " + literal : literal;
+            return new CanonicalCallArgument(
+                    ordinal, expr, null, null, literal, mode, false, loc.sourceFile(), loc.lineStart(), loc.kind());
+        }
+        Call call = valueStmt != null ? ValueReferences.singleCallIfSimple(valueStmt) : null;
+        if (call != null && call.getName() != null) {
+            String name = call.getName();
+            readAccumulator.add(name);
+            String qualifiedName = call instanceof DataDescriptionEntryCall ddec
+                    ? CanonicalProgramExtractor.qualifiedNameOf(ddec.getDataDescriptionEntry())
+                    : null;
+            String expr = addressOf ? "ADDRESS OF " + name : name;
+            return new CanonicalCallArgument(
+                    ordinal, expr, name, qualifiedName, null, mode, false, loc.sourceFile(), loc.lineStart(),
+                    loc.kind());
+        }
+        ctx.unsupported(
+                "CALL en paragraph " + paragraphName
+                        + " con argumento USING no identificable de forma estructural (kind=CALL)");
+        return new CanonicalCallArgument(
+                ordinal, "<unsupported>", null, null, null, CallPassingMode.UNKNOWN, false, loc.sourceFile(),
+                loc.lineStart(), loc.kind());
     }
 
     private void convertOther(Statement statement, String parentId, BranchKind branchKind) {

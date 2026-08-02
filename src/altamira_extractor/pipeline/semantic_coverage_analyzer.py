@@ -179,6 +179,80 @@ def _classify_perform(stmt: CanonicalStatement) -> _Classification:
     )
 
 
+def _call_arguments_fully_captured(stmt: CanonicalStatement) -> bool:
+    return all(
+        argument.passing_mode.value != "UNKNOWN"
+        and (
+            argument.omitted or argument.data_item_name is not None or argument.literal is not None
+        )
+        for argument in stmt.call_arguments
+    )
+
+
+def _classify_call(stmt: CanonicalStatement) -> _Classification:
+    """Fase 6 (fundacion interprocedural). Nunca afirma soporte
+    interprocedural por el solo hecho de haber parseado el CALL: solo
+    describe cuanto de la sentencia en si (target/argumentos/RETURNING/
+    clausulas de excepcion) quedo estructuralmente capturado -- ver
+    docs/INTERPROCEDURAL_CALL_LINKAGE.md para la resolucion real de
+    programas/bindings (diagnostics/interprocedural-call-linkage.json,
+    artefacto separado)."""
+    is_literal_target = (
+        stmt.call_target_kind is not None and stmt.call_target_kind.value == "LITERAL"
+    )
+    arguments_complete = _call_arguments_fully_captured(stmt)
+    has_returning = stmt.call_returning_data_item is not None
+    has_exception_branches = stmt.call_has_on_exception or stmt.call_has_not_on_exception
+    is_fully_captured = (
+        is_literal_target and arguments_complete and not has_returning
+        and not has_exception_branches
+    )
+
+    if is_fully_captured:
+        return _Classification(
+            SemanticSupportStatus.FULLY_SUPPORTED,
+            "CALL_LITERAL_CAPTURED",
+            "CALL con target literal, argumentos USING completamente capturados, sin "
+            "RETURNING ni clausulas ON EXCEPTION/NOT ON EXCEPTION: forma estructural "
+            "completa para esta sentencia (la resolucion interprocedural real -- "
+            "programa/binding -- se mide por separado, ver "
+            "diagnostics/interprocedural-call-linkage.json).",
+            CandidateImpact.NONE,
+        )
+    if not is_literal_target:
+        return _Classification(
+            SemanticSupportStatus.PARTIALLY_SUPPORTED,
+            "CALL_DYNAMIC_TARGET_UNRESOLVED",
+            "CALL con target dinamico (identificador) o no identificable de forma "
+            "estructural: el programa invocado nunca se resuelve via propagacion de "
+            "valores en esta fase.",
+            CandidateImpact.MEDIUM,
+        )
+    if not arguments_complete:
+        return _Classification(
+            SemanticSupportStatus.PARTIALLY_SUPPORTED,
+            "CALL_ARGUMENT_PARTIAL",
+            "CALL con uno o mas argumentos USING sin identidad estructural completa "
+            "(passing_mode/data item/literal no identificable de forma segura).",
+            CandidateImpact.LOW,
+        )
+    if has_returning:
+        return _Classification(
+            SemanticSupportStatus.PARTIALLY_SUPPORTED,
+            "CALL_RETURNING_PARTIAL",
+            "CALL con RETURNING/GIVING: el receptor se conserva, pero nunca se trata "
+            "como un valor conocido (ver SemanticPropagation, CALL_BOUNDARY).",
+            CandidateImpact.LOW,
+        )
+    return _Classification(
+        SemanticSupportStatus.PARTIALLY_SUPPORTED,
+        "CALL_EXCEPTION_BRANCHES_NOT_MODELED",
+        "CALL con ON EXCEPTION/NOT ON EXCEPTION: solo se conserva un indicador "
+        "estructurado de presencia, nunca el control flow completo de esas clausulas.",
+        CandidateImpact.NONE,
+    )
+
+
 def _classify_exec_sql(stmt: CanonicalStatement) -> _Classification:
     return _Classification(
         SemanticSupportStatus.PARTIALLY_SUPPORTED,
@@ -200,14 +274,15 @@ _STATEMENT_CLASSIFIERS: dict[StatementKind, Callable[[CanonicalStatement], _Clas
     StatementKind.COMPUTE: _classify_compute,
     StatementKind.PERFORM: _classify_perform,
     StatementKind.EXEC_SQL: _classify_exec_sql,
+    StatementKind.CALL: _classify_call,
 }
 
 _OTHER_CLASSIFICATION = _Classification(
     SemanticSupportStatus.PRESERVED_ONLY,
     "STATEMENT_KIND_OTHER_TEXT_PRESERVED",
-    "La sentencia no coincide con ninguna de las 8 categorias que el parser "
+    "La sentencia no coincide con ninguna de las 9 categorias que el parser "
     "interpreta estructuralmente (IF/EVALUATE/MOVE/SET/COMPUTE/GO_TO/PERFORM/"
-    "EXEC_SQL). Se conserva el texto fuente, sin variables_read/written, "
+    "EXEC_SQL/CALL). Se conserva el texto fuente, sin variables_read/written, "
     "target_data_items ni assigned_literal poblados.",
     CandidateImpact.UNKNOWN,
 )
@@ -240,7 +315,7 @@ def _classify_statement(stmt: CanonicalStatement) -> _Classification:
     classifier = _STATEMENT_CLASSIFIERS.get(stmt.kind)
     if classifier is None:
         # Defensivo, nunca alcanzable en la practica: StatementKind es un
-        # enum cerrado y sus 9 valores (los 8 clasificados + OTHER) estan
+        # enum cerrado y sus 10 valores (los 9 clasificados + OTHER) estan
         # cubiertos arriba. Si un valor nuevo se agrega al enum sin
         # registrar su clasificador aqui, se reporta como UNSUPPORTED en
         # vez de fallar silenciosamente o inventar soporte.

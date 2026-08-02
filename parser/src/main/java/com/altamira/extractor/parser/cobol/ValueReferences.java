@@ -1,6 +1,7 @@
 package com.altamira.extractor.parser.cobol;
 
 import io.proleap.cobol.asg.metamodel.FigurativeConstant;
+import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.valuestmt.ArithmeticValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.CallValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt;
@@ -47,6 +48,35 @@ final class ValueReferences {
         Set<String> names = new LinkedHashSet<>();
         collect(stmt, names);
         return new ArrayList<>(names);
+    }
+
+    /**
+     * Devuelve el {@link Call} (referencia semantica de ProLeap a un
+     * elemento nombrado) de un {@code ValueStmt} simple -- usado por la
+     * fundacion interprocedural (Fase 6) para resolver el
+     * {@code qualified_name} real de un argumento de {@code CALL}/
+     * parametro formal via {@code DataDescriptionEntryCall#getDataDescriptionEntry()}
+     * cuando ProLeap logro resolverlo contra una {@code DataDescriptionEntry}
+     * real. A diferencia de {@link #collectVariableNames}, que solo
+     * necesita el nombre, este metodo conserva el objeto {@code Call}
+     * completo; se detiene en la primera coincidencia (los argumentos de
+     * {@code CALL ... USING} son siempre un unico identificador/literal
+     * por posicion, nunca una expresion compuesta).
+     */
+    static Call singleCallIfSimple(ValueStmt stmt) {
+        if (stmt == null) {
+            return null;
+        }
+        if (stmt instanceof CallValueStmt callValueStmt && callValueStmt.getCall() != null) {
+            return callValueStmt.getCall();
+        }
+        for (ValueStmt sub : stmt.getSubValueStmts()) {
+            Call found = singleCallIfSimple(sub);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
     }
 
     private static void collect(ValueStmt stmt, Set<String> out) {

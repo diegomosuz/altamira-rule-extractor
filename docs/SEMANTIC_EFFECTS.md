@@ -96,6 +96,7 @@ No se invoca automáticamente desde `ingest`, `resume`, la API ni la UI.
 | `SET_CONDITION_TRUE` / `SET_CONDITION_FALSE` | `SET condición-88 TO TRUE`/`TO FALSE` resuelto estructuralmente (Fase 3, ver `docs/LEVEL_88_SUPPORT.md`) | Siempre `FULLY_SUPPORTED` cuando aparece; `condition_name`/`parent_data_item`/`condition_values` conservan la evidencia; `literal` solo se puebla para un VALUE simple sin THRU. |
 | `CONTROL_TRANSFER` | `GO TO`/`PERFORM` | `PERFORM` siempre `PARTIALLY_SUPPORTED` (UNTIL/VARYING pueden no estar representados). |
 | `EXECUTE_SQL` | Cada `CanonicalSqlAccess` de un `EXEC SQL` | `predicate_text` nunca se copia al efecto; `reads`/`writes` permanecen vacíos salvo evidencia inequívoca (ver "Variables host SQL: dirección no verificable" más abajo). |
+| `CALL_PROGRAM` | `CALL` (literal o dinámico), Fase 6 (`docs/INTERPROCEDURAL_CALL_LINKAGE.md`) | Nunca puebla `writes`/`target_data_items`: `BY REFERENCE`/`RETURNING` describen únicamente un efecto **potencial**, capturado exclusivamente en `call_arguments`/`call_returning_data_item`. `FULLY_SUPPORTED` solo para `CALL` literal con todos los argumentos de forma estructural identificable, sin `RETURNING` ni ramas `ON EXCEPTION`; cualquier otra combinación es `PARTIALLY_SUPPORTED`, nunca `UNSUPPORTED` (el `CALL` en sí siempre se reconoce estructuralmente). |
 | `PRESERVED_STATEMENT` | `StatementKind.OTHER`, `MOVE CORRESPONDING`/grupo no resoluble, o precondiciones faltantes de `COMPUTE`/`GO TO`/`PERFORM`/`EXEC SQL` | Nunca afirma `writes`, `target_data_items` ni `literal`. |
 | `UNSUPPORTED_STATEMENT` | Cada entrada de `CanonicalProgram.unsupported_constructs` | Declaración explícita del propio productor del artefacto, no una inferencia de este analizador. |
 
@@ -106,9 +107,10 @@ Cero efectos para un `IF`/`EVALUATE` no es un error.
 
 `SET_CONDITION_TRUE`/`SET_CONDITION_FALSE` se agregaron en la Fase 3 de la
 ampliación semántica (soporte nivel 88, ver `docs/LEVEL_88_SUPPORT.md`).
-Deliberadamente **siguen sin existir** `CALL_PROGRAM`, `CICS_LINK`,
-`READ_FILE` ni `WRITE_FILE`: requieren información que el parser no
-conserva de forma confiable hoy.
+`CALL_PROGRAM` se agregó en la Fase 6 (fundación interprocedural CALL/
+LINKAGE, ver `docs/INTERPROCEDURAL_CALL_LINKAGE.md`). Deliberadamente
+**siguen sin existir** `CICS_LINK`, `READ_FILE` ni `WRITE_FILE`: requieren
+información que el parser no conserva de forma confiable hoy.
 
 ## Variables host SQL: dirección no verificable
 
@@ -251,12 +253,24 @@ no nivel 88 — a diferencia de `CanonicalProgram.schema_version` (condicional
 por programa, ver `docs/LEVEL_88_SUPPORT.md`): aquí la versión describe la
 **capacidad del analizador**, no el contenido de un artefacto individual.
 
+**Fase 6 (fundación interprocedural CALL/LINKAGE)**: subió **ambos** campos
+de nuevo, a `"1.2"` — mismo patrón que la Fase 3: la forma cambió
+(`SemanticEffect` ganó `call_target_kind`/`called_program_name`/
+`called_program_expression`/`call_arguments`/`call_returning_data_item`;
+`SemanticEffectKind` ganó `CALL_PROGRAM`) y la lógica de interpretación de
+`StatementKind.CALL` cambió de forma inequívoca (antes de la Fase 6,
+`CALL` caía en `PRESERVED_STATEMENT`/`UNSUPPORTED_STATEMENT` genérico). El
+contrato acepta `"1.0"`, `"1.1"` y `"1.2"` en lectura; un analizador nuevo
+**siempre** emite `"1.2"` para ambos campos, independientemente de si el
+programa analizado usa o no `CALL`.
+
 **Regenerar el diagnóstico sobre un run histórico**: `semantic-effects.json`
 no es un artefacto versionado por run ni migrado in situ — volver a ejecutar
 `semantic-effects <run_id>` simplemente sobrescribe el archivo con un
-artefacto `"1.1"` nuevo, calculado desde `artifacts/02-canonical/` tal como
-existe hoy (si ese canónico es `schema_version="1.1"` con condiciones nivel
-88, el nuevo `semantic-effects.json` reflejará `SET_CONDITION_TRUE`/`FALSE`;
+artefacto `"1.2"` nuevo, calculado desde `artifacts/02-canonical/` tal como
+existe hoy (si ese canónico es `schema_version="1.2"` con `CALL`/`LINKAGE
+SECTION`, el nuevo `semantic-effects.json` reflejará `CALL_PROGRAM`; si es
+`"1.1"` con condiciones nivel 88, reflejará `SET_CONDITION_TRUE`/`FALSE`;
 si es `"1.0"` histórico, seguirá viendo `SET_VALUE` genérico como siempre).
 
 ## Idempotencia y hashing

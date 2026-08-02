@@ -33,7 +33,8 @@ from typing import Final, Literal
 from pydantic import Field, model_validator
 
 from .base import AltamiraBaseModel, RelativePath, Sha256Hex
-from .enums import BranchKind, LocationKind, StatementKind, TableAccessOperation
+from .canonical import CanonicalCallArgument
+from .enums import BranchKind, CallTargetKind, LocationKind, StatementKind, TableAccessOperation
 from .semantic_coverage import SemanticSupportStatus
 
 # Unico artefacto de entrada que este modulo requiere (a diferencia de
@@ -48,11 +49,16 @@ class SemanticEffectKind(StrEnum):
     soporte nivel 88) se agregaron una vez que `CanonicalProgram`
     conserva `condition_names` y `CanonicalStatement.condition_name_target`/
     `condition_set_value` con evidencia estructural verificada por el
-    parser Java (ver docs/LEVEL_88_SUPPORT.md). `CALL_PROGRAM`,
+    parser Java (ver docs/LEVEL_88_SUPPORT.md). `CALL_PROGRAM` (Fase 6 --
+    fundacion interprocedural, ver docs/INTERPROCEDURAL_CALL_LINKAGE.md)
+    se agrego una vez que `CanonicalProgram` conserva LINKAGE SECTION/
+    `StatementKind.CALL` con evidencia estructural verificada; nunca
+    distingue CALL literal de dinamico con un `kind` separado --
+    `SemanticEffect.call_target_kind` conserva esa distincion.
     `CICS_LINK`, `READ_FILE`, `WRITE_FILE` siguen fuera de este conjunto:
     requieren informacion que el parser actual no conserva con certeza
-    (LINKAGE SECTION, CALL, EXEC CICS, FD/SELECT -- ver auditoria previa)
-    y quedan fuera hasta que esa informacion exista en `CanonicalProgram`."""
+    (EXEC CICS, FD/SELECT -- ver auditoria previa) y quedan fuera hasta
+    que esa informacion exista en `CanonicalProgram`."""
 
     ASSIGN_LITERAL = "ASSIGN_LITERAL"
     COPY_VALUE = "COPY_VALUE"
@@ -62,6 +68,7 @@ class SemanticEffectKind(StrEnum):
     SET_CONDITION_FALSE = "SET_CONDITION_FALSE"
     CONTROL_TRANSFER = "CONTROL_TRANSFER"
     EXECUTE_SQL = "EXECUTE_SQL"
+    CALL_PROGRAM = "CALL_PROGRAM"
     PRESERVED_STATEMENT = "PRESERVED_STATEMENT"
     UNSUPPORTED_STATEMENT = "UNSUPPORTED_STATEMENT"
 
@@ -126,6 +133,11 @@ class SemanticEffect(AltamiraBaseModel):
     condition_values: list[str] = Field(default_factory=list)
     diagnostic_codes: list[str] = Field(default_factory=list)
     explanation: str = Field(min_length=1, max_length=2000)
+    call_target_kind: CallTargetKind | None = None
+    called_program_name: str | None = None
+    called_program_expression: str | None = None
+    call_arguments: list[CanonicalCallArgument] = Field(default_factory=list)
+    call_returning_data_item: str | None = None
 
     @model_validator(mode="after")
     def _check_kind_specific_invariants(self) -> SemanticEffect:
@@ -168,6 +180,26 @@ class SemanticEffect(AltamiraBaseModel):
                     f"{label}: SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED no puede coexistir "
                     "con reads/writes poblados (CanonicalSqlAccess no distingue direccion "
                     "de variables host: ver docs/SEMANTIC_EFFECTS.md)"
+                )
+        elif self.kind == SemanticEffectKind.CALL_PROGRAM:
+            if self.call_target_kind is None:
+                raise ValueError(f"{label}: CALL_PROGRAM exige call_target_kind")
+            if self.call_target_kind == CallTargetKind.LITERAL and self.called_program_name is None:
+                raise ValueError(
+                    f"{label}: CALL_PROGRAM con target LITERAL exige called_program_name"
+                )
+            if (
+                self.call_target_kind == CallTargetKind.DYNAMIC
+                and self.called_program_expression is None
+            ):
+                raise ValueError(
+                    f"{label}: CALL_PROGRAM con target DYNAMIC exige called_program_expression"
+                )
+            if self.writes or self.target_data_items:
+                raise ValueError(
+                    f"{label}: CALL_PROGRAM nunca afirma writes/target_data_items (un argumento "
+                    "BY REFERENCE o RETURNING solo describe un efecto potencial -- ver "
+                    "contracts/interprocedural_call_linkage.py, PotentialDataFlow)"
                 )
         elif self.kind == SemanticEffectKind.PRESERVED_STATEMENT:
             if self.writes or self.target_data_items or self.literal is not None:
@@ -272,8 +304,8 @@ class SemanticEffectsArtifact(AltamiraBaseModel):
     (el archivo no es contractual ni se versiona por run; no hay
     migracion in-place)."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
-    analyzer_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    analyzer_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(

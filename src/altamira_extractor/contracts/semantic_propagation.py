@@ -64,6 +64,7 @@ class PropagationBarrierReason(StrEnum):
     CONDITION_FALSE_VALUE_UNDETERMINED = "CONDITION_FALSE_VALUE_UNDETERMINED"
     CROSS_PARAGRAPH_BOUNDARY = "CROSS_PARAGRAPH_BOUNDARY"
     LOOP_OR_PERFORM_BOUNDARY = "LOOP_OR_PERFORM_BOUNDARY"
+    CALL_BOUNDARY = "CALL_BOUNDARY"
 
 
 class PropagationSourceReference(AltamiraBaseModel):
@@ -332,12 +333,22 @@ class SemanticPropagationArtifact(AltamiraBaseModel):
     memoria (Fase 4, ver `semantic_propagation_service.py`) que sirvio de
     entrada a este analisis -- nunca se lee `diagnostics/
     semantic-effects.json` del disco, asi que este campo es la unica
-    procedencia disponible de esa version."""
+    procedencia disponible de esa version.
 
-    schema_version: Literal["1.0"] = "1.0"
-    analyzer_version: Literal["1.0"] = "1.0"
-    semantic_effects_schema_version: Literal["1.0", "1.1"]
-    semantic_effects_analyzer_version: Literal["1.0", "1.1"]
+    `schema_version`/`analyzer_version` subieron juntos a `"1.1"` en la
+    Fase 6 (fundacion interprocedural CALL/LINKAGE, ver
+    docs/INTERPROCEDURAL_CALL_LINKAGE.md): `PropagationBarrierReason`
+    gano `CALL_BOUNDARY` (el enum CONTRACTUAL cambio) y la logica de
+    `semantic_propagation_analyzer.py` cambio de forma inequivoca (CALL
+    ahora invalida conservadoramente sus argumentos/RETURNING en vez de
+    caer en el generico `UNKNOWN_SIDE_EFFECT`). El contrato acepta
+    `"1.0"` en lectura; un analizador nuevo SIEMPRE emite `"1.1"` para
+    ambos campos."""
+
+    schema_version: Literal["1.0", "1.1"] = "1.1"
+    analyzer_version: Literal["1.0", "1.1"] = "1.1"
+    semantic_effects_schema_version: Literal["1.0", "1.1", "1.2"]
+    semantic_effects_analyzer_version: Literal["1.0", "1.1", "1.2"]
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(min_length=1)

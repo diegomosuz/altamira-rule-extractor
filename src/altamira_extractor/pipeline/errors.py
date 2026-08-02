@@ -457,3 +457,16 @@ class V2ShadowCandidatesError(PipelineError):
     actual). El mensaje nunca incluye una ruta absoluta ni el contenido
     de un JSON invalido. Nunca se persiste un `diagnostics/
     v2-candidates-shadow.json` parcial cuando esta excepcion se lanza."""
+
+
+class InterproceduralCallLinkageError(PipelineError):
+    """Fallo de `interprocedural_call_linkage_service.py`/
+    `interprocedural_call_linkage_analyzer.py` (Fase 6 de la ampliacion
+    semantica, fundacion interprocedural CALL/LINKAGE, no-contractual,
+    diagnostico bajo demanda): el run no existe, `run.json` es invalido,
+    el run no alcanzo PARSED (SUCCEEDED), `artifacts/02-canonical/` esta
+    ausente/vacio/invalido, o los `CanonicalProgram` cargados son
+    inconsistentes entre si. El mensaje nunca incluye una ruta absoluta
+    ni el contenido de un JSON invalido. Nunca se persiste un
+    `diagnostics/interprocedural-call-linkage.json` parcial cuando esta
+    excepcion se lanza."""

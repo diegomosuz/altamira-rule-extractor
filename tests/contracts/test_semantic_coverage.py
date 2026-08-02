@@ -110,8 +110,8 @@ def test_schema_version_is_exactly_1_0() -> None:
     assert _report().schema_version == "1.0"
 
 
-def test_analyzer_version_defaults_to_1_1() -> None:
-    assert _report().analyzer_version == "1.1"
+def test_analyzer_version_defaults_to_1_2() -> None:
+    assert _report().analyzer_version == "1.2"
 
 
 def test_analyzer_version_accepts_historical_1_0() -> None:
@@ -128,7 +128,7 @@ def test_schema_version_rejects_other_values() -> None:
 
 def test_analyzer_version_rejects_other_values() -> None:
     with pytest.raises(ValidationError):
-        _report(analyzer_version="1.2")
+        _report(analyzer_version="1.3")
 
 
 # ---------------------------------------------------------------------------

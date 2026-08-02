@@ -26,7 +26,15 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from .base import AltamiraBaseModel, RelativePath, Sha256Hex
-from .enums import BranchKind, LocationKind, SourceFormat, StatementKind, TableAccessOperation
+from .enums import (
+    BranchKind,
+    CallPassingMode,
+    CallTargetKind,
+    LocationKind,
+    SourceFormat,
+    StatementKind,
+    TableAccessOperation,
+)
 
 
 def _ordered_unique(values: Iterable[str]) -> list[str]:
@@ -162,6 +170,108 @@ class CanonicalSqlAccess(AltamiraBaseModel):
         return self
 
 
+class CanonicalCallArgument(AltamiraBaseModel):
+    """Un argumento posicional de `CALL ... USING` (Fase 6, fundacion
+    interprocedural). `expression` es SIEMPRE una representacion
+    normalizada minima (nombre del data item, texto del literal, o
+    `"ADDRESS OF <nombre>"`) -- nunca `source_text` completo. `omitted`
+    es `True` unicamente cuando ProLeap demuestra estructuralmente
+    `OMITTED` (BY REFERENCE); en ese caso `data_item_name`/
+    `qualified_data_item_name`/`literal` deben ser `None`."""
+
+    ordinal: int = Field(ge=1)
+    expression: str = Field(min_length=1)
+    data_item_name: str | None = None
+    qualified_data_item_name: str | None = None
+    literal: str | None = None
+    passing_mode: CallPassingMode
+    omitted: bool = False
+    source_file: RelativePath | None = None
+    line: int | None = Field(default=None, ge=1)
+    location_kind: LocationKind
+
+    @model_validator(mode="after")
+    def _check_location(self) -> CanonicalCallArgument:
+        _check_single_line_location(
+            source_file=self.source_file, line=self.line, location_kind=self.location_kind
+        )
+        return self
+
+    @model_validator(mode="after")
+    def _check_omitted_coherence(self) -> CanonicalCallArgument:
+        if self.omitted and (
+            self.data_item_name is not None
+            or self.qualified_data_item_name is not None
+            or self.literal is not None
+        ):
+            raise ValueError(
+                "omitted=True no puede declarar data_item_name/qualified_data_item_name/literal"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_literal_and_data_item_are_mutually_exclusive(self) -> CanonicalCallArgument:
+        if self.literal is not None and (
+            self.data_item_name is not None or self.qualified_data_item_name is not None
+        ):
+            raise ValueError(
+                "un argumento no puede declarar literal y data_item_name/"
+                "qualified_data_item_name simultaneamente"
+            )
+        return self
+
+
+class CanonicalEntryParameter(AltamiraBaseModel):
+    """Un parametro formal de `PROCEDURE DIVISION USING` (Fase 6). Cuando
+    no puede resolverse contra `CanonicalProgram.linkage_data_items`
+    (homonimo ambiguo o ausente), `linkage_item_qualified_name` queda
+    `None` -- el nombre se conserva igual, nunca se inventa una
+    definicion (ver `unsupported_constructs` del programa para el
+    diagnostico correspondiente)."""
+
+    ordinal: int = Field(ge=1)
+    name: str = Field(min_length=1)
+    qualified_name: str | None = None
+    linkage_item_qualified_name: str | None = None
+    passing_mode: CallPassingMode | None = None
+    source_file: RelativePath | None = None
+    line: int | None = Field(default=None, ge=1)
+    location_kind: LocationKind
+
+    @model_validator(mode="after")
+    def _check_location(self) -> CanonicalEntryParameter:
+        _check_single_line_location(
+            source_file=self.source_file, line=self.line, location_kind=self.location_kind
+        )
+        return self
+
+
+class CanonicalLinkageDataItem(AltamiraBaseModel):
+    """Un data item de LINKAGE SECTION (Fase 6), modelado por una ruta
+    separada de `CanonicalProgram.data_items` (que sigue representando
+    exclusivamente WORKING-STORAGE): LINKAGE describe la interfaz
+    potencial de un programa, no su almacenamiento propio, y mezclarlos
+    alteraria la superficie V1 ya estable (`SemanticGraphBuilder` no
+    consume este campo)."""
+
+    name: str = Field(min_length=1)
+    qualified_name: str = Field(min_length=1)
+    level: int = Field(ge=1, le=88)
+    parent_qualified_name: str | None = None
+    pic: str | None = None
+    usage: str | None = None
+    source_file: RelativePath | None = None
+    line: int | None = Field(default=None, ge=1)
+    location_kind: LocationKind
+
+    @model_validator(mode="after")
+    def _check_location(self) -> CanonicalLinkageDataItem:
+        _check_single_line_location(
+            source_file=self.source_file, line=self.line, location_kind=self.location_kind
+        )
+        return self
+
+
 class CanonicalStatement(AltamiraBaseModel):
     """Representacion plana y minima de un statement de Procedure Division.
 
@@ -199,6 +309,13 @@ class CanonicalStatement(AltamiraBaseModel):
     condition_name_target: str | None = None
     condition_set_value: bool | None = None
     referenced_condition_names: list[str] = Field(default_factory=list)
+    call_target_kind: CallTargetKind | None = None
+    called_program_name: str | None = None
+    called_program_expression: str | None = None
+    call_arguments: list[CanonicalCallArgument] = Field(default_factory=list)
+    call_returning_data_item: str | None = None
+    call_has_on_exception: bool = False
+    call_has_not_on_exception: bool = False
 
     @model_validator(mode="after")
     def _check_location(self) -> CanonicalStatement:
@@ -233,6 +350,61 @@ class CanonicalStatement(AltamiraBaseModel):
         if self.referenced_condition_names != sorted(set(self.referenced_condition_names)):
             raise ValueError(
                 "referenced_condition_names debe estar ordenado alfabeticamente y sin duplicados"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_call_fields_only_on_call_statements(self) -> CanonicalStatement:
+        """Fase 6 (fundacion interprocedural): los campos estructurados
+        de `CALL` nunca contaminan un statement de otro `kind` -- evita
+        que un futuro bug de extraccion filtre metadata de llamada hacia
+        un MOVE/SET/IF."""
+        if self.kind == StatementKind.CALL:
+            if self.call_target_kind is None:
+                raise ValueError("kind=CALL requiere call_target_kind")
+        else:
+            if (
+                self.call_target_kind is not None
+                or self.called_program_name is not None
+                or self.called_program_expression is not None
+                or self.call_arguments
+                or self.call_returning_data_item is not None
+                or self.call_has_on_exception
+                or self.call_has_not_on_exception
+            ):
+                raise ValueError(
+                    f"kind={self.kind.value} no puede declarar campos estructurados de CALL"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_call_target_kind_coherence(self) -> CanonicalStatement:
+        if self.call_target_kind == CallTargetKind.LITERAL:
+            if self.called_program_name is None:
+                raise ValueError("call_target_kind=LITERAL requiere called_program_name")
+            if self.called_program_expression is not None:
+                raise ValueError(
+                    "call_target_kind=LITERAL no puede declarar called_program_expression"
+                )
+        elif self.call_target_kind == CallTargetKind.DYNAMIC:
+            if self.called_program_expression is None:
+                raise ValueError("call_target_kind=DYNAMIC requiere called_program_expression")
+            if self.called_program_name is not None:
+                raise ValueError("call_target_kind=DYNAMIC no puede declarar called_program_name")
+        elif self.call_target_kind == CallTargetKind.UNKNOWN:
+            if self.called_program_name is not None or self.called_program_expression is not None:
+                raise ValueError(
+                    "call_target_kind=UNKNOWN no puede declarar called_program_name ni "
+                    "called_program_expression"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_call_arguments_ordinals(self) -> CanonicalStatement:
+        ordinals = [argument.ordinal for argument in self.call_arguments]
+        if ordinals != list(range(1, len(ordinals) + 1)):
+            raise ValueError(
+                "call_arguments debe estar ordenado por ordinal consecutivo empezando en 1"
             )
         return self
 
@@ -320,7 +492,7 @@ class CanonicalProgram(AltamiraBaseModel):
     valores en lectura; el parser decide cual emitir por programa (nunca
     este modulo, que solo valida)."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     program_name: str = Field(min_length=1)
     source_file: RelativePath
     source_hash: Sha256Hex
@@ -332,6 +504,9 @@ class CanonicalProgram(AltamiraBaseModel):
     paragraphs: list[CanonicalParagraph] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     unsupported_constructs: list[str] = Field(default_factory=list)
+    linkage_data_items: list[CanonicalLinkageDataItem] = Field(default_factory=list)
+    entry_parameters: list[CanonicalEntryParameter] = Field(default_factory=list)
+    entry_returning_data_item: str | None = None
 
     @model_validator(mode="after")
     def _check_condition_names_unique(self) -> CanonicalProgram:
@@ -352,4 +527,20 @@ class CanonicalProgram(AltamiraBaseModel):
                         f"{statement.statement_id!r} en {previous_owner!r} y {paragraph.name!r}"
                     )
                 owner_by_statement_id[statement.statement_id] = paragraph.name
+        return self
+
+    @model_validator(mode="after")
+    def _check_linkage_data_items_unique(self) -> CanonicalProgram:
+        qualified_names = [item.qualified_name for item in self.linkage_data_items]
+        if len(qualified_names) != len(set(qualified_names)):
+            raise ValueError("linkage_data_items contiene qualified_name duplicado")
+        return self
+
+    @model_validator(mode="after")
+    def _check_entry_parameters_ordinals(self) -> CanonicalProgram:
+        ordinals = [parameter.ordinal for parameter in self.entry_parameters]
+        if ordinals != list(range(1, len(ordinals) + 1)):
+            raise ValueError(
+                "entry_parameters debe estar ordenado por ordinal consecutivo empezando en 1"
+            )
         return self
