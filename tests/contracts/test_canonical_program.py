@@ -26,6 +26,7 @@ from altamira_extractor.contracts import (
     CanonicalSqlAccess,
     CanonicalStatement,
     LocationKind,
+    ProgramTerminationKind,
     SourceFormat,
     StatementKind,
     TableAccessOperation,
@@ -1038,3 +1039,245 @@ def test_schema_version_accepts_1_2_for_program_with_call_extension() -> None:
         **{**program.model_dump(mode="json"), "schema_version": "1.2"}
     )
     assert program.schema_version == "1.2"
+
+
+# --- PROGRAM_TERMINATION (Fase 7b: GOBACK/STOP RUN/EXIT PROGRAM) -----------
+
+
+def make_terminator_statement(**overrides: object) -> CanonicalStatement:
+    fields: dict[str, object] = {
+        "statement_id": "ARTRFPROP01::PARA-1::0::PROGRAM_TERMINATION",
+        "kind": StatementKind.PROGRAM_TERMINATION,
+        "source_text": "GOBACK",
+        "source_file": SOURCE_FILE,
+        "line_start": 15,
+        "line_end": 15,
+        "location_kind": LocationKind.EXACT,
+        "program_termination_kind": ProgramTerminationKind.GOBACK,
+    }
+    fields.update(overrides)
+    return CanonicalStatement(**fields)  # type: ignore[arg-type]
+
+
+def test_program_termination_statement_round_trips() -> None:
+    stmt = make_terminator_statement()
+    assert stmt.kind == StatementKind.PROGRAM_TERMINATION
+    assert stmt.program_termination_kind == ProgramTerminationKind.GOBACK
+
+
+def test_program_termination_kind_accepts_all_four_values() -> None:
+    for kind in ProgramTerminationKind:
+        stmt = make_terminator_statement(program_termination_kind=kind)
+        assert stmt.program_termination_kind == kind
+
+
+def test_program_termination_kind_required_when_kind_is_program_termination() -> None:
+    with pytest.raises(ValidationError, match="program_termination_kind"):
+        make_terminator_statement(program_termination_kind=None)
+
+
+def test_program_termination_kind_rejected_for_other_statement_kinds() -> None:
+    with pytest.raises(ValidationError, match="program_termination_kind"):
+        CanonicalStatement(
+            statement_id="ARTRFPROP01::PARA-1::0::MOVE",
+            kind=StatementKind.MOVE,
+            source_text="MOVE",
+            location_kind=LocationKind.UNKNOWN,
+            program_termination_kind=ProgramTerminationKind.GOBACK,
+        )
+
+
+def test_schema_version_accepts_1_3_for_program_with_program_termination_extension() -> None:
+    program = make_program(
+        paragraphs=[make_paragraph(statements=[make_terminator_statement()])]
+    )
+    program = CanonicalProgram(**{**program.model_dump(mode="json"), "schema_version": "1.3"})
+    assert program.schema_version == "1.3"
+
+
+def test_schema_version_rejects_1_4() -> None:
+    program = make_program()
+    with pytest.raises(ValidationError):
+        CanonicalProgram(**{**program.model_dump(mode="json"), "schema_version": "1.4"})
+
+
+# --- Forma anterior (v1.5.0, kind=OTHER) vs forma nueva (1.3, --------------
+# --- kind=PROGRAM_TERMINATION): comparacion explicita de identidad --------
+# --- posicional (auditoria de cierre, Parte 1/mid-turn). -------------------
+#
+# statement_id tiene el formato preexistente (anterior a Fase 7b)
+# "<program>::<paragraph>::<ordinal>::<kind>" (StatementExtractor.nextId,
+# lado Java): el SUFIJO de kind SIEMPRE formo parte del ID, para
+# CUALQUIER StatementKind. Reclasificar OTHER->PROGRAM_TERMINATION
+# cambia inevitablemente ese sufijo -- lo que NUNCA debe cambiar es el
+# PREFIJO posicional "<program>::<paragraph>::<ordinal>", que es la
+# identidad real de "que statement es este" independiente de su kind.
+# Deuda arquitectonica registrada (no resuelta aqui, ver
+# docs/INTERPROCEDURAL_PROPAGATION.md): "statement_id incorpora una
+# clasificacion semantica mutable (kind); evaluar desacoplar identidad
+# posicional y kind en una fase especifica de migracion de IDs."
+
+
+def _statement_id_prefix(statement_id: str) -> str:
+    return statement_id.rsplit("::", 1)[0]
+
+
+def _statement_id_suffix(statement_id: str) -> str:
+    return statement_id.rsplit("::", 1)[-1]
+
+
+def _old_shape_terminator_statement(
+    *, statement_id: str, parent_statement_id: str | None = None
+) -> CanonicalStatement:
+    """Statement tal como lo habria producido v1.5.0 para GOBACK/STOP
+    RUN/EXIT PROGRAM: siempre kind=OTHER, source_text conservado, sin
+    program_termination_kind (el campo ni existia)."""
+    return CanonicalStatement(
+        statement_id=statement_id,
+        kind=StatementKind.OTHER,
+        source_text="GOBACK",
+        source_file=SOURCE_FILE,
+        line_start=20,
+        line_end=20,
+        location_kind=LocationKind.EXACT,
+        parent_statement_id=parent_statement_id,
+    )
+
+
+def _new_shape_terminator_statement(
+    *, statement_id: str, parent_statement_id: str | None = None
+) -> CanonicalStatement:
+    """Mismo statement, forma 1.3: kind=PROGRAM_TERMINATION,
+    program_termination_kind poblado. Mismo statement_id COMPLETO que se
+    le pasa -- el llamador decide si usa el mismo sufijo (para probar
+    que NO deberia coincidir en la practica) o el sufijo correcto."""
+    return CanonicalStatement(
+        statement_id=statement_id,
+        kind=StatementKind.PROGRAM_TERMINATION,
+        source_text="GOBACK",
+        source_file=SOURCE_FILE,
+        line_start=20,
+        line_end=20,
+        location_kind=LocationKind.EXACT,
+        parent_statement_id=parent_statement_id,
+        program_termination_kind=ProgramTerminationKind.GOBACK,
+    )
+
+
+def test_A_statement_id_prefix_identical_between_old_and_new_shape() -> None:
+    """El prefijo program::paragraph::ordinal es identico entre la forma
+    v1.5.0 (OTHER) y la forma 1.3 (PROGRAM_TERMINATION) para el MISMO
+    statement fisico."""
+    old = _old_shape_terminator_statement(statement_id="ARTRFPROP01::PARA-1::5::OTHER")
+    new = _new_shape_terminator_statement(
+        statement_id="ARTRFPROP01::PARA-1::5::PROGRAM_TERMINATION"
+    )
+    assert _statement_id_prefix(old.statement_id) == _statement_id_prefix(new.statement_id)
+    assert _statement_id_prefix(old.statement_id) == "ARTRFPROP01::PARA-1::5"
+
+
+def test_B_only_kind_suffix_and_program_termination_kind_change() -> None:
+    """Unicamente cambian: el sufijo de statement_id, kind y
+    program_termination_kind. Todo lo demas (source_file, line_start/end,
+    location_kind, parent_statement_id, branch_kind, variables_read/
+    written, target_data_items, assigned_literal) permanece identico."""
+    old = _old_shape_terminator_statement(
+        statement_id="ARTRFPROP01::PARA-1::5::OTHER", parent_statement_id=None
+    )
+    new = _new_shape_terminator_statement(
+        statement_id="ARTRFPROP01::PARA-1::5::PROGRAM_TERMINATION", parent_statement_id=None
+    )
+
+    assert _statement_id_suffix(old.statement_id) == "OTHER"
+    assert _statement_id_suffix(new.statement_id) == "PROGRAM_TERMINATION"
+    assert old.kind != new.kind
+    assert old.program_termination_kind is None
+    assert new.program_termination_kind == ProgramTerminationKind.GOBACK
+
+    frozen_fields = [
+        "source_file", "line_start", "line_end", "location_kind",
+        "parent_statement_id", "branch_kind", "branch_condition",
+        "variables_read", "variables_written", "target_data_items",
+        "assigned_literal", "target_paragraphs", "operands",
+    ]
+    for field in frozen_fields:
+        assert getattr(old, field) == getattr(new, field), f"{field} no deberia cambiar"
+
+
+def test_C_non_terminator_statements_keep_full_id_unchanged() -> None:
+    """En un parrafo con un MOVE seguido de un terminador, el MOVE
+    conserva su statement_id COMPLETO (prefijo Y sufijo) sin ningun
+    cambio -- solo el terminador se ve afectado."""
+    move_stmt = CanonicalStatement(
+        statement_id="ARTRFPROP01::PARA-1::0::MOVE",
+        kind=StatementKind.MOVE,
+        source_text="MOVE 'A' TO WS-X",
+        source_file=SOURCE_FILE,
+        line_start=10,
+        line_end=10,
+        location_kind=LocationKind.EXACT,
+        target_data_items=["WS-X"],
+        variables_written=["WS-X"],
+        assigned_literal="A",
+    )
+    old_terminator = _old_shape_terminator_statement(
+        statement_id="ARTRFPROP01::PARA-1::1::OTHER"
+    )
+    new_terminator = _new_shape_terminator_statement(
+        statement_id="ARTRFPROP01::PARA-1::1::PROGRAM_TERMINATION"
+    )
+
+    old_paragraph = make_paragraph(statements=[move_stmt, old_terminator])
+    new_paragraph = make_paragraph(statements=[move_stmt, new_terminator])
+
+    assert old_paragraph.statements[0].statement_id == new_paragraph.statements[0].statement_id
+    assert old_paragraph.statements[0].statement_id == "ARTRFPROP01::PARA-1::0::MOVE"
+
+
+def test_D_statement_order_and_cardinality_unchanged() -> None:
+    """La cantidad de statements y su orden dentro del parrafo son
+    identicos entre la forma antigua y la nueva -- la reclasificacion
+    nunca inserta, elimina ni reordena statements."""
+    move_stmt = CanonicalStatement(
+        statement_id="ARTRFPROP01::PARA-1::0::MOVE",
+        kind=StatementKind.MOVE,
+        source_text="MOVE 'A' TO WS-X",
+        location_kind=LocationKind.UNKNOWN,
+        target_data_items=["WS-X"],
+        variables_written=["WS-X"],
+        assigned_literal="A",
+    )
+    old_paragraph = make_paragraph(
+        statements=[
+            move_stmt,
+            _old_shape_terminator_statement(statement_id="ARTRFPROP01::PARA-1::1::OTHER"),
+        ]
+    )
+    new_paragraph = make_paragraph(
+        statements=[
+            move_stmt,
+            _new_shape_terminator_statement(
+                statement_id="ARTRFPROP01::PARA-1::1::PROGRAM_TERMINATION"
+            ),
+        ]
+    )
+    assert len(old_paragraph.statements) == len(new_paragraph.statements) == 2
+    assert [s.kind for s in old_paragraph.statements] == [StatementKind.MOVE, StatementKind.OTHER]
+    assert [s.kind for s in new_paragraph.statements] == [
+        StatementKind.MOVE,
+        StatementKind.PROGRAM_TERMINATION,
+    ]
+
+
+def test_G_reclassification_mapping_is_bijective_by_position() -> None:
+    """El mapping posicional old_statement_id -> new_statement_id (SOLO
+    para verificacion, nunca persistido) es biunivoco: cada ID antiguo
+    reclasificado corresponde a exactamente un ID nuevo, identificados
+    por la MISMA posicion (program::paragraph::ordinal)."""
+    positions = [(f"ARTRFPROP01::PARA-1::{i}", ) for i in range(3)]
+    old_ids = [f"{prefix}::OTHER" for (prefix,) in positions]
+    new_ids = [f"{prefix}::PROGRAM_TERMINATION" for (prefix,) in positions]
+    mapping = dict(zip(old_ids, new_ids, strict=True))
+    assert len(mapping) == len(old_ids) == len(set(new_ids))
+    for old_id, new_id in mapping.items():
+        assert _statement_id_prefix(old_id) == _statement_id_prefix(new_id)

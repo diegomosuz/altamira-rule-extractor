@@ -110,8 +110,11 @@ def test_schema_version_is_exactly_1_0() -> None:
     assert _report().schema_version == "1.0"
 
 
-def test_analyzer_version_defaults_to_1_2() -> None:
-    assert _report().analyzer_version == "1.2"
+def test_analyzer_version_defaults_to_1_3() -> None:
+    # Fase 7b (distincion GOBACK/STOP RUN/EXIT PROGRAM) subio
+    # analyzer_version a "1.3" sin cambiar schema_version, mismo patron
+    # que la Fase 6 (CALL) subiendola a "1.2".
+    assert _report().analyzer_version == "1.3"
 
 
 def test_analyzer_version_accepts_historical_1_0() -> None:
@@ -128,7 +131,7 @@ def test_schema_version_rejects_other_values() -> None:
 
 def test_analyzer_version_rejects_other_values() -> None:
     with pytest.raises(ValidationError):
-        _report(analyzer_version="1.3")
+        _report(analyzer_version="1.4")
 
 
 # ---------------------------------------------------------------------------

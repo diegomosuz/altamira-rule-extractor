@@ -96,14 +96,13 @@ class DclgenCopyTest {
                 "no debe existir tratamiento especial ni mensaje propio para DCLGEN");
 
         // El fixture termina en GOBACK, igual que practicamente todos los
-        // demas (ver comprehensive.cbl/CanonicalProgramExtractorTest):
-        // GOBACK no esta entre los 8 statements con converter dedicado
-        // (StatementExtractor#convertOne), asi que siempre cae en OTHER y
-        // se reporta como no soportado -- esto es identico para CUALQUIER
-        // programa, nada especifico de DCLGEN. Lo que este test confirma
-        // es que no aparece NADA MAS alla de esa unica entrada esperada.
-        assertEquals(1, program.unsupportedConstructs().size());
-        assertTrue(program.unsupportedConstructs().get(0).contains("Goback"));
+        // demas (ver comprehensive.cbl/CanonicalProgramExtractorTest).
+        // Desde la Fase 7b, GOBACK se clasifica estructuralmente como
+        // kind=PROGRAM_TERMINATION (StatementExtractor#convertGoback) y
+        // YA NO se reporta como no soportado -- esto es identico para
+        // CUALQUIER programa, nada especifico de DCLGEN. Lo que este
+        // test confirma es que no aparece NINGUNA entrada inesperada.
+        assertEquals(0, program.unsupportedConstructs().size());
     }
 
     @Test

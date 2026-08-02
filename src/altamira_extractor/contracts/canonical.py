@@ -31,6 +31,7 @@ from .enums import (
     CallPassingMode,
     CallTargetKind,
     LocationKind,
+    ProgramTerminationKind,
     SourceFormat,
     StatementKind,
     TableAccessOperation,
@@ -316,6 +317,7 @@ class CanonicalStatement(AltamiraBaseModel):
     call_returning_data_item: str | None = None
     call_has_on_exception: bool = False
     call_has_not_on_exception: bool = False
+    program_termination_kind: ProgramTerminationKind | None = None
 
     @model_validator(mode="after")
     def _check_location(self) -> CanonicalStatement:
@@ -331,6 +333,19 @@ class CanonicalStatement(AltamiraBaseModel):
     def _check_branch_requires_parent(self) -> CanonicalStatement:
         if self.branch_kind is not None and self.parent_statement_id is None:
             raise ValueError("branch_kind requiere parent_statement_id")
+        return self
+
+    @model_validator(mode="after")
+    def _check_program_termination_kind_matches_kind(self) -> CanonicalStatement:
+        if self.kind == StatementKind.PROGRAM_TERMINATION:
+            if self.program_termination_kind is None:
+                raise ValueError(
+                    "kind=PROGRAM_TERMINATION requiere program_termination_kind"
+                )
+        elif self.program_termination_kind is not None:
+            raise ValueError(
+                "program_termination_kind solo es valido para kind=PROGRAM_TERMINATION"
+            )
         return self
 
     @model_validator(mode="after")
@@ -488,11 +503,17 @@ class CanonicalProgram(AltamiraBaseModel):
     historica (sin ninguna extension de nivel 88 realmente presente);
     `"1.1"` en cuanto el parser Java detecta `condition_names` no vacia o
     algun `CanonicalStatement` con `condition_name_target`/
-    `referenced_condition_names` poblados. El contrato acepta ambos
-    valores en lectura; el parser decide cual emitir por programa (nunca
-    este modulo, que solo valida)."""
+    `referenced_condition_names` poblados; `"1.2"` en cuanto aparece
+    CALL/LINKAGE (Fase 6, ver docs/INTERPROCEDURAL_CALL_LINKAGE.md);
+    `"1.3"` en cuanto aparece algun `CanonicalStatement` con
+    `kind=PROGRAM_TERMINATION` (GOBACK/STOP RUN/EXIT PROGRAM, Fase 7b,
+    ver docs/INTERPROCEDURAL_PROPAGATION.md) -- version tipica de
+    cualquier programa COBOL completo real, ya que casi todos terminan
+    en GOBACK o STOP RUN. El contrato acepta los cuatro valores en
+    lectura; el parser decide cual emitir por programa (nunca este
+    modulo, que solo valida)."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     program_name: str = Field(min_length=1)
     source_file: RelativePath
     source_hash: Sha256Hex

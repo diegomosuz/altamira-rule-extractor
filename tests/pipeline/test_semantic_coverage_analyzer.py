@@ -18,6 +18,7 @@ from altamira_extractor.contracts.dependencies import DependencyArtifact
 from altamira_extractor.contracts.enums import (
     LocationKind,
     NodeLabel,
+    ProgramTerminationKind,
     RelationshipType,
     SourceFormat,
     StatementKind,
@@ -291,6 +292,31 @@ def test_other_is_preserved_only_never_unsupported() -> None:
     report = _analyze([program])
     coverage = _only_construct(report, "OTHER")
     assert coverage.support_status == SemanticSupportStatus.PRESERVED_ONLY
+
+
+def test_program_termination_is_preserved_only_never_unsupported() -> None:
+    """Fase 7b: GOBACK/STOP RUN/EXIT PROGRAM estan interpretados
+    estructuralmente (a diferencia de OTHER), pero tampoco mueven,
+    calculan ni asignan datos -- mismo PRESERVED_ONLY que OTHER, nunca
+    UNSUPPORTED."""
+    program = _program(
+        "P1",
+        [
+            _paragraph(
+                "A",
+                [
+                    _statement(
+                        kind=StatementKind.PROGRAM_TERMINATION,
+                        program_termination_kind=ProgramTerminationKind.GOBACK,
+                    )
+                ],
+            )
+        ],
+    )
+    report = _analyze([program])
+    coverage = _only_construct(report, "PROGRAM_TERMINATION")
+    assert coverage.support_status == SemanticSupportStatus.PRESERVED_ONLY
+    assert coverage.candidate_impact == CandidateImpact.NONE
 
 
 def test_unsupported_constructs_produce_unsupported_entries() -> None:

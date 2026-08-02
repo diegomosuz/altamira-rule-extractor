@@ -59,6 +59,21 @@ import java.util.List;
  *   indicadores booleanos de presencia (nunca se modela el control flow
  *   completo de esas clausulas en esta fase).</li>
  * </ul>
+ *
+ * <p>Campo de la Fase 7b de la ampliacion semantica (distincion
+ * estructural de terminadores de programa), poblado unicamente cuando
+ * {@code kind=PROGRAM_TERMINATION} (ver {@code StatementExtractor});
+ * anotado {@code @JsonInclude(NON_EMPTY)} por el mismo motivo que los
+ * campos de {@code CALL}:
+ * <ul>
+ *   <li>{@code programTerminationKind}: GOBACK/EXIT_PROGRAM/STOP_RUN,
+ *   determinado exclusivamente via la API estructurada de ProLeap
+ *   ({@code StopStatementContext.RUN()}/{@code ExitStatementContext.
+ *   PROGRAM()}, nunca inspeccionando {@code sourceText}). UNKNOWN cubre
+ *   formas residuales que ProLeap modela bajo estos tipos ASG pero sin
+ *   una via estructural fiable para distinguirlas (defensivo, no
+ *   alcanzado por la gramatica actual).</li>
+ * </ul>
  */
 public record CanonicalStatement(
         String statementId,
@@ -89,13 +104,15 @@ public record CanonicalStatement(
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<CanonicalCallArgument> callArguments,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) String callReturningDataItem,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) Boolean callHasOnException,
-        @JsonInclude(JsonInclude.Include.NON_EMPTY) Boolean callHasNotOnException) {
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) Boolean callHasNotOnException,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) ProgramTerminationKind programTerminationKind) {
 
     /**
      * Constructor de compatibilidad para todo statement que no sea
-     * {@code kind=CALL} (MOVE/SET/IF/EVALUATE/COMPUTE/GO_TO/PERFORM/
-     * EXEC_SQL/OTHER): delega en el constructor canonico con los siete
-     * campos de la Fase 6 en su valor "ausente" ({@code null}/lista
+     * {@code kind=CALL} ni {@code kind=PROGRAM_TERMINATION}
+     * (MOVE/SET/IF/EVALUATE/COMPUTE/GO_TO/PERFORM/EXEC_SQL/OTHER): delega
+     * en el constructor canonico con los siete campos de la Fase 6 y el
+     * campo de la Fase 7b en su valor "ausente" ({@code null}/lista
      * vacia), evitando modificar cada sitio de construccion ya existente
      * en {@code StatementExtractor}.
      */
@@ -127,6 +144,46 @@ public record CanonicalStatement(
                 parentStatementId, branchKind, branchCondition, expression, normalizedExpression,
                 operands, variablesRead, variablesWritten, targetDataItems, assignedLiteral,
                 targetParagraphs, sqlAccess, conditionNameTarget, conditionSetValue,
-                referencedConditionNames, null, null, null, List.of(), null, null, null);
+                referencedConditionNames, null, null, null, List.of(), null, null, null, null);
+    }
+
+    /**
+     * Constructor de compatibilidad para {@code kind=PROGRAM_TERMINATION}
+     * (GOBACK/EXIT PROGRAM/STOP RUN): delega en el constructor canonico
+     * con los siete campos de {@code CALL} (Fase 6) en su valor "ausente",
+     * evitando que {@code StatementExtractor} deba construir la tupla
+     * completa de 24 campos para este {@code kind}.
+     */
+    public CanonicalStatement(
+            String statementId,
+            StatementKind kind,
+            String sourceText,
+            String sourceFile,
+            Integer lineStart,
+            Integer lineEnd,
+            LocationKind locationKind,
+            String parentStatementId,
+            BranchKind branchKind,
+            String branchCondition,
+            String expression,
+            String normalizedExpression,
+            List<String> operands,
+            List<String> variablesRead,
+            List<String> variablesWritten,
+            List<String> targetDataItems,
+            String assignedLiteral,
+            List<String> targetParagraphs,
+            List<CanonicalSqlAccess> sqlAccess,
+            String conditionNameTarget,
+            Boolean conditionSetValue,
+            List<String> referencedConditionNames,
+            ProgramTerminationKind programTerminationKind) {
+        this(
+                statementId, kind, sourceText, sourceFile, lineStart, lineEnd, locationKind,
+                parentStatementId, branchKind, branchCondition, expression, normalizedExpression,
+                operands, variablesRead, variablesWritten, targetDataItems, assignedLiteral,
+                targetParagraphs, sqlAccess, conditionNameTarget, conditionSetValue,
+                referencedConditionNames, null, null, null, List.of(), null, null, null,
+                programTerminationKind);
     }
 }

@@ -247,9 +247,13 @@ class InterproceduralCallLinkageGapTest {
     void programWithoutCallOrLinkageStaysAtHistoricalSchemaVersion() throws Exception {
         // comprehensive.cbl (PROGRAM-ID COMPREH1) no declara CALL ni
         // LINKAGE SECTION ni nivel 88 (ver Parte 4 del informe de
-        // cierre, no-regresion V1/V2): debe seguir emitiendo
-        // schema_version="1.0" con el extractor de la Fase 6, exactamente
-        // igual que antes de que existiera CALL/LINKAGE.
+        // cierre, no-regresion V1/V2): la ausencia de CALL/LINKAGE (Fase
+        // 6) y de nivel 88 (Fase 3) se verifica exactamente igual que
+        // antes. La version real, sin embargo, es "1.3" y no "1.0": el
+        // fixture SI termina en GOBACK (Fase 7b), una senal ortogonal e
+        // independiente de CALL/LINKAGE que tambien produce un bump de
+        // schema_version -- "1.3" refleja PROGRAM_TERMINATION, no CALL/
+        // LINKAGE, y ambas dimensiones se verifican por separado abajo.
         var result = new ProLeapCobolParser().parse(
                 Fixtures.path("comprehensive.cbl"), RequestedFormat.FIXED, List.of(),
                 StandardCharsets.UTF_8);
@@ -260,7 +264,7 @@ class InterproceduralCallLinkageGapTest {
                 "01-codigo/cobol/comprehensive.cbl",
                 "9".repeat(64),
                 "a".repeat(64));
-        assertEquals("1.0", program.schemaVersion());
+        assertEquals("1.3", program.schemaVersion());
         assertTrue(program.linkageDataItems().isEmpty());
         assertTrue(program.entryParameters().isEmpty());
         assertNull(program.entryReturningDataItem());

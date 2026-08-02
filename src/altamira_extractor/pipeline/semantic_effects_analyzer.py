@@ -603,6 +603,30 @@ def _normalize_call(ctx: _NormalizeContext) -> list[SemanticEffect]:
     ]
 
 
+def _normalize_program_termination(ctx: _NormalizeContext) -> list[SemanticEffect]:
+    """GOBACK/STOP RUN/EXIT PROGRAM (Fase 7b, ver
+    docs/INTERPROCEDURAL_PROPAGATION.md): a diferencia de `OTHER`, esta
+    sentencia SI esta interpretada estructuralmente (`kind=
+    PROGRAM_TERMINATION`, `program_termination_kind` poblado) -- pero
+    ninguna de sus tres formas mueve, calcula ni asigna ningun dato, asi
+    que no produce un `SemanticEffect` normalizado distinto de
+    `PRESERVED_STATEMENT` (mismo kind/status que `OTHER`, nunca
+    `UNSUPPORTED_STATEMENT`: no es una construccion no reconocida)."""
+    return [
+        ctx.build(
+            SemanticEffectKind.PRESERVED_STATEMENT,
+            SemanticSupportStatus.PRESERVED_ONLY,
+            ordinal=0,
+            diagnostic_codes=["PROGRAM_TERMINATION_HAS_NO_DATA_EFFECT"],
+            explanation=(
+                "GOBACK/STOP RUN/EXIT PROGRAM estan interpretados estructuralmente "
+                "(StatementKind.PROGRAM_TERMINATION) pero nunca mueven, calculan ni "
+                "asignan ningun dato; se conservan sin efecto semantico normalizado."
+            ),
+        )
+    ]
+
+
 def _normalize_other(ctx: _NormalizeContext) -> list[SemanticEffect]:
     return [
         ctx.build(
@@ -629,6 +653,7 @@ _STATEMENT_NORMALIZERS: dict[StatementKind, Callable[[_NormalizeContext], list[S
     StatementKind.PERFORM: _normalize_perform,
     StatementKind.EXEC_SQL: _normalize_exec_sql,
     StatementKind.CALL: _normalize_call,
+    StatementKind.PROGRAM_TERMINATION: _normalize_program_termination,
     StatementKind.OTHER: _normalize_other,
 }
 
@@ -637,7 +662,7 @@ def _normalize_statement(ctx: _NormalizeContext) -> list[SemanticEffect]:
     normalizer = _STATEMENT_NORMALIZERS.get(ctx.stmt.kind)
     if normalizer is None:
         # Defensivo, nunca alcanzable en la practica: StatementKind es un
-        # enum cerrado y sus 10 valores estan cubiertos arriba.
+        # enum cerrado y sus 11 valores estan cubiertos arriba.
         return [
             ctx.build(
                 SemanticEffectKind.UNSUPPORTED_STATEMENT,

@@ -516,7 +516,8 @@ class InterproceduralCallLinkageArtifact(AltamiraBaseModel):
     `canonical_schema_versions` registra el conjunto (ordenado, sin
     duplicados) de `CanonicalProgram.schema_version` realmente presentes
     entre los programas analizados -- un paquete puede mezclar programas
-    "1.0"/"1.1"/"1.2" segun cada uno use o no nivel 88/CALL/LINKAGE.
+    "1.0"/"1.1"/"1.2"/"1.3" segun cada uno use o no nivel 88/CALL/LINKAGE/
+    GOBACK-STOP RUN-EXIT PROGRAM (Fase 7b).
     `semantic_effects_schema_version`/`semantic_effects_analyzer_version`
     registran la version del `SemanticEffectsArtifact` calculado en
     memoria que sirvio de entrada (mismo patron que
@@ -525,7 +526,9 @@ class InterproceduralCallLinkageArtifact(AltamiraBaseModel):
 
     schema_version: Literal["1.0"] = "1.0"
     analyzer_version: Literal["1.0"] = "1.0"
-    canonical_schema_versions: list[Literal["1.0", "1.1", "1.2"]] = Field(default_factory=list)
+    canonical_schema_versions: list[Literal["1.0", "1.1", "1.2", "1.3"]] = Field(
+        default_factory=list
+    )
     semantic_effects_schema_version: Literal["1.0", "1.1", "1.2"]
     semantic_effects_analyzer_version: Literal["1.0", "1.1", "1.2"]
     run_id: str = Field(min_length=1)

@@ -470,3 +470,18 @@ class InterproceduralCallLinkageError(PipelineError):
     ni el contenido de un JSON invalido. Nunca se persiste un
     `diagnostics/interprocedural-call-linkage.json` parcial cuando esta
     excepcion se lanza."""
+
+
+class InterproceduralPropagationError(PipelineError):
+    """Fallo de `interprocedural_propagation_service.py`/
+    `interprocedural_propagation_analyzer.py` (Fase 7 de la ampliacion
+    semantica, propagacion interprocedural conservadora en shadow mode,
+    no-contractual, diagnostico bajo demanda): el run no existe,
+    `run.json` es invalido, el run no alcanzo PARSED (SUCCEEDED),
+    `artifacts/02-canonical/` esta ausente/vacio/invalido, o los
+    artefactos calculados en memoria (`SemanticEffectsArtifact`/
+    `SemanticPropagationArtifact`/`InterproceduralCallLinkageArtifact`)
+    son inconsistentes entre si. El mensaje nunca incluye una ruta
+    absoluta ni el contenido de un JSON invalido. Nunca se persiste un
+    `diagnostics/interprocedural-propagation.json` parcial cuando esta
+    excepcion se lanza."""

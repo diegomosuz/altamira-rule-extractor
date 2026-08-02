@@ -621,8 +621,10 @@ def test_artifact_canonical_schema_versions_reject_duplicates() -> None:
 
 
 def test_artifact_canonical_schema_versions_rejects_unknown_value() -> None:
+    # "1.3" es valida desde la Fase 7b (PROGRAM_TERMINATION) -- "2.0" no
+    # existe en ningun schema conocido.
     with pytest.raises(ValidationError):
-        make_artifact(canonical_schema_versions=["1.3"])
+        make_artifact(canonical_schema_versions=["2.0"])
 
 
 def test_artifact_interfaces_must_be_sorted_by_program() -> None:

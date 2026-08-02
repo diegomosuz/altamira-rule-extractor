@@ -183,6 +183,14 @@ posterior). Reglas de invalidación, por `CallPassingMode` del argumento:
   siendo conceptualmente una barrera (nunca se propaga *a través* de
   ella), pero sin ningún efecto observable que valga la pena persistir.
 
+Todo lo anterior describe el comportamiento **intraprograma** de
+`semantic_propagation_analyzer.py`, sin cambios en Fase 7. Un módulo
+separado y puramente diagnóstico, `docs/INTERPROCEDURAL_PROPAGATION.md`,
+lee los `PropagatedValueFact` aquí producidos (como entrada de solo
+lectura, junto con `InterproceduralCallLinkageArtifact`) para propagar
+valores literales **entre** programas bajo condiciones estrictas por
+`CallPassingMode` — sin alterar este artefacto ni este analizador.
+
 ## Barreras
 
 Una `PropagationBarrier` nunca es un error del analizador: es la
@@ -250,6 +258,17 @@ lectura. `semantic_effects_schema_version`/`semantic_effects_analyzer_version`
 registran la versión del `SemanticEffectsArtifact` calculado en memoria
 que sirvió de entrada — nunca se lee `diagnostics/semantic-effects.json`
 del disco, así que este campo es la única procedencia disponible.
+
+**Fase 7b (distinción GOBACK/STOP RUN/EXIT PROGRAM)**: `schema_version`/
+`analyzer_version` NO subieron — a diferencia de `SemanticEffectsArtifact`
+(que sí cambió su lógica de clasificación, ver `docs/SEMANTIC_EFFECTS.md`),
+`semantic_propagation_analyzer.py` **no se modificó en absoluto**: ya
+despachaba `PRESERVED_STATEMENT` (el `SemanticEffectKind` que tanto
+`OTHER` como `PROGRAM_TERMINATION` producen) a `_handle_unknown_effect`
+desde antes de esta fase. Cero cambios de código, cero cambio de
+comportamiento — confirmado con el JAR real contra un baseline v1.5.0
+aislado: `artifacts/03b-semantic-enrichment.json` byte a byte idéntico
+(salvo `run_id`) para PROGRULE1 y ambos paquetes Catherine.
 
 ## Uso posterior por los detectores V2 (Fase 5)
 

@@ -343,12 +343,17 @@ class SemanticCoverageReport(AltamiraBaseModel):
     por el mismo motivo: `StatementKind.CALL` se clasifica via los
     campos ya existentes (`statement_counts_by_kind`/`construct_coverage`/
     `diagnostics`), sin agregar ningun campo nuevo al contrato.
+    `analyzer_version` subio a "1.3" en la Fase 7b (distincion GOBACK/
+    STOP RUN/EXIT PROGRAM, ver docs/INTERPROCEDURAL_PROPAGATION.md) por
+    el mismo motivo exacto: `StatementKind.PROGRAM_TERMINATION` se
+    clasifica via los campos ya existentes, sin agregar ningun campo
+    nuevo al contrato.
 
     Deliberadamente SIN ningun timestamp: dos ejecuciones sobre los
     mismos artefactos de entrada deben producir bytes identicos."""
 
     schema_version: Literal["1.0"] = "1.0"
-    analyzer_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    analyzer_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     source_artifact_hashes: dict[str, Sha256Hex] = Field(

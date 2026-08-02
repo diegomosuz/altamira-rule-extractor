@@ -16,6 +16,7 @@ from altamira_extractor.contracts.canonical import (
 )
 from altamira_extractor.contracts.enums import (
     LocationKind,
+    ProgramTerminationKind,
     SourceFormat,
     StatementKind,
     TableAccessOperation,
@@ -583,6 +584,75 @@ def test_other_produces_preserved_statement_without_source_text() -> None:
     assert effect.support_status == SemanticSupportStatus.PRESERVED_ONLY
     assert "STATEMENT_TEXT_PRESERVED_WITHOUT_SEMANTIC_EFFECT" in effect.diagnostic_codes
     assert "DISPLAY" not in effect.model_dump_json()
+
+
+# ---------------------------------------------------------------------------
+# PROGRAM_TERMINATION (Fase 7b: GOBACK/STOP RUN/EXIT PROGRAM)
+# ---------------------------------------------------------------------------
+
+
+def test_program_termination_produces_preserved_statement_not_unsupported() -> None:
+    """A diferencia de OTHER, PROGRAM_TERMINATION SI esta interpretado
+    estructuralmente -- pero produce el mismo PRESERVED_STATEMENT/
+    PRESERVED_ONLY (nunca UNSUPPORTED_STATEMENT: no es una construccion
+    no reconocida, simplemente no mueve/calcula/asigna ningun dato)."""
+    stmt = _statement(
+        statement_id="P1::A::1::PROGRAM_TERMINATION",
+        kind=StatementKind.PROGRAM_TERMINATION,
+        source_text="GOBACK",
+        program_termination_kind=ProgramTerminationKind.GOBACK,
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    effect = effects[0]
+    assert effect.kind == SemanticEffectKind.PRESERVED_STATEMENT
+    assert effect.support_status == SemanticSupportStatus.PRESERVED_ONLY
+    assert "PROGRAM_TERMINATION_HAS_NO_DATA_EFFECT" in effect.diagnostic_codes
+
+
+def test_program_termination_is_functionally_identical_to_other_for_downstream_consumers() -> None:
+    """Auditoria de cierre (Parte 5): justifica por que
+    SemanticEffectsArtifact.schema_version/analyzer_version NO subieron
+    en Fase 7b. `_handle_unknown_effect` (semantic_propagation_analyzer.py)
+    despacha EXCLUSIVAMENTE por `effect.kind` -- nunca inspecciona
+    `diagnostic_codes`/`explanation` -- asi que lo unico que un consumidor
+    downstream puede observar es `kind`/`support_status`, identicos entre
+    la forma OTHER (v1.5.0) y PROGRAM_TERMINATION (1.3) para el MISMO
+    GOBACK/STOP RUN/EXIT PROGRAM. Confirmado tambien end-to-end con el
+    JAR real (auditoria de cierre, Parte 3: artifacts/03b-semantic-
+    enrichment.json identico byte a byte, salvo run_id, entre v1.5.0 y
+    la rama actual, para PROGRULE1/Catherine)."""
+    other_stmt = _statement(
+        statement_id="P1::A::1::OTHER",
+        kind=StatementKind.OTHER,
+        source_text="GOBACK",
+    )
+    termination_stmt = _statement(
+        statement_id="P1::A::1::PROGRAM_TERMINATION",
+        kind=StatementKind.PROGRAM_TERMINATION,
+        source_text="GOBACK",
+        program_termination_kind=ProgramTerminationKind.GOBACK,
+    )
+
+    other_effects = _effects_of([_program("P1", [_paragraph("A", [other_stmt])])])
+    termination_effects = _effects_of([_program("P1", [_paragraph("A", [termination_stmt])])])
+
+    assert len(other_effects) == len(termination_effects) == 1
+    other_effect, termination_effect = other_effects[0], termination_effects[0]
+
+    # Lo unico que un consumidor real (Fase 4) observa: identico.
+    assert other_effect.kind == termination_effect.kind == SemanticEffectKind.PRESERVED_STATEMENT
+    assert (
+        other_effect.support_status
+        == termination_effect.support_status
+        == SemanticSupportStatus.PRESERVED_ONLY
+    )
+
+    # Lo unico que SI cambia (nunca consumido programaticamente): el
+    # texto explicativo -- justamente por eso no requiere bump de
+    # schema_version/analyzer_version.
+    assert other_effect.diagnostic_codes != termination_effect.diagnostic_codes
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,5 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. STOPLIT.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP 'HALT'.

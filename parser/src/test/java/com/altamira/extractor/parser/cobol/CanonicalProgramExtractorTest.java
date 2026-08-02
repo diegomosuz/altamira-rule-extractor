@@ -254,11 +254,18 @@ class CanonicalProgramExtractorTest {
         }
     }
 
+    /**
+     * Fase 7b: GOBACK ya no es {@code kind=OTHER}/unsupported -- se
+     * clasifica estructuralmente como {@code PROGRAM_TERMINATION} (ver
+     * {@code ProgramTerminationClassificationTest}). ADD sigue sin
+     * converter dedicado y sigue reportandose como unsupported, sin
+     * inventar su efecto.
+     */
     @Test
-    void unsupportedGobackAndAddAreReportedNotInvented() {
+    void unsupportedAddIsReportedGobackIsNotUnsupportedAnymore() {
         assertFalse(program.unsupportedConstructs().isEmpty());
-        assertTrue(program.unsupportedConstructs().stream().anyMatch(w -> w.contains("Goback")));
         assertTrue(program.unsupportedConstructs().stream().anyMatch(w -> w.contains("Add")));
+        assertFalse(program.unsupportedConstructs().stream().anyMatch(w -> w.contains("Goback")));
     }
 
     @Test

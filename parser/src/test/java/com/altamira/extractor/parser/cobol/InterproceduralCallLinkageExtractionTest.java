@@ -66,14 +66,18 @@ class InterproceduralCallLinkageExtractionTest {
         return calls.get(callOrdinal);
     }
 
+    // Ambos fixtures usan CALL/LINKAGE (Fase 6, tier 1.2 como minimo) Y
+    // terminan en STOP RUN (Fase 7b, StatementKind.PROGRAM_TERMINATION,
+    // que supersede a 1.2 exactamente igual que 1.2 supersede a 1.1) --
+    // "1.3" es la version real esperada, no "1.2".
     @Test
-    void callerSchemaVersionIs12() {
-        assertEquals("1.2", caller.schemaVersion());
+    void callerSchemaVersionIs13() {
+        assertEquals("1.3", caller.schemaVersion());
     }
 
     @Test
-    void calleeSchemaVersionIs12() {
-        assertEquals("1.2", callee.schemaVersion());
+    void calleeSchemaVersionIs13() {
+        assertEquals("1.3", callee.schemaVersion());
     }
 
     @Test

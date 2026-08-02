@@ -230,6 +230,16 @@ otro programa:
   subprograma, ni alias de memoria vía `REDEFINES`/`OCCURS` a través de
   una frontera de `CALL`.
 
+Esto describe exclusivamente el comportamiento de **este** analizador
+(`interprocedural_call_linkage_analyzer.py`), sin cambios en Fase 7. Un
+módulo separado y puramente diagnóstico,
+`docs/INTERPROCEDURAL_PROPAGATION.md`, consume el resultado ya calculado
+de `InterproceduralCallLinkageArtifact` (resolución de programa, bindings,
+call graph, SCC) como entrada de solo lectura para propagar, bajo
+condiciones estrictas por `CallPassingMode`, valores literales
+deterministas a través de un subconjunto de call sites elegibles — sin
+modificar este artefacto ni este analizador.
+
 ## Ausencia de cambios a Neo4j/`SemanticGraph`/candidatos
 
 `InterproceduralCallLinkageArtifact` es puramente diagnóstico
@@ -283,22 +293,26 @@ recibido nunca afecta la salida. `to_stable_json()` (UTF-8, claves
 ordenadas, formato legible, sin timestamps) garantiza bytes idénticos
 entre ejecuciones sobre la misma entrada.
 
-## Versionado (`schema_version`/`analyzer_version` 1.0; `canonical` 1.2)
+## Versionado (`schema_version`/`analyzer_version` 1.0; `canonical` hasta 1.3)
 
 `InterproceduralCallLinkageArtifact.schema_version`/`analyzer_version`
 son `"1.0"` (primera versión: no hay forma histórica previa que
 preservar). `canonical_schema_versions` registra el conjunto ordenado y
 sin duplicados de `CanonicalProgram.schema_version` realmente presentes
 entre los programas analizados — un paquete puede mezclar `"1.0"`/`"1.1"`/
-`"1.2"` según cada programa use o no nivel 88/`CALL`/`LINKAGE`.
+`"1.2"`/`"1.3"` según cada programa use o no nivel 88/`CALL`/`LINKAGE`/
+`GOBACK`-`STOP RUN`-`EXIT PROGRAM` (Fase 7b, ver
+`docs/INTERPROCEDURAL_PROPAGATION.md`).
 `semantic_effects_schema_version`/`semantic_effects_analyzer_version`
 registran la versión del `SemanticEffectsArtifact` calculado en memoria
 que sirvió de entrada.
 
 `CanonicalProgram.schema_version` sube a `"1.2"` (Fase 6) cuando el
 parser Java detecta cualquier señal de `CALL`/`LINKAGE SECTION`/
-`PROCEDURE DIVISION USING`/`RETURNING` realmente presente; se mantiene en
-`"1.1"`/`"1.0"` para programas sin ninguna de esas construcciones (ver
+`PROCEDURE DIVISION USING`/`RETURNING` realmente presente, y a `"1.3"`
+(Fase 7b) en cuanto aparece algún `StatementKind.PROGRAM_TERMINATION`
+(supersede a `"1.2"` igual que `"1.2"` supersede a `"1.1"`); se mantiene
+en `"1.1"`/`"1.0"` para programas sin ninguna de esas construcciones (ver
 Fase 21, no-regresión). Ambos campos nuevos con `@JsonInclude(NON_EMPTY)`
 en Java garantizan que un programa sin `CALL`/`LINKAGE` produzca JSON
 byte-idéntico al de antes de esta fase.

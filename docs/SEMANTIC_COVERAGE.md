@@ -96,7 +96,7 @@ interpretación semántica estructurada.
 |---|---|
 | `FULLY_SUPPORTED` | La construcción quedó completamente disponible para el grafo/las dependencias (p. ej. un `MOVE` de un literal a un único destino resoluble). |
 | `PARTIALLY_SUPPORTED` | Algunos campos se conservan estructuralmente, pero falta información necesaria para una interpretación completa (p. ej. un `MOVE` variable-a-variable: se conservan los nombres, pero no hay propagación de valores). |
-| `PRESERVED_ONLY` | La sentencia no coincide con ninguna de las 8 categorías que el parser interpreta estructuralmente (`StatementKind.OTHER`); se conserva el texto fuente, sin campos estructurados poblados. |
+| `PRESERVED_ONLY` | La sentencia no coincide con ninguna de las 9 categorías que el parser interpreta estructuralmente (`StatementKind.OTHER`); se conserva el texto fuente, sin campos estructurados poblados. Mismo valor para `StatementKind.PROGRAM_TERMINATION` (Fase 7b: `GOBACK`/`STOP RUN`/`EXIT PROGRAM` SÍ están interpretados estructuralmente, pero ninguno mueve/calcula/asigna datos). |
 | `UNSUPPORTED` | El parser/adaptador declaró **explícitamente** esta construcción como no decodificada (`CanonicalProgram.unsupported_constructs`). A diferencia de `PRESERVED_ONLY`, es una declaración explícita del propio productor del artefacto, no una inferencia de este analizador. |
 
 ## Interpretación conservadora de `zero_candidate_reason`

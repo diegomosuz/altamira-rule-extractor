@@ -97,7 +97,7 @@ No se invoca automáticamente desde `ingest`, `resume`, la API ni la UI.
 | `CONTROL_TRANSFER` | `GO TO`/`PERFORM` | `PERFORM` siempre `PARTIALLY_SUPPORTED` (UNTIL/VARYING pueden no estar representados). |
 | `EXECUTE_SQL` | Cada `CanonicalSqlAccess` de un `EXEC SQL` | `predicate_text` nunca se copia al efecto; `reads`/`writes` permanecen vacíos salvo evidencia inequívoca (ver "Variables host SQL: dirección no verificable" más abajo). |
 | `CALL_PROGRAM` | `CALL` (literal o dinámico), Fase 6 (`docs/INTERPROCEDURAL_CALL_LINKAGE.md`) | Nunca puebla `writes`/`target_data_items`: `BY REFERENCE`/`RETURNING` describen únicamente un efecto **potencial**, capturado exclusivamente en `call_arguments`/`call_returning_data_item`. `FULLY_SUPPORTED` solo para `CALL` literal con todos los argumentos de forma estructural identificable, sin `RETURNING` ni ramas `ON EXCEPTION`; cualquier otra combinación es `PARTIALLY_SUPPORTED`, nunca `UNSUPPORTED` (el `CALL` en sí siempre se reconoce estructuralmente). |
-| `PRESERVED_STATEMENT` | `StatementKind.OTHER`, `MOVE CORRESPONDING`/grupo no resoluble, o precondiciones faltantes de `COMPUTE`/`GO TO`/`PERFORM`/`EXEC SQL` | Nunca afirma `writes`, `target_data_items` ni `literal`. |
+| `PRESERVED_STATEMENT` | `StatementKind.OTHER`, `StatementKind.PROGRAM_TERMINATION` (Fase 7b: `GOBACK`/`STOP RUN`/`EXIT PROGRAM`, ninguno mueve/calcula/asigna datos), `MOVE CORRESPONDING`/grupo no resoluble, o precondiciones faltantes de `COMPUTE`/`GO TO`/`PERFORM`/`EXEC SQL` | Nunca afirma `writes`, `target_data_items` ni `literal`. |
 | `UNSUPPORTED_STATEMENT` | Cada entrada de `CanonicalProgram.unsupported_constructs` | Declaración explícita del propio productor del artefacto, no una inferencia de este analizador. |
 
 `IF`/`EVALUATE` **nunca generan un efecto artificial**: sus sentencias hijas
@@ -263,6 +263,25 @@ de nuevo, a `"1.2"` — mismo patrón que la Fase 3: la forma cambió
 contrato acepta `"1.0"`, `"1.1"` y `"1.2"` en lectura; un analizador nuevo
 **siempre** emite `"1.2"` para ambos campos, independientemente de si el
 programa analizado usa o no `CALL`.
+
+**Fase 7b (distinción GOBACK/STOP RUN/EXIT PROGRAM,
+`docs/INTERPROCEDURAL_PROPAGATION.md`)**: `schema_version`/`analyzer_version`
+**NO subieron** — decisión deliberada, a diferencia de las Fases 3 y 6. La
+forma no cambió (ningún campo nuevo en `SemanticEffect`/`SemanticEffectKind`:
+`PROGRAM_TERMINATION` reutiliza `PRESERVED_STATEMENT`, ya existente desde la
+Fase 2). El único cambio observable es el texto de `diagnostic_codes`/
+`explanation` (`STATEMENT_TEXT_PRESERVED_WITHOUT_SEMANTIC_EFFECT` →
+`PROGRAM_TERMINATION_HAS_NO_DATA_EFFECT`) — nunca `kind`/`support_status`,
+que son los ÚNICOS campos que cualquier consumidor real inspecciona
+programáticamente (`semantic_propagation_analyzer.py::_handle_unknown_effect`
+despacha exclusivamente por `effect.kind`, nunca por el contenido de
+`diagnostic_codes`). Justificado con un test dedicado
+(`tests/pipeline/test_semantic_effects_analyzer.py::
+test_program_termination_is_functionally_identical_to_other_for_downstream_consumers`)
+y confirmado end-to-end con el JAR real contra un baseline v1.5.0 aislado:
+`artifacts/03b-semantic-enrichment.json` (que consume estos efectos) es
+byte a byte idéntico entre v1.5.0 y la rama actual, salvo `run_id`, para
+PROGRULE1 y ambos paquetes Catherine (todos terminan en `GOBACK`/`STOP RUN`).
 
 **Regenerar el diagnóstico sobre un run histórico**: `semantic-effects.json`
 no es un artefacto versionado por run ni migrado in situ — volver a ejecutar

@@ -287,6 +287,16 @@ _OTHER_CLASSIFICATION = _Classification(
     CandidateImpact.UNKNOWN,
 )
 
+_PROGRAM_TERMINATION_CLASSIFICATION = _Classification(
+    SemanticSupportStatus.PRESERVED_ONLY,
+    "PROGRAM_TERMINATION_KIND_STRUCTURALLY_CLASSIFIED",
+    "GOBACK/STOP RUN/EXIT PROGRAM (Fase 7b): a diferencia de OTHER, la forma "
+    "exacta SI esta interpretada estructuralmente (program_termination_kind), "
+    "pero ninguna de las tres mueve, calcula ni asigna ningun dato, asi que no "
+    "hay variables_read/written/target_data_items/assigned_literal que poblar.",
+    CandidateImpact.NONE,
+)
+
 _UNSUPPORTED_CLASSIFICATION_EXPLANATION = (
     "El parser/adaptador declaro explicitamente esta construccion como no "
     "decodificada estructuralmente (CanonicalProgram.unsupported_constructs). "
@@ -312,13 +322,16 @@ _CONDITION_REFERENCE_CLASSIFICATION = _Classification(
 def _classify_statement(stmt: CanonicalStatement) -> _Classification:
     if stmt.kind == StatementKind.OTHER:
         return _OTHER_CLASSIFICATION
+    if stmt.kind == StatementKind.PROGRAM_TERMINATION:
+        return _PROGRAM_TERMINATION_CLASSIFICATION
     classifier = _STATEMENT_CLASSIFIERS.get(stmt.kind)
     if classifier is None:
         # Defensivo, nunca alcanzable en la practica: StatementKind es un
-        # enum cerrado y sus 10 valores (los 9 clasificados + OTHER) estan
-        # cubiertos arriba. Si un valor nuevo se agrega al enum sin
-        # registrar su clasificador aqui, se reporta como UNSUPPORTED en
-        # vez de fallar silenciosamente o inventar soporte.
+        # enum cerrado y sus 11 valores (los 9 clasificados + OTHER +
+        # PROGRAM_TERMINATION) estan cubiertos arriba. Si un valor nuevo
+        # se agrega al enum sin registrar su clasificador aqui, se
+        # reporta como UNSUPPORTED en vez de fallar silenciosamente o
+        # inventar soporte.
         return _Classification(
             SemanticSupportStatus.UNSUPPORTED,
             "UNKNOWN_STATEMENT_KIND",

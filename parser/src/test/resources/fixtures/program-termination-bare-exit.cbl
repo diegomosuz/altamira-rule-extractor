@@ -1,0 +1,8 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BAREEXIT.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM EXIT-PARA
+           STOP RUN.
+       EXIT-PARA.
+           EXIT.

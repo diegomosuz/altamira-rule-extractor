@@ -256,7 +256,31 @@ class StatementKind(StrEnum):
     PERFORM = "PERFORM"
     EXEC_SQL = "EXEC_SQL"
     CALL = "CALL"
+    PROGRAM_TERMINATION = "PROGRAM_TERMINATION"
     OTHER = "OTHER"
+
+
+class ProgramTerminationKind(StrEnum):
+    """Forma estructural de un `StatementKind.PROGRAM_TERMINATION`
+    (Fase 7b de la ampliacion semantica), determinada exclusivamente via
+    la API tipada de ProLeap (`StopStatementContext.RUN()`/
+    `ExitStatementContext.PROGRAM()`), nunca inspeccionando
+    `source_text` -- ver docs/INTERPROCEDURAL_PROPAGATION.md.
+
+    `GOBACK`/`EXIT_PROGRAM` retornan control normalmente al caller
+    cuando el programa fue invocado via `CALL` desde otro programa del
+    mismo paquete. `STOP_RUN` termina el run unit COMPLETO segun la
+    semantica estandar de COBOL -- nunca retorna control al caller,
+    incluso si el statement pertenece a un programa invocado via
+    `CALL`. `UNKNOWN` cubre la forma residual `STOP <literal>` (codigo
+    de finalizacion, gramaticalmente distinta de `STOP RUN`) y
+    cualquier otra forma que ProLeap module bajo estos tipos ASG sin
+    una via estructural fiable para clasificarla con certeza."""
+
+    GOBACK = "GOBACK"
+    EXIT_PROGRAM = "EXIT_PROGRAM"
+    STOP_RUN = "STOP_RUN"
+    UNKNOWN = "UNKNOWN"
 
 
 class CallTargetKind(StrEnum):

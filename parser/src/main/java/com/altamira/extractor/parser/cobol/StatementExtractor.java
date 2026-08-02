@@ -7,8 +7,10 @@ import com.altamira.extractor.parser.model.CanonicalCallArgument;
 import com.altamira.extractor.parser.model.CanonicalSqlAccess;
 import com.altamira.extractor.parser.model.CanonicalStatement;
 import com.altamira.extractor.parser.model.LocationKind;
+import com.altamira.extractor.parser.model.ProgramTerminationKind;
 import com.altamira.extractor.parser.model.StatementKind;
 import com.altamira.extractor.parser.sql.EmbeddedSqlExtractor;
+import io.proleap.cobol.Cobol85Parser;
 import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.call.DataDescriptionEntryCall;
 import io.proleap.cobol.asg.metamodel.procedure.Statement;
@@ -24,6 +26,8 @@ import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.When;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.WhenPhrase;
 import io.proleap.cobol.asg.metamodel.procedure.execsql.ExecSqlStatement;
+import io.proleap.cobol.asg.metamodel.procedure.exit.ExitStatement;
+import io.proleap.cobol.asg.metamodel.procedure.goback.GobackStatement;
 import io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement;
 import io.proleap.cobol.asg.metamodel.procedure.ifstmt.IfStatement;
 import io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement;
@@ -33,6 +37,7 @@ import io.proleap.cobol.asg.metamodel.procedure.set.SetStatement;
 import io.proleap.cobol.asg.metamodel.procedure.set.SetTo;
 import io.proleap.cobol.asg.metamodel.procedure.set.To;
 import io.proleap.cobol.asg.metamodel.procedure.set.Value;
+import io.proleap.cobol.asg.metamodel.procedure.stop.StopStatement;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -91,6 +96,12 @@ final class StatementExtractor {
             convertExecSql(sqlStmt, parentId, branchKind);
         } else if (statement instanceof CallStatement callStmt) {
             convertCall(callStmt, parentId, branchKind);
+        } else if (statement instanceof GobackStatement gobackStmt) {
+            convertGoback(gobackStmt, parentId, branchKind);
+        } else if (statement instanceof StopStatement stopStmt) {
+            convertStop(stopStmt, parentId, branchKind);
+        } else if (statement instanceof ExitStatement exitStmt) {
+            convertExit(exitStmt, parentId, branchKind);
         } else {
             convertOther(statement, parentId, branchKind);
         }
@@ -209,11 +220,12 @@ final class StatementExtractor {
         mergedReferences.addAll(whenReferencedConditionNames);
         List<String> merged = new ArrayList<>(mergedReferences);
         merged.sort(null);
-        // Constructor completo (nunca el de compatibilidad de 22 args):
-        // el primer statement de una rama WHEN puede ser un CALL (Fase 6,
-        // caso obligatorio "llamada dentro de EVALUATE"), y el
-        // constructor de compatibilidad pondria sus 7 campos
-        // estructurados en null/vacio, perdiendo la extraccion ya hecha.
+        // Constructor completo (nunca uno de los de compatibilidad): el
+        // primer statement de una rama WHEN puede ser un CALL (Fase 6,
+        // caso obligatorio "llamada dentro de EVALUATE") o un GOBACK/
+        // STOP RUN/EXIT PROGRAM (Fase 7b), y los constructores de
+        // compatibilidad pondrian esos campos estructurados en
+        // null/vacio, perdiendo la extraccion ya hecha.
         return new CanonicalStatement(
                 statement.statementId(), statement.kind(), statement.sourceText(), statement.sourceFile(),
                 statement.lineStart(), statement.lineEnd(), statement.locationKind(),
@@ -224,7 +236,7 @@ final class StatementExtractor {
                 statement.conditionSetValue(), merged, statement.callTargetKind(),
                 statement.calledProgramName(), statement.calledProgramExpression(), statement.callArguments(),
                 statement.callReturningDataItem(), statement.callHasOnException(),
-                statement.callHasNotOnException());
+                statement.callHasNotOnException(), statement.programTerminationKind());
     }
 
     private void convertMove(MoveStatement moveStmt, String parentId, BranchKind branchKind) {
@@ -503,7 +515,7 @@ final class StatementExtractor {
                 loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
                 List.copyOf(read), List.of(), List.of(), null, List.of(), List.of(), null, null, List.of(),
                 targetKind, calledProgramName, calledProgramExpression, arguments, returningItem, hasOnException,
-                hasNotOnException));
+                hasNotOnException, null));
     }
 
     private List<CanonicalCallArgument> extractCallArguments(CallStatement callStmt, List<String> readAccumulator) {
@@ -582,6 +594,80 @@ final class StatementExtractor {
         return new CanonicalCallArgument(
                 ordinal, "<unsupported>", null, null, null, CallPassingMode.UNKNOWN, false, loc.sourceFile(),
                 loc.lineStart(), loc.kind());
+    }
+
+    /**
+     * {@code GOBACK} (Fase 7b): retorna control al caller de forma
+     * incondicional en la gramatica de esta version de ProLeap ({@code
+     * GobackStatementContext} no expone ninguna sub-clausula opcional,
+     * ver {@code Cobol85Parser.GobackStatementContext}) -- siempre
+     * {@code ProgramTerminationKind.GOBACK}, nunca ambiguo.
+     */
+    private void convertGoback(GobackStatement gobackStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(gobackStmt.getCtx());
+        String id = nextId(StatementKind.PROGRAM_TERMINATION);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.PROGRAM_TERMINATION, loc.sourceText(), loc.sourceFile(), loc.lineStart(),
+                loc.lineEnd(), loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(),
+                List.of(), List.of(), null, List.of(), List.of(), null, null, List.of(),
+                ProgramTerminationKind.GOBACK));
+    }
+
+    /**
+     * {@code STOP RUN} vs {@code STOP <literal>} (Fase 7b): distinguido
+     * EXCLUSIVAMENTE via la API estructurada de ProLeap -- {@code
+     * StopStatementContext.RUN()} devuelve un {@code TerminalNode} no nulo
+     * solo para la forma {@code STOP RUN}, nunca inspeccionando {@code
+     * sourceText}. La forma {@code STOP <literal>} (codigo de finalizacion)
+     * no es {@code STOP RUN} en sentido estricto y se clasifica {@code
+     * UNKNOWN} -- Fase 7 (propagacion interprocedural) bloquea la
+     * propagacion de salida para ambos casos por igual (ninguno de los dos
+     * retorna control normalmente al caller), asi que la distincion
+     * practica relevante es unicamente "es STOP RUN" vs "no lo es".
+     */
+    private void convertStop(StopStatement stopStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(stopStmt.getCtx());
+        ProgramTerminationKind terminationKind = ProgramTerminationKind.UNKNOWN;
+        if (stopStmt.getCtx() instanceof Cobol85Parser.StopStatementContext stopCtx && stopCtx.RUN() != null) {
+            terminationKind = ProgramTerminationKind.STOP_RUN;
+        } else {
+            ctx.unsupported(
+                    "STOP en paragraph " + paragraphName
+                            + " sin forma RUN identificable de forma estructural "
+                            + "(kind=PROGRAM_TERMINATION, program_termination_kind=UNKNOWN)");
+        }
+        String id = nextId(StatementKind.PROGRAM_TERMINATION);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.PROGRAM_TERMINATION, loc.sourceText(), loc.sourceFile(), loc.lineStart(),
+                loc.lineEnd(), loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(),
+                List.of(), List.of(), null, List.of(), List.of(), null, null, List.of(), terminationKind));
+    }
+
+    /**
+     * {@code EXIT PROGRAM} vs {@code EXIT} simple (Fase 7b): distinguido
+     * EXCLUSIVAMENTE via {@code ExitStatementContext.PROGRAM()} (no nulo
+     * solo para {@code EXIT PROGRAM}). Un {@code EXIT} simple NO es un
+     * terminador de programa -- en COBOL es un marcador no-operativo
+     * (tipicamente destino de un {@code GO TO} al final de un paragraph),
+     * nunca retorna control ni termina nada -- por lo que se enruta a
+     * {@code convertOther} (permanece {@code kind=OTHER}, sin cambio de
+     * comportamiento respecto a versiones anteriores de esta fase para
+     * este caso).
+     */
+    private void convertExit(ExitStatement exitStmt, String parentId, BranchKind branchKind) {
+        boolean isExitProgram = exitStmt.getCtx() instanceof Cobol85Parser.ExitStatementContext exitCtx
+                && exitCtx.PROGRAM() != null;
+        if (!isExitProgram) {
+            convertOther(exitStmt, parentId, branchKind);
+            return;
+        }
+        Location loc = resolveLocation(exitStmt.getCtx());
+        String id = nextId(StatementKind.PROGRAM_TERMINATION);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.PROGRAM_TERMINATION, loc.sourceText(), loc.sourceFile(), loc.lineStart(),
+                loc.lineEnd(), loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(),
+                List.of(), List.of(), null, List.of(), List.of(), null, null, List.of(),
+                ProgramTerminationKind.EXIT_PROGRAM));
     }
 
     private void convertOther(Statement statement, String parentId, BranchKind branchKind) {

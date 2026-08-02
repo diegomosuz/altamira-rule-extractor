@@ -13,7 +13,11 @@ import java.util.List;
  * no usa NINGUNA extension de nivel 88 (conditionNames vacia, y ningun
  * CanonicalStatement con conditionNameTarget/referencedConditionNames
  * poblados); {@code "1.1"} en cuanto CUALQUIERA de esas extensiones esta
- * realmente presente. conditionNames se anota
+ * realmente presente; {@code "1.2"} en cuanto aparece CALL/LINKAGE (Fase
+ * 6); {@code "1.3"} en cuanto aparece algun {@code
+ * StatementKind.PROGRAM_TERMINATION} (GOBACK/STOP RUN/EXIT PROGRAM, Fase
+ * 7b -- ver docs/INTERPROCEDURAL_PROPAGATION.md), version tipica de
+ * cualquier programa COBOL completo real. conditionNames se anota
  * {@code @JsonInclude(NON_EMPTY)}: para un programa "1.0" la clave ni
  * siquiera aparece en el JSON (nunca {@code "condition_names": []}), asi
  * que el documento completo es byte a byte identico al formato previo a

@@ -117,8 +117,14 @@ public final class CanonicalProgramExtractor {
      * regla 7: un programa nivel 88 puro nunca sube automaticamente a
      * 1.2). {@code "1.2"} en cuanto aparece linkage_data_items no vacio,
      * entry_parameters no vacio, entry_returning_data_item, o algun
-     * {@code StatementKind.CALL}. Ver docs/LEVEL_88_SUPPORT.md y
-     * docs/INTERPROCEDURAL_CALL_LINKAGE.md.
+     * {@code StatementKind.CALL}. {@code "1.3"} en cuanto aparece algun
+     * {@code StatementKind.PROGRAM_TERMINATION} (GOBACK/STOP RUN/EXIT
+     * PROGRAM, Fase 7b) -- supersede a 1.2 exactamente igual que 1.2
+     * supersede a 1.1: la inmensa mayoria de programas COBOL reales
+     * terminan en GOBACK o STOP RUN, asi que 1.3 es en la practica la
+     * version tipica de un programa completo, no un caso raro. Ver
+     * docs/LEVEL_88_SUPPORT.md, docs/INTERPROCEDURAL_CALL_LINKAGE.md y
+     * docs/INTERPROCEDURAL_PROPAGATION.md.
      */
     private static String schemaVersionFor(
             List<CanonicalConditionName> conditionNames,
@@ -126,6 +132,13 @@ public final class CanonicalProgramExtractor {
             List<CanonicalLinkageDataItem> linkageDataItems,
             List<CanonicalEntryParameter> entryParameters,
             String entryReturningDataItem) {
+        boolean anyStatementIsProgramTermination = paragraphs.stream()
+                .flatMap(paragraph -> paragraph.statements().stream())
+                .anyMatch(statement -> statement.kind() == StatementKind.PROGRAM_TERMINATION);
+        if (anyStatementIsProgramTermination) {
+            return "1.3";
+        }
+
         boolean anyStatementIsCall = paragraphs.stream()
                 .flatMap(paragraph -> paragraph.statements().stream())
                 .anyMatch(statement -> statement.kind() == StatementKind.CALL);

@@ -13,5 +13,6 @@ public enum StatementKind {
     PERFORM,
     EXEC_SQL,
     CALL,
+    PROGRAM_TERMINATION,
     OTHER
 }
