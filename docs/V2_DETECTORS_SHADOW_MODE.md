@@ -254,3 +254,10 @@ Cualquier decisión de promover un detector V2 a un rol funcional
 requiere una decisión de arquitectura documentada aparte — nunca ocurre
 implícitamente por ejecutar este comando ni por acumular evidencia
 `DETERMINISTIC`.
+
+Fase 9 (`docs/CANDIDATE_PROMOTION_ASSESSMENT.md`) agrega una capa
+diagnóstica **posterior**, puramente de solo lectura, que cataloga cada
+`V2ShadowCandidate` junto a sus equivalentes V1/interprocedural y
+evalúa criterios de preparación (`READY_FOR_CONTROLLED_REVIEW`/
+`REVIEW_REQUIRED`/`BLOCKED`/...) sin modificar nunca este artefacto ni
+ejecutar la promoción real descrita arriba.

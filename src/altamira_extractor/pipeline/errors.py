@@ -503,3 +503,21 @@ class InterproceduralRuleCandidatesError(PipelineError):
     ni el contenido de un JSON invalido. Nunca se persiste un
     `diagnostics/interprocedural-rule-candidates-shadow.json` parcial
     cuando esta excepcion se lanza."""
+
+
+class CandidatePromotionAssessmentError(PipelineError):
+    """Fallo de `candidate_promotion_assessment_service.py`/
+    `candidate_promotion_assessment_analyzer.py` (Fase 9 de la
+    ampliacion semantica, catalogo unificado de candidatos y evaluacion
+    de promocion, no-contractual, diagnostico bajo demanda): el run no
+    existe, `run.json` es invalido, el run no alcanzo PARSED
+    (SUCCEEDED), o no se pudo determinar `source_package_hash` porque
+    ninguna de las tres fuentes (`CandidateArtifact` V1,
+    `V2ShadowCandidatesArtifact`, `InterproceduralRuleCandidatesArtifact`)
+    estuvo disponible. La ausencia INDIVIDUAL de cualquiera de las tres
+    fuentes NUNCA lanza esta excepcion (se marca
+    `SourceAvailability.NOT_AVAILABLE`/`INVALID` y el analisis continua
+    con las fuentes restantes). El mensaje nunca incluye una ruta
+    absoluta ni el contenido de un JSON invalido. Nunca se persiste un
+    `diagnostics/candidate-promotion-assessment.json` parcial cuando
+    esta excepcion se lanza."""

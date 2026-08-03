@@ -351,3 +351,11 @@ independientes" más abajo.
 - No detecta reglas oficialmente aprobadas: es exclusivamente
   diagnóstico, igual que el resto de artefactos de la ampliación
   semántica.
+
+## Ver también
+
+Fase 9 (`docs/CANDIDATE_PROMOTION_ASSESSMENT.md`) agrega una capa
+diagnóstica **posterior**, puramente de solo lectura, que cataloga cada
+`InterproceduralRuleCandidate` junto a sus equivalentes V1/V2 y evalúa
+criterios de preparación para una eventual revisión funcional — sin
+modificar nunca este artefacto ni promover ningún candidato.

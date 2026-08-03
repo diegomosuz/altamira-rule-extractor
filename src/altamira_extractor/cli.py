@@ -17,6 +17,7 @@ Uso:
     python -m altamira_extractor.cli semantic-interprocedural <run_id> [--json]
     python -m altamira_extractor.cli semantic-interprocedural-propagation <run_id> [--json]
     python -m altamira_extractor.cli interprocedural-candidates-shadow <run_id> [--json]
+    python -m altamira_extractor.cli candidate-promotion-assessment <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -129,6 +130,26 @@ automaticamente desde `ingest`/`resume`/la API/la UI; nunca modifica
 candidatos nunca alimentan `ContextPackage`, el LLM, los guardrails, ni
 se presentan como regla aprobada.
 
+`candidate-promotion-assessment` (Fase 9 de la ampliacion semantica,
+`feat/unified-candidate-promotion-assessment`) calcula y persiste
+`<run_dir>/diagnostics/candidate-promotion-assessment.json`: un
+artefacto NO contractual, generado exclusivamente bajo demanda, que
+cataloga -- sin fusionar ni modificar -- los candidatos de las tres
+superficies existentes (`CandidateArtifact` V1, `V2ShadowCandidatesArtifact`,
+`InterproceduralRuleCandidatesArtifact`), identifica equivalencias
+exactas y relaciones parciales, detecta conflictos demostrables, y
+evalua criterios de preparacion para una eventual promocion -- ver
+docs/CANDIDATE_PROMOTION_ASSESSMENT.md. Deriva V1/V2/interprocedural en
+memoria (nunca lee ni escribe sus propios diagnostics); requiere
+unicamente que RUN_ID haya alcanzado PARSED (SUCCEEDED); la ausencia de
+cualquiera de las tres fuentes nunca es un error (se marca
+`NOT_AVAILABLE`, nunca se fabrica un artefacto vacio). Nunca modifica
+`run.json`, ningun `artifacts/01-10`, `CandidateArtifact` V1,
+`V2ShadowCandidatesArtifact` ni `InterproceduralRuleCandidatesArtifact`;
+nunca accede a Neo4j directamente ni invoca un proveedor LLM; nunca
+promueve ningun candidato -- `READY_FOR_CONTROLLED_REVIEW` es
+exclusivamente diagnostico, nunca una aprobacion.
+
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
 artefactos (`api/reads.py`, `api/downloads.py`, `api/validation.py`,
@@ -172,6 +193,10 @@ from .contracts.enums import PipelineStage
 from .contracts.interprocedural_rule_candidates import InterproceduralRuleType
 from .contracts.run_state import RunState
 from .contracts.semantic_coverage import SemanticSupportStatus
+from .pipeline.candidate_promotion_assessment_service import (
+    compute_candidate_promotion_assessment_artifact,
+    write_candidate_promotion_assessment_artifact,
+)
 from .pipeline.interprocedural_call_linkage_service import (
     compute_interprocedural_call_linkage_artifact,
     write_interprocedural_call_linkage_artifact,
@@ -264,6 +289,13 @@ InterproceduralRuleCandidatesJsonOption = Annotated[
     typer.Option(
         "--json",
         help="Imprime el InterproceduralRuleCandidatesArtifact completo en JSON estable",
+    ),
+]
+CandidatePromotionAssessmentJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el CandidatePromotionAssessmentArtifact completo en JSON estable",
     ),
 ]
 
@@ -736,6 +768,60 @@ def interprocedural_candidates_shadow(
     typer.echo(f"related_v2: {summary.related_v2_count}")
     typer.echo(f"interprocedural_only: {summary.interprocedural_only_count}")
     typer.echo(f"not_evaluated: {summary.not_evaluated_count}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="candidate-promotion-assessment")
+@_guard
+def candidate_promotion_assessment(
+    run_id: RunIdArgument, json_output: CandidatePromotionAssessmentJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/candidate-promotion-assessment.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 9 de la ampliacion
+    semantica, ver docs/CANDIDATE_PROMOTION_ASSESSMENT.md): cataloga --
+    sin fusionar ni modificar -- los candidatos de las tres superficies
+    existentes (CandidateArtifact V1, V2ShadowCandidatesArtifact,
+    InterproceduralRuleCandidatesArtifact), identifica equivalencias
+    exactas y relaciones parciales, detecta conflictos demostrables, y
+    evalua criterios de preparacion para una eventual promocion -- nunca
+    promueve ningun candidato. Deriva V1/V2/interprocedural en memoria
+    (nunca lee ni escribe sus propios diagnostics). Requiere que RUN_ID
+    ya haya alcanzado PARSED (SUCCEEDED); la ausencia de cualquiera de
+    las tres fuentes nunca es un error (se marca NOT_AVAILABLE, se
+    continua con las fuentes restantes). Nunca modifica run.json, ningun
+    artifacts/01-10, CandidateArtifact V1, V2ShadowCandidatesArtifact ni
+    InterproceduralRuleCandidatesArtifact; nunca accede a Neo4j
+    directamente ni invoca un proveedor LLM; nunca genera ContextPackage,
+    RuleDraft ni reglas Markdown.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_candidate_promotion_assessment_artifact(run_dir, run_id)
+    artifact_path = write_candidate_promotion_assessment_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"v1_candidates: {summary.v1_candidate_count}")
+    typer.echo(f"v2_candidates: {summary.v2_candidate_count}")
+    typer.echo(f"interprocedural_candidates: {summary.interprocedural_candidate_count}")
+    typer.echo(f"references_total: {summary.unified_reference_count}")
+    typer.echo(f"exact_matches: {summary.exact_match_relation_count}")
+    typer.echo(f"related: {summary.related_relation_count}")
+    typer.echo(f"conflicts: {summary.conflict_count}")
+    typer.echo(f"baseline_v1: {summary.baseline_v1_count}")
+    typer.echo(f"already_covered: {summary.already_covered_count}")
+    typer.echo(f"ready_for_controlled_review: {summary.ready_for_controlled_review_count}")
+    typer.echo(f"review_required: {summary.review_required_count}")
+    typer.echo(f"blocked: {summary.blocked_count}")
+    typer.echo(f"conflicting: {summary.conflicting_count}")
+    typer.echo(f"not_evaluated: {summary.not_evaluated_count}")
+    for source in sorted(summary.source_availability, key=lambda item: item.value):
+        typer.echo(f"  availability[{source.value}]: {summary.source_availability[source].value}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:
