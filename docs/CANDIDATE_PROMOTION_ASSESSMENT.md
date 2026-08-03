@@ -332,3 +332,9 @@ assessment para generar un paquete de revisión humana y, tras validar
 un manifiesto de decisiones, un plan de promoción en dry-run —
 `PROPOSE_SHADOW_PROMOTION` sigue sin ser una promoción real. Ninguna
 de las dos fases modifica a la otra.
+
+Fase 11 (`docs/UNIFIED_CANDIDATES_SHADOW.md`) consume, además del plan
+de Fase 10, las relaciones `EXACT_MATCH`/`RELATED`/`CONFLICT` ya
+calculadas por este assessment para agrupar propuestas shadow
+equivalentes y compararlas contra el baseline V1 — nunca recalcula
+ninguna relación desde cero, nunca modifica este diagnóstico.

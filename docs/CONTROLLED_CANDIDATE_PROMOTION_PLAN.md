@@ -219,3 +219,10 @@ aprobados pasan a alimentar el pipeline V1 productivo) queda
 explícitamente **fuera de alcance**, documentado aquí como deuda
 técnica para una fase futura — nunca implementado como atajo dentro de
 esta.
+
+Fase 11 (`docs/UNIFIED_CANDIDATES_SHADOW.md`) consume este plan (los
+items `PROPOSE_SHADOW_PROMOTION`/`VALID`) para consolidar, en un unico
+artefacto diagnostico, el baseline V1 inmutable junto a las propuestas
+shadow ya aprobadas por un humano — agrupando exclusivamente las que
+Fase 9 ya demostro `EXACT_MATCH` entre si. Sigue sin ser una promocion
+real: Fase 11 tampoco escribe en Neo4j ni genera reglas.

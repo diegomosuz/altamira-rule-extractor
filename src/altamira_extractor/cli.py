@@ -20,6 +20,7 @@ Uso:
     python -m altamira_extractor.cli candidate-promotion-assessment <run_id> [--json]
     python -m altamira_extractor.cli candidate-promotion-review-package <run_id> [--json]
     python -m altamira_extractor.cli candidate-promotion-plan <run_id> --decisions <path> [--json]
+    python -m altamira_extractor.cli unified-candidates-shadow <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -260,6 +261,10 @@ from .pipeline.semantic_propagation_service import (
     compute_semantic_propagation_artifact,
     write_semantic_propagation_artifact,
 )
+from .pipeline.unified_candidates_shadow_service import (
+    compute_unified_candidates_shadow_artifact,
+    write_unified_candidates_shadow_artifact,
+)
 from .pipeline.v2_shadow_candidates_service import (
     compute_v2_shadow_candidates_artifact,
     write_v2_shadow_candidates_artifact,
@@ -355,6 +360,13 @@ CandidatePromotionPlanDecisionsOption = Annotated[
     typer.Option(
         "--decisions",
         help="Ruta al manifiesto de decisiones humano (CandidatePromotionDecisionManifest)",
+    ),
+]
+UnifiedCandidatesShadowJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el UnifiedCandidatesShadowArtifact completo en JSON estable",
     ),
 ]
 
@@ -966,6 +978,57 @@ def candidate_promotion_plan(
     typer.echo(f"block: {summary.block_count}")
     typer.echo(f"pending_review: {summary.pending_review_count}")
     typer.echo(f"invalid_decisions: {summary.invalid_decision_count}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="unified-candidates-shadow")
+@_guard
+def unified_candidates_shadow(
+    run_id: RunIdArgument, json_output: UnifiedCandidatesShadowJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/unified-candidates-shadow.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 11 de la ampliacion
+    semantica, ver docs/UNIFIED_CANDIDATES_SHADOW.md): preserva
+    CandidateArtifact V1 como baseline inmutable (lane BASELINE_V1) e
+    incorpora como propuestas shadow UNICAMENTE los items de
+    diagnostics/candidate-promotion-plan.json con
+    action=PROPOSE_SHADOW_PROMOTION y status=VALID (lane
+    SHADOW_PROPOSAL), resolviendo cada uno contra su candidato fuente
+    real (V2/interprocedural) y agrupando exclusivamente las propuestas
+    EXACT_MATCH ya declaradas por Fase 9. Requiere que RUN_ID ya haya
+    alcanzado PARSED (SUCCEEDED), que CandidateArtifact V1
+    (artifacts/06-candidates.json) exista, y que
+    diagnostics/candidate-promotion-review-package.json y
+    diagnostics/candidate-promotion-plan.json ya existan (esta fase
+    NUNCA regenera un plan ausente ni decisiones humanas). Nunca modifica
+    run.json, ningun artifacts/01-10, CandidateArtifact V1 ni ningun otro
+    diagnostics/ preexistente; nunca ejecuta una promocion real, nunca
+    genera ContextPackage/RuleDraft/reglas Markdown, nunca escribe en
+    Neo4j.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_unified_candidates_shadow_artifact(run_dir, run_id)
+    artifact_path = write_unified_candidates_shadow_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"v1_baseline: {summary.v1_baseline_count}")
+    typer.echo(f"proposed_plan_items: {summary.proposed_plan_item_count}")
+    typer.echo(f"shadow_members: {summary.shadow_member_count}")
+    typer.echo(f"shadow_groups: {summary.shadow_group_count}")
+    typer.echo(f"valid_groups: {summary.valid_group_count}")
+    typer.echo(f"invalid_groups: {summary.invalid_group_count}")
+    typer.echo(f"exact_baseline_match: {summary.exact_baseline_match_group_count}")
+    typer.echo(f"related_to_baseline: {summary.related_to_baseline_group_count}")
+    typer.echo(f"not_in_baseline: {summary.not_in_baseline_group_count}")
+    typer.echo(f"conflicting_with_baseline: {summary.conflicting_with_baseline_group_count}")
+    typer.echo(f"excluded_plan_items: {summary.excluded_plan_item_count}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:

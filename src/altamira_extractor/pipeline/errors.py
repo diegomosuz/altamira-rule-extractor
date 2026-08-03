@@ -541,6 +541,25 @@ class CandidatePromotionPlanError(PipelineError):
     excepcion se lanza."""
 
 
+class UnifiedCandidatesShadowError(PipelineError):
+    """Fallo de `unified_candidates_shadow_service.py`/
+    `unified_candidates_shadow_analyzer.py`/`unified_shadow_source_
+    resolver.py` (Fase 11 de la ampliacion semantica, artefacto
+    unificado de candidatos en shadow mode, no-contractual, diagnostico
+    bajo demanda): el run no existe, `run.json` es invalido, el run no
+    alcanzo PARSED (SUCCEEDED), `CandidateArtifact` V1 esta ausente o
+    invalido, el `candidate-promotion-plan.json` requerido esta ausente
+    o invalido (esta fase NUNCA regenera un plan ausente ni decisiones
+    humanas), alguno de los hashes de assessment/review package/plan no
+    coincide con lo realmente cargado, un `source_candidate_id`
+    referenciado por un shadow member no existe en su artefacto V2/
+    interprocedural real, o la identidad de un candidato resuelto es
+    inconsistente con la referencia de Fase 9. El mensaje nunca incluye
+    una ruta absoluta, el contenido de un manifiesto humano ni el de un
+    JSON invalido. Nunca se persiste un `diagnostics/unified-
+    candidates-shadow.json` parcial cuando esta excepcion se lanza."""
+
+
 class CandidatePromotionAssessmentError(PipelineError):
     """Fallo de `candidate_promotion_assessment_service.py`/
     `candidate_promotion_assessment_analyzer.py` (Fase 9 de la
