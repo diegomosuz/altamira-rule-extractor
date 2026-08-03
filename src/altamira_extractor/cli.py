@@ -18,6 +18,8 @@ Uso:
     python -m altamira_extractor.cli semantic-interprocedural-propagation <run_id> [--json]
     python -m altamira_extractor.cli interprocedural-candidates-shadow <run_id> [--json]
     python -m altamira_extractor.cli candidate-promotion-assessment <run_id> [--json]
+    python -m altamira_extractor.cli candidate-promotion-review-package <run_id> [--json]
+    python -m altamira_extractor.cli candidate-promotion-plan <run_id> --decisions <path> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -150,6 +152,34 @@ nunca accede a Neo4j directamente ni invoca un proveedor LLM; nunca
 promueve ningun candidato -- `READY_FOR_CONTROLLED_REVIEW` es
 exclusivamente diagnostico, nunca una aprobacion.
 
+`candidate-promotion-review-package` (Fase 10 de la ampliacion
+semantica, `feat/controlled-candidate-promotion-plan`) calcula y
+persiste `<run_dir>/diagnostics/candidate-promotion-review-package.
+json`: deriva EXCLUSIVAMENTE del `CandidatePromotionAssessmentArtifact`
+(Fase 9, calculado en memoria, nunca leido de su propio diagnostico) --
+ver docs/CONTROLLED_CANDIDATE_PROMOTION_PLAN.md. Cada candidato
+conserva su identidad y provenance completas; la elegibilidad
+(`ReviewEligibility`) se deriva unicamente de `PromotionDisposition`,
+nunca reinterpretando criterios individuales. Requiere unicamente que
+RUN_ID haya alcanzado PARSED (SUCCEEDED). Nunca modifica `run.json`,
+ningun `artifacts/01-10` ni `diagnostics/candidate-promotion-
+assessment.json`; nunca promueve ningun candidato.
+
+`candidate-promotion-plan` (Fase 10 de la ampliacion semantica) valida
+un manifiesto de decisiones HUMANO (`--decisions <path>`, un archivo
+externo nunca copiado al repositorio) contra el paquete de revision ya
+persistido y el assessment actual, y persiste `<run_dir>/diagnostics/
+candidate-promotion-plan.json`: un plan de promocion en DRY-RUN --
+`PROPOSE_SHADOW_PROMOTION` nunca implica una promocion real. Cada
+decision se valida contra hashes de origen (`review_package_hash`/
+`assessment_artifact_hash`/`run_id`); una decision invalida se rechaza
+explicitamente, nunca se ignora en silencio. Requiere que el paquete de
+revision ya exista (`candidate-promotion-review-package` previo) y
+unicamente que RUN_ID haya alcanzado PARSED (SUCCEEDED). Nunca modifica
+`run.json`, ningun `artifacts/01-10` ni ningun `diagnostics/`
+preexistente; nunca crea un candidato nuevo, nunca genera
+`ContextPackage`/`RuleDraft`/reglas Markdown, nunca escribe en Neo4j.
+
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
 artefactos (`api/reads.py`, `api/downloads.py`, `api/validation.py`,
@@ -196,6 +226,14 @@ from .contracts.semantic_coverage import SemanticSupportStatus
 from .pipeline.candidate_promotion_assessment_service import (
     compute_candidate_promotion_assessment_artifact,
     write_candidate_promotion_assessment_artifact,
+)
+from .pipeline.candidate_promotion_plan_service import (
+    compute_candidate_promotion_plan_artifact,
+    write_candidate_promotion_plan_artifact,
+)
+from .pipeline.candidate_promotion_review_service import (
+    compute_candidate_promotion_review_package,
+    write_candidate_promotion_review_package,
 )
 from .pipeline.interprocedural_call_linkage_service import (
     compute_interprocedural_call_linkage_artifact,
@@ -296,6 +334,27 @@ CandidatePromotionAssessmentJsonOption = Annotated[
     typer.Option(
         "--json",
         help="Imprime el CandidatePromotionAssessmentArtifact completo en JSON estable",
+    ),
+]
+CandidatePromotionReviewPackageJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el CandidatePromotionReviewPackage completo en JSON estable",
+    ),
+]
+CandidatePromotionPlanJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el CandidatePromotionPlanArtifact completo en JSON estable",
+    ),
+]
+CandidatePromotionPlanDecisionsOption = Annotated[
+    str,
+    typer.Option(
+        "--decisions",
+        help="Ruta al manifiesto de decisiones humano (CandidatePromotionDecisionManifest)",
     ),
 ]
 
@@ -822,6 +881,91 @@ def candidate_promotion_assessment(
     typer.echo(f"not_evaluated: {summary.not_evaluated_count}")
     for source in sorted(summary.source_availability, key=lambda item: item.value):
         typer.echo(f"  availability[{source.value}]: {summary.source_availability[source].value}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="candidate-promotion-review-package")
+@_guard
+def candidate_promotion_review_package(
+    run_id: RunIdArgument, json_output: CandidatePromotionReviewPackageJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/candidate-promotion-review-package.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 10 de la ampliacion
+    semantica, ver docs/CONTROLLED_CANDIDATE_PROMOTION_PLAN.md): deriva
+    EXCLUSIVAMENTE del CandidatePromotionAssessmentArtifact (Fase 9,
+    calculado en memoria, nunca leido de su propio diagnostico) un
+    paquete de revision humana -- una CandidateReviewItem por cada
+    candidato evaluado, con su ReviewEligibility derivada unicamente de
+    PromotionDisposition. Requiere que RUN_ID ya haya alcanzado PARSED
+    (SUCCEEDED). Nunca modifica run.json, ningun artifacts/01-10 ni
+    diagnostics/candidate-promotion-assessment.json; nunca promueve
+    ningun candidato.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    package = compute_candidate_promotion_review_package(run_dir, run_id)
+    package_path = write_candidate_promotion_review_package(run_dir, package)
+    relative_package_path = package_path.relative_to(run_dir).as_posix()
+
+    summary = package.summary
+    typer.echo(f"run_id: {package.run_id}")
+    typer.echo(f"total: {summary.total_items}")
+    typer.echo(f"eligible: {summary.eligible_count}")
+    typer.echo(f"not_eligible: {summary.not_eligible_count}")
+    typer.echo(f"already_covered: {summary.already_covered_count}")
+    typer.echo(f"baseline: {summary.baseline_count}")
+    typer.echo(f"blocked: {summary.blocked_count}")
+    typer.echo(f"report: {relative_package_path}")
+
+    if json_output:
+        typer.echo(package.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="candidate-promotion-plan")
+@_guard
+def candidate_promotion_plan(
+    run_id: RunIdArgument,
+    decisions: CandidatePromotionPlanDecisionsOption,
+    json_output: CandidatePromotionPlanJsonOption = False,
+) -> None:
+    """Calcula y persiste diagnostics/candidate-promotion-plan.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 10 de la ampliacion
+    semantica, ver docs/CONTROLLED_CANDIDATE_PROMOTION_PLAN.md): valida
+    --decisions (un manifiesto de decisiones HUMANO, archivo externo,
+    nunca copiado al repositorio) contra diagnostics/candidate-
+    promotion-review-package.json (debe existir de antemano) y el
+    assessment actual (Fase 9, en memoria), y produce un plan de
+    promocion en DRY-RUN. PROPOSE_SHADOW_PROMOTION nunca implica una
+    promocion real. Cada decision se valida contra hashes de origen; una
+    decision invalida se rechaza explicitamente, nunca se ignora en
+    silencio. Requiere que RUN_ID ya haya alcanzado PARSED (SUCCEEDED) y
+    que el paquete de revision ya exista. Nunca modifica run.json,
+    ningun artifacts/01-10 ni ningun diagnostics/ preexistente; nunca
+    crea un candidato nuevo, nunca genera ContextPackage/RuleDraft/
+    reglas Markdown, nunca escribe en Neo4j.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_candidate_promotion_plan_artifact(run_dir, run_id, decisions_path=decisions)
+    artifact_path = write_candidate_promotion_plan_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"total: {summary.total_items}")
+    typer.echo(f"keep_baseline: {summary.keep_baseline_count}")
+    typer.echo(f"skip_already_covered: {summary.skip_already_covered_count}")
+    typer.echo(f"propose_shadow_promotion: {summary.propose_shadow_promotion_count}")
+    typer.echo(f"reject: {summary.reject_count}")
+    typer.echo(f"defer: {summary.defer_count}")
+    typer.echo(f"block: {summary.block_count}")
+    typer.echo(f"pending_review: {summary.pending_review_count}")
+    typer.echo(f"invalid_decisions: {summary.invalid_decision_count}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:

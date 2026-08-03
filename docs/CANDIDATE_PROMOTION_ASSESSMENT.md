@@ -324,3 +324,11 @@ candidatos experimentales pasan a alimentar el pipeline V1 productivo)
 queda explícitamente **fuera de alcance**, documentado aquí como deuda
 técnica para una fase futura — nunca implementado como atajo dentro de
 esta.
+
+## Ver también
+
+Fase 10 (`docs/CONTROLLED_CANDIDATE_PROMOTION_PLAN.md`) consume este
+assessment para generar un paquete de revisión humana y, tras validar
+un manifiesto de decisiones, un plan de promoción en dry-run —
+`PROPOSE_SHADOW_PROMOTION` sigue sin ser una promoción real. Ninguna
+de las dos fases modifica a la otra.

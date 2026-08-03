@@ -505,6 +505,42 @@ class InterproceduralRuleCandidatesError(PipelineError):
     cuando esta excepcion se lanza."""
 
 
+class CandidatePromotionReviewError(PipelineError):
+    """Fallo de `candidate_promotion_review_service.py`/
+    `candidate_promotion_review_generator.py` (Fase 10 de la
+    ampliacion semantica, paquete de revision humana, no-contractual,
+    diagnostico bajo demanda): el run no existe, `run.json` es
+    invalido, el run no alcanzo PARSED (SUCCEEDED), el
+    `CandidatePromotionAssessmentArtifact` de origen (Fase 9, calculado
+    en memoria, nunca leido de `diagnostics/candidate-promotion-
+    assessment.json`) no se pudo obtener, o una `UnifiedCandidateReference`
+    referenciada por un `CandidatePromotionAssessment` no expone
+    `program` (anomalia estructural: nunca se fabrica un valor). El
+    mensaje nunca incluye una ruta absoluta ni el contenido de un JSON
+    invalido. Nunca se persiste un `diagnostics/candidate-promotion-
+    review-package.json` parcial cuando esta excepcion se lanza."""
+
+
+class CandidatePromotionPlanError(PipelineError):
+    """Fallo de `candidate_promotion_plan_service.py`/
+    `candidate_promotion_plan_builder.py` (Fase 10 de la ampliacion
+    semantica, plan de promocion controlada, no-contractual,
+    diagnostico bajo demanda): el run no existe, `run.json` es
+    invalido, el run no alcanzo PARSED (SUCCEEDED), el assessment o el
+    review package de origen no se pudieron obtener, la ruta de
+    `--decisions` es insegura (escapa el directorio permitido, no es un
+    archivo regular, es un symlink) o no existe, el manifiesto de
+    decisiones no es JSON valido, no valida contra
+    `CandidatePromotionDecisionManifest`, declara una version
+    incompatible, o alguno de sus hashes (`review_package_hash`/
+    `assessment_artifact_hash`/`run_id`) no coincide con el review
+    package/assessment realmente cargados (manifiesto obsoleto). El
+    mensaje nunca incluye una ruta absoluta, el contenido del
+    manifiesto humano ni el de un JSON invalido. Nunca se persiste un
+    `diagnostics/candidate-promotion-plan.json` parcial cuando esta
+    excepcion se lanza."""
+
+
 class CandidatePromotionAssessmentError(PipelineError):
     """Fallo de `candidate_promotion_assessment_service.py`/
     `candidate_promotion_assessment_analyzer.py` (Fase 9 de la
