@@ -616,3 +616,24 @@ class UnifiedShadowDownstreamError(PipelineError):
     NUNCA lanza esta excepcion cuando las fuentes son validas -- es una
     respuesta VALIDA (`UnifiedShadowDownstreamDisposition.NOT_EXECUTED`),
     el artefacto se genera y persiste igual."""
+
+
+class UnifiedActivationError(PipelineError):
+    """Fallo DURO de `unified_activation_service.py` (Fase 14A de la
+    ampliacion semantica, control plane de activacion unificada,
+    no-contractual, diagnostico bajo demanda): el run no existe,
+    `run.json` es invalido, el run no alcanzo la etapa minima
+    requerida, el YAML de configuracion (`--config`) esta ausente/es
+    sintacticamente invalido/no cumple el schema tipado
+    (`UnifiedActivationConfig`), la ruta del YAML es insegura (symlink
+    u otro tipo de archivo no regular), las fuentes recibidas son
+    inconsistentes entre si (run_id/source_package_hash), o la
+    escritura atomica del artefacto fallo. El mensaje nunca incluye
+    una ruta absoluta ni el contenido del YAML. Nunca se persiste un
+    `diagnostics/unified-activation-evaluation.json` parcial cuando
+    esta excepcion se lanza. Una disposicion `BLOCKED`/`NOT_EVALUATED`
+    contractualmente valida NUNCA lanza esta excepcion cuando las
+    fuentes son validas -- es una respuesta VALIDA, el artefacto se
+    genera y persiste igual (exit code 0 en el CLI). El archivo YAML
+    real proporcionado por el operador NUNCA se copia al repositorio
+    ni al directorio del run."""

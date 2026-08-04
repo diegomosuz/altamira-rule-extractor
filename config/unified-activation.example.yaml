@@ -1,0 +1,39 @@
+# Ejemplo VERSIONADO de configuracion del control plane de activacion
+# unificada (Fase 14A, `feat/controlled-unified-activation`).
+#
+# Este archivo es UNICAMENTE un ejemplo de referencia -- el archivo
+# REAL que un operador pase a `--config` NUNCA se copia al repositorio
+# ni al directorio del run (ver docs/CONTROLLED_UNIFIED_ACTIVATION.md).
+#
+# Sin secretos, sin configuracion de entorno, sin rutas, claves,
+# endpoint ni modelo: nada de eso pertenece a este contrato.
+#
+# El modo mas seguro y el valor por defecto recomendado es V1_ONLY:
+# V1 sigue siendo el unico productor de reglas, sin excepcion, y esta
+# configuracion ni siquiera requiere que existan artefactos unified.
+
+schema_version: "1.0"
+
+mode: V1_ONLY
+
+provider_policy: DETERMINISTIC_FAKE_ONLY
+
+canary_strategy: EXPLICIT_ALLOWLIST
+canary_percentage: 0
+package_hash_allowlist: []
+package_hash_denylist: []
+
+fallback_policy: NO_FALLBACK
+
+require_validation_disposition: true
+require_downstream_disposition: true
+require_all_guardrails_passed: true
+allow_completed_with_rejections: false
+comparison_required: true
+
+# Invariante de Fase 14A: SIEMPRE false. Un YAML que intente
+# `materialization_enabled: true` es rechazado por el contrato
+# tipado (Literal[False]) antes de que cualquier codigo lo evalue.
+materialization_enabled: false
+
+diagnostics: []

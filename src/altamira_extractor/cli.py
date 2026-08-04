@@ -23,6 +23,7 @@ Uso:
     python -m altamira_extractor.cli unified-candidates-shadow <run_id> [--json]
     python -m altamira_extractor.cli unified-shadow-validate <run_id> [--json]
     python -m altamira_extractor.cli unified-shadow-downstream <run_id> [--json]
+    python -m altamira_extractor.cli unified-activation-evaluate <run_id> --config <path> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -291,6 +292,10 @@ from .pipeline.semantic_propagation_service import (
     compute_semantic_propagation_artifact,
     write_semantic_propagation_artifact,
 )
+from .pipeline.unified_activation_service import (
+    compute_unified_activation_evaluation,
+    write_unified_activation_evaluation,
+)
 from .pipeline.unified_candidates_shadow_service import (
     compute_unified_candidates_shadow_artifact,
     write_unified_candidates_shadow_artifact,
@@ -419,6 +424,21 @@ UnifiedShadowDownstreamJsonOption = Annotated[
     typer.Option(
         "--json",
         help="Imprime el UnifiedShadowDownstreamArtifact completo en JSON estable",
+    ),
+]
+UnifiedActivationConfigOption = Annotated[
+    str,
+    typer.Option(
+        "--config",
+        help="Ruta al YAML de UnifiedActivationConfig (externo, nunca copiado al repositorio "
+        "ni al run)",
+    ),
+]
+UnifiedActivationJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el UnifiedActivationEvaluationArtifact completo en JSON estable",
     ),
 ]
 
@@ -1210,6 +1230,72 @@ def unified_shadow_downstream(
     typer.echo(f"guardrails_passed: {summary.guardrail_passed_count}")
     typer.echo(f"guardrails_rejected: {summary.guardrail_rejected_count}")
     typer.echo(f"technical_failures: {summary.technical_failure_count}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="unified-activation-evaluate")
+@_guard
+def unified_activation_evaluate(
+    run_id: RunIdArgument,
+    config: UnifiedActivationConfigOption,
+    json_output: UnifiedActivationJsonOption = False,
+) -> None:
+    """Calcula y persiste diagnostics/unified-activation-evaluation.json de RUN_ID.
+
+    Control plane de activacion unificada, NO contractual, bajo
+    demanda (Fase 14A de la ampliacion semantica, ver
+    docs/CONTROLLED_UNIFIED_ACTIVATION.md): lee `--config` (un YAML
+    EXTERNO de `UnifiedActivationConfig`, NUNCA copiado al repositorio
+    ni al directorio del run), determina el modo operativo solicitado,
+    selecciona canary de forma deterministica, compara el pipeline V1
+    con el downstream unified shadow (Fase 13) UNICAMENTE mediante
+    igualdad demostrable de campos estructurales, y produce una
+    evaluacion de activacion -- pero NUNCA selecciona `unified` como
+    lane efectivo, NUNCA materializa candidatos/drafts/reglas, NUNCA
+    inicializa un proveedor real. Esta es una decision INFORMATIVA de
+    lo que una futura Fase 14B haria; no autoriza ninguna activacion
+    productiva.
+
+    Requiere que RUN_ID haya alcanzado PARSED (SUCCEEDED). Carga
+    UNICAMENTE los artefactos ya existentes en disco -- nunca
+    regenera `unified-candidates-shadow.json`/`unified-shadow-
+    validation-report.json`/`unified-shadow-downstream.json`
+    ausentes; su ausencia se refleja como un hallazgo representable
+    (`NOT_EVALUATED`/`BLOCKED`), nunca un error tecnico. Nunca acepta
+    proveedor, API key, endpoint, modelo, bandera de materializacion,
+    porcentaje de canary ni decisiones humanas por linea de comandos
+    -- todo proviene EXCLUSIVAMENTE del YAML validado. Nunca modifica
+    run.json, ningun artifacts/01-10, CandidateArtifact V1 ni ningun
+    otro diagnostics/ preexistente; nunca escribe en Neo4j.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_unified_activation_evaluation(run_dir, run_id, config_path=Path(config))
+    artifact_path = write_unified_activation_evaluation(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    canary_selected = artifact.canary_selection.selected if artifact.canary_selection else False
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"mode: {artifact.mode.value}")
+    typer.echo(f"requested_lane: {artifact.requested_lane.value}")
+    typer.echo(f"effective_lane: {artifact.effective_lane.value}")
+    typer.echo(f"fallback_lane: {artifact.fallback_lane.value}")
+    typer.echo(f"canary_selected: {canary_selected}")
+    typer.echo(f"readiness_disposition: {artifact.readiness_disposition.value}")
+    typer.echo(f"activation_decision: {artifact.activation_decision.value}")
+    typer.echo(f"v1_references: {summary.v1_reference_count}")
+    typer.echo(f"unified_references: {summary.unified_reference_count}")
+    typer.echo(f"exact_equivalents: {summary.exact_equivalent_count}")
+    typer.echo(f"unified_additive: {summary.unified_additive_count}")
+    typer.echo(f"v1_only: {summary.v1_only_count}")
+    typer.echo(f"conflicts: {summary.conflicting_count}")
+    typer.echo(f"warnings: {summary.warning_count}")
+    typer.echo(f"blocking_issues: {summary.blocking_issue_count}")
+    typer.echo(f"materialization_enabled: {artifact.materialization_enabled}")
     typer.echo(f"report: {relative_artifact_path}")
 
     if json_output:

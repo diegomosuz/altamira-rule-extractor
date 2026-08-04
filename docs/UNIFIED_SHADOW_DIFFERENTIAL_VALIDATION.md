@@ -342,6 +342,9 @@ como único proveedor, nunca publicando ninguna regla.
 
 - `docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md` (Fase 13): ejecución
   downstream shadow de los grupos que este reporte califica.
+- `docs/CONTROLLED_UNIFIED_ACTIVATION.md` (Fase 14A): control plane de
+  activación, canary y comparación V1/unified, que exige esta
+  disposición como uno de sus gates de canary/primary trial.
 - `docs/UNIFIED_CANDIDATES_SHADOW.md` (Fase 11): artefacto unificado
   de candidatos en shadow mode, línea `BASELINE_V1`/`SHADOW_PROPOSAL`.
 - `docs/CANDIDATE_PROMOTION_ASSESSMENT.md` (Fase 9): catálogo

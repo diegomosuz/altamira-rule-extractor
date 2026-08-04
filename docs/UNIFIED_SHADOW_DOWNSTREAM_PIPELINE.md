@@ -340,11 +340,18 @@ nunca un juicio de calidad ni de corrección.
 ## Próxima fase
 
 Fase 13 tampoco decide qué hacer con un artefacto `COMPLETED` (¿debe
-alimentar una cola de revisión humana? ¿un dashboard?) — esa decisión
-de producto permanece fuera de alcance para una fase futura (Fase 14).
+alimentar una cola de revisión humana? ¿un dashboard? ¿un canary?) —
+esa decisión de producto es exactamente lo que Fase 14A ("Control
+plane de activación unificada, canary y comparación V1/unified")
+evalúa, en modo dry-run: nunca activa nada, solo determina si
+**podría** activarse.
 
 ## Ver también
 
+- `docs/CONTROLLED_UNIFIED_ACTIVATION.md` (Fase 14A): control plane
+  que compara este resultado downstream contra V1 y evalúa,
+  siempre en dry-run, si un paquete calificaría para canary o
+  primary trial.
 - `docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md` (Fase 12): reporte
   de validación diferencial, gates, disposiciones, elegibilidad
   estructural.
