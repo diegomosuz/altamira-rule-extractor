@@ -295,3 +295,6 @@ alimentar un flujo downstream también en shadow mode.
   revisión humana y plan de promoción en dry-run.
 - `docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md` (Fase 12):
   validación diferencial estructural de este artefacto contra V1.
+- `docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md` (Fase 13): ejecución
+  downstream shadow (`ContextPackage`/`RuleDraft`/Guardrails) de los
+  grupos que Fase 12 califica.

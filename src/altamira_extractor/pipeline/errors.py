@@ -594,3 +594,25 @@ class CandidatePromotionAssessmentError(PipelineError):
     absoluta ni el contenido de un JSON invalido. Nunca se persiste un
     `diagnostics/candidate-promotion-assessment.json` parcial cuando
     esta excepcion se lanza."""
+
+
+class UnifiedShadowDownstreamError(PipelineError):
+    """Fallo DURO de `unified_shadow_downstream_service.py` (Fase 13 de
+    la ampliacion semantica, ejecucion downstream del artefacto
+    unificado en shadow mode, no-contractual, diagnostico bajo
+    demanda): el run no existe, `run.json` es invalido, el run no
+    alcanzo PARSED (SUCCEEDED), `diagnostics/unified-candidates-
+    shadow.json` o `diagnostics/unified-shadow-validation-report.json`
+    (AMBOS objetos PRINCIPALES de esta fase, nunca opcionales) estan
+    ausentes/invalidos, `artifacts/04-semantic-graph.json` (canonico
+    requerido) esta ausente/invalido, los hashes entre las fuentes son
+    inconsistentes (artefacto obsoleto -- ver
+    `unified_shadow_downstream_executor.py::UnifiedShadowDownstreamExecutorError`,
+    envuelta aqui), o la escritura atomica del artefacto fallo. El
+    mensaje nunca incluye una ruta absoluta ni el contenido de un JSON
+    invalido. Nunca se persiste un `diagnostics/unified-shadow-
+    downstream.json` parcial cuando esta excepcion se lanza. Una
+    disposicion de validacion REVIEW_REQUIRED/BLOCKED/NOT_EVALUATED
+    NUNCA lanza esta excepcion cuando las fuentes son validas -- es una
+    respuesta VALIDA (`UnifiedShadowDownstreamDisposition.NOT_EXECUTED`),
+    el artefacto se genera y persiste igual."""

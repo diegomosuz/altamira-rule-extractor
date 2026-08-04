@@ -22,6 +22,7 @@ Uso:
     python -m altamira_extractor.cli candidate-promotion-plan <run_id> --decisions <path> [--json]
     python -m altamira_extractor.cli unified-candidates-shadow <run_id> [--json]
     python -m altamira_extractor.cli unified-shadow-validate <run_id> [--json]
+    python -m altamira_extractor.cli unified-shadow-downstream <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -294,6 +295,10 @@ from .pipeline.unified_candidates_shadow_service import (
     compute_unified_candidates_shadow_artifact,
     write_unified_candidates_shadow_artifact,
 )
+from .pipeline.unified_shadow_downstream_service import (
+    compute_unified_shadow_downstream_artifact,
+    write_unified_shadow_downstream_artifact,
+)
 from .pipeline.unified_shadow_validation_service import (
     compute_unified_shadow_validation_report,
     write_unified_shadow_validation_report,
@@ -407,6 +412,13 @@ UnifiedShadowValidationJsonOption = Annotated[
     typer.Option(
         "--json",
         help="Imprime el UnifiedShadowValidationReport completo en JSON estable",
+    ),
+]
+UnifiedShadowDownstreamJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el UnifiedShadowDownstreamArtifact completo en JSON estable",
     ),
 ]
 
@@ -1150,6 +1162,58 @@ def unified_shadow_validate(
 
     if json_output:
         typer.echo(report.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="unified-shadow-downstream")
+@_guard
+def unified_shadow_downstream(
+    run_id: RunIdArgument, json_output: UnifiedShadowDownstreamJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/unified-shadow-downstream.json de RUN_ID.
+
+    Artefacto NO contractual, bajo demanda (Fase 13 de la ampliacion
+    semantica, ver docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md): ejecuta,
+    EXCLUSIVAMENTE para los grupos con elegibilidad downstream efectiva
+    (estructural, Fase 12, Y disposicion de validacion QUALIFIED_FOR_
+    DOWNSTREAM_SHADOW/QUALIFIED_WITH_WARNINGS), el mismo flujo
+    productivo ContextPackage -> RuleDraft -> Guardrails, pero
+    envolviendolo en shadow mode -- nunca reemplaza, modifica ni
+    alimenta el pipeline V1, nunca publica una regla. El unico
+    proveedor admitido es el fake determinista oficial: esta fase nunca
+    invoca un proveedor LLM real. Requiere que RUN_ID haya alcanzado
+    PARSED (SUCCEEDED) y que diagnostics/unified-candidates-shadow.json
+    Y diagnostics/unified-shadow-validation-report.json existan y sean
+    validos -- la ausencia/invalidez de cualquiera de los dos, o una
+    inconsistencia de hash entre las fuentes, es SIEMPRE un error de
+    comando (exit code distinto de cero, sin artefacto). Una disposicion
+    de validacion REVIEW_REQUIRED/BLOCKED/NOT_EVALUATED produce un
+    artefacto NOT_EXECUTED (exit code 0), nunca un error tecnico. Nunca
+    modifica run.json, ningun artifacts/01-10, CandidateArtifact V1, el
+    artefacto unificado, el reporte de validacion ni ningun otro
+    diagnostics/ preexistente; nunca escribe en Neo4j.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    artifact = compute_unified_shadow_downstream_artifact(run_dir, run_id, settings=settings)
+    artifact_path = write_unified_shadow_downstream_artifact(run_dir, artifact)
+    relative_artifact_path = artifact_path.relative_to(run_dir).as_posix()
+
+    summary = artifact.summary
+    typer.echo(f"run_id: {artifact.run_id}")
+    typer.echo(f"disposition: {artifact.disposition.value}")
+    typer.echo(f"validation_groups: {summary.validation_group_count}")
+    typer.echo(f"eligible_groups: {summary.downstream_eligible_group_count}")
+    typer.echo(f"executed_groups: {summary.executed_group_count}")
+    typer.echo(f"skipped_groups: {summary.skipped_group_count}")
+    typer.echo(f"context_packages: {summary.context_package_count}")
+    typer.echo(f"rule_drafts: {summary.rule_draft_count}")
+    typer.echo(f"guardrails_passed: {summary.guardrail_passed_count}")
+    typer.echo(f"guardrails_rejected: {summary.guardrail_rejected_count}")
+    typer.echo(f"technical_failures: {summary.technical_failure_count}")
+    typer.echo(f"report: {relative_artifact_path}")
+
+    if json_output:
+        typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
 
 
 @app.command(name="v2-candidates-shadow")

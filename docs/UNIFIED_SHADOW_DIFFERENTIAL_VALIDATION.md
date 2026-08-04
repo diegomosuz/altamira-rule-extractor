@@ -331,13 +331,17 @@ negocio, nunca reemplaza revisión humana funcional.
 
 ## Próxima fase
 
-Fase 12 tampoco ejecuta el flujo downstream en sí (deuda documentada
-desde Fase 11): qué hace ese flujo con un grupo
-`QUALIFIED_FOR_DOWNSTREAM_SHADOW`, y bajo qué garantías adicionales,
-permanece fuera de alcance para una fase futura.
+Fase 13 (`feat/unified-shadow-downstream-pipeline`,
+`docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md`) cierra esta deuda: ejecuta,
+para los grupos `downstream_shadow_eligible=True` bajo una disposición
+`QUALIFIED_*`, el mismo flujo productivo `ContextPackage → RuleDraft →
+Guardrails` — envuelto en shadow mode, con el fake determinista oficial
+como único proveedor, nunca publicando ninguna regla.
 
 ## Ver también
 
+- `docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md` (Fase 13): ejecución
+  downstream shadow de los grupos que este reporte califica.
 - `docs/UNIFIED_CANDIDATES_SHADOW.md` (Fase 11): artefacto unificado
   de candidatos en shadow mode, línea `BASELINE_V1`/`SHADOW_PROPOSAL`.
 - `docs/CANDIDATE_PROMOTION_ASSESSMENT.md` (Fase 9): catálogo
