@@ -244,10 +244,15 @@ Fase 14A nunca decide activar nada — únicamente evalúa si **podría**
 activarse. La decisión de construir una activación productiva real
 (seleccionar `unified` como lane efectivo, ejecutar un fallback real,
 materializar candidatos/drafts/reglas) permanece fuera de alcance,
-reservada a una fase futura (Fase 14B).
+reservada a una fase futura (Fase 14B). Esa fase ya está implementada:
+ver `docs/CONTROLLED_UNIFIED_MATERIALIZATION.md`, que consume la
+evaluación producida aquí como precondición de toda materialización.
 
 ## Ver también
 
+- `docs/CONTROLLED_UNIFIED_MATERIALIZATION.md` (Fase 14B):
+  materialización controlada, routing atómico, fallback y rollback
+  reales, construidos sobre la evaluación de este control plane.
 - `docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md` (Fase 13): ejecución
   downstream real (`ContextPackage`/`RuleDraft`/`GuardrailReport`)
   cuyo resultado este control plane compara contra V1.

@@ -1,0 +1,46 @@
+# Ejemplo VERSIONADO de autorizacion del control plane de
+# materializacion unificada (Fase 14B,
+# `feat/controlled-unified-materialization`).
+#
+# Este archivo es UNICAMENTE un ejemplo de referencia -- la
+# autorizacion REAL que un operador pase a `--authorization` NUNCA se
+# copia al repositorio ni al directorio del run (ver
+# docs/CONTROLLED_UNIFIED_MATERIALIZATION.md).
+#
+# Sin secretos, sin identificadores reales, sin rutas, claves, endpoint
+# ni modelo: nada de eso pertenece a este contrato.
+#
+# `review_reference` es una referencia auditiva DECLARATIVA -- un texto
+# libre para dejar rastro de quien/que aprobo la accion -- NUNCA una
+# prueba de identidad autenticada ni una firma criptografica.
+#
+# La accion mas segura y el valor por defecto recomendado es KEEP_V1:
+# V1 sigue siendo el unico lane activo, sin excepcion, y esta
+# autorizacion ni siquiera requiere que existan grupos unified
+# aprobados.
+
+schema_version: "1.0"
+
+run_id: "REEMPLAZAR-CON-EL-RUN-ID-REAL"
+
+activation_evaluation_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+
+expected_readiness_disposition: V1_ONLY_READY
+
+action: KEEP_V1
+
+reason_code: KEEP_BASELINE
+
+review_reference: "ejemplo-no-autenticado::reemplazar-con-referencia-de-revision-real"
+
+approved_group_ids: []
+
+fallback_authorized: false
+
+rollback_authorized: false
+
+provider_policy: DETERMINISTIC_FAKE_ONLY
+
+materialization_enabled: true
+
+diagnostics: []

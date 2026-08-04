@@ -352,6 +352,9 @@ evalúa, en modo dry-run: nunca activa nada, solo determina si
   que compara este resultado downstream contra V1 y evalúa,
   siempre en dry-run, si un paquete calificaría para canary o
   primary trial.
+- `docs/CONTROLLED_UNIFIED_MATERIALIZATION.md` (Fase 14B):
+  materializa este resultado downstream bajo `activation/` de forma
+  content-addressed cuando una autorización explícita lo aprueba.
 - `docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md` (Fase 12): reporte
   de validación diferencial, gates, disposiciones, elegibilidad
   estructural.

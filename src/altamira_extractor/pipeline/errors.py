@@ -637,3 +637,51 @@ class UnifiedActivationError(PipelineError):
     genera y persiste igual (exit code 0 en el CLI). El archivo YAML
     real proporcionado por el operador NUNCA se copia al repositorio
     ni al directorio del run."""
+
+
+class UnifiedMaterializationError(PipelineError):
+    """Fallo generico del control plane de materializacion controlada
+    (Fase 14B de la ampliacion semantica,
+    `feat/controlled-unified-materialization`): el run no existe, la
+    autorizacion (`--authorization`, YAML externo) esta ausente/es
+    invalida, `activation_evaluation_hash`/`run_id` no coinciden con la
+    evaluacion real de Fase 14A, la disposicion de disponibilidad
+    esperada no coincide, `approved_group_ids` no cubre exactamente los
+    grupos materializados, o no existe una base V1 resoluble. Clase
+    base de la jerarquia de errores de Fase 14B -- ver `pipeline/
+    unified_activation_store.py::UnifiedActivationLockError`/
+    `UnifiedActivationStoreError` y `pipeline/
+    unified_activation_transition.py::UnifiedActivationTransitionError`
+    para fallos mas especificos. El mensaje nunca incluye una ruta
+    absoluta ni el contenido de un YAML/JSON invalido. Un fallo
+    ANTERIOR al commit point (`activation/active.json`) nunca deja un
+    puntero ni una generacion parcial referenciable."""
+
+
+class UnifiedActivationLockError(UnifiedMaterializationError):
+    """El lock single-writer `activation/.activation.lock` ya esta
+    tomado por otro proceso, o no pudo liberarse limpiamente al
+    finalizar (Fase 14B Parte 8). Nunca se elimina automaticamente un
+    lock ajeno ni se asume "stale" sin intervencion manual explicita --
+    ver `docs/CONTROLLED_UNIFIED_MATERIALIZATION.md` (recuperacion
+    manual)."""
+
+
+class UnifiedActivationStoreError(UnifiedMaterializationError):
+    """Fallo del almacenamiento content-addressed de Fase 14B: una ruta
+    intento escapar del `run_dir` (path traversal/absoluta/UNC), el
+    contenido releido de un archivo no coincide con su hash/tamano
+    declarado, una generacion con el mismo `generation_id` ya existe
+    con contenido DISTINTO (colision), o un manifiesto persistido esta
+    corrupto/incompleto. Ninguna generacion parcial queda nunca
+    referenciable cuando esta excepcion se lanza."""
+
+
+class UnifiedActivationTransitionError(UnifiedMaterializationError):
+    """Fallo de una transicion atomica de Fase 14B:
+    `expected_active_pointer_hash` no coincide con el puntero real
+    (lost update evitado), la generacion destino no existe/esta
+    incompleta, o la cadena de eventos esta rota. Un fallo ANTERIOR al
+    commit point deja el `active.json` anterior completamente intacto
+    -- nunca se referencia un evento no confirmado como transicion
+    activa."""

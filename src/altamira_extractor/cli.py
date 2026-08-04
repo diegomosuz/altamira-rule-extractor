@@ -24,6 +24,13 @@ Uso:
     python -m altamira_extractor.cli unified-shadow-validate <run_id> [--json]
     python -m altamira_extractor.cli unified-shadow-downstream <run_id> [--json]
     python -m altamira_extractor.cli unified-activation-evaluate <run_id> --config <path> [--json]
+    python -m altamira_extractor.cli unified-activation-materialize <run_id> \
+        --authorization <path> [--json]
+    python -m altamira_extractor.cli unified-activation-status <run_id> [--json]
+    python -m altamira_extractor.cli unified-activation-resolve <run_id> \
+        --artifact <logical-name> [--json]
+    python -m altamira_extractor.cli unified-activation-rollback <run_id> \
+        --authorization <path> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -230,6 +237,7 @@ duplicado una segunda vez.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import shutil
 from collections.abc import Callable
@@ -254,6 +262,7 @@ from .contracts.enums import PipelineStage
 from .contracts.interprocedural_rule_candidates import InterproceduralRuleType
 from .contracts.run_state import RunState
 from .contracts.semantic_coverage import SemanticSupportStatus
+from .pipeline.active_artifact_resolver import ActiveArtifactResolver
 from .pipeline.candidate_promotion_assessment_service import (
     compute_candidate_promotion_assessment_artifact,
     write_candidate_promotion_assessment_artifact,
@@ -266,7 +275,11 @@ from .pipeline.candidate_promotion_review_service import (
     compute_candidate_promotion_review_package,
     write_candidate_promotion_review_package,
 )
-from .pipeline.errors import PipelineError
+from .pipeline.errors import (
+    PipelineError,
+    UnifiedActivationStoreError,
+    UnifiedMaterializationError,
+)
 from .pipeline.interprocedural_call_linkage_service import (
     compute_interprocedural_call_linkage_artifact,
     write_interprocedural_call_linkage_artifact,
@@ -296,9 +309,15 @@ from .pipeline.unified_activation_service import (
     compute_unified_activation_evaluation,
     write_unified_activation_evaluation,
 )
+from .pipeline.unified_active_lane_router import KNOWN_LOGICAL_NAMES
 from .pipeline.unified_candidates_shadow_service import (
     compute_unified_candidates_shadow_artifact,
     write_unified_candidates_shadow_artifact,
+)
+from .pipeline.unified_materialization_service import (
+    action_is_rollback,
+    materialize_unified_activation,
+    peek_authorization_action,
 )
 from .pipeline.unified_shadow_downstream_service import (
     compute_unified_shadow_downstream_artifact,
@@ -439,6 +458,25 @@ UnifiedActivationJsonOption = Annotated[
     typer.Option(
         "--json",
         help="Imprime el UnifiedActivationEvaluationArtifact completo en JSON estable",
+    ),
+]
+UnifiedMaterializationAuthorizationOption = Annotated[
+    str,
+    typer.Option(
+        "--authorization",
+        help="Ruta al YAML de UnifiedMaterializationAuthorization (externo, nunca copiado al "
+        "repositorio ni al run)",
+    ),
+]
+UnifiedMaterializationJsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Imprime el resultado completo en JSON estable"),
+]
+UnifiedActivationResolveArtifactOption = Annotated[
+    str,
+    typer.Option(
+        "--artifact",
+        help=f"Logical name a resolver (uno de: {', '.join(sorted(KNOWN_LOGICAL_NAMES))})",
     ),
 ]
 
@@ -1300,6 +1338,209 @@ def unified_activation_evaluate(
 
     if json_output:
         typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="unified-activation-materialize")
+@_guard
+def unified_activation_materialize(
+    run_id: RunIdArgument,
+    authorization: UnifiedMaterializationAuthorizationOption,
+    json_output: UnifiedMaterializationJsonOption = False,
+) -> None:
+    """Ejecuta una materializacion controlada y reversible de RUN_ID.
+
+    Control plane ejecutable, NO contractual, bajo demanda (Fase 14B
+    de la ampliacion semantica, ver
+    docs/CONTROLLED_UNIFIED_MATERIALIZATION.md): lee `--authorization`
+    (un YAML EXTERNO de `UnifiedMaterializationAuthorization`, NUNCA
+    copiado al repositorio ni al directorio del run), valida que
+    corresponda exactamente a la evaluacion de Fase 14A vigente
+    (`run_id`/`activation_evaluation_hash`/`expected_readiness_
+    disposition`), y ejecuta la accion autorizada: mantener V1,
+    activar un canary/primary unified, ejecutar un fallback real a V1,
+    o revertir a una generacion anterior. V1 NUNCA se sobrescribe;
+    cada generacion es inmutable y content-addressed; el UNICO commit
+    point es la escritura atomica de `activation/active.json`.
+    Idempotente: la misma autorizacion aplicada al mismo estado nunca
+    produce un evento nuevo. Persiste EXCLUSIVAMENTE bajo
+    `<run_dir>/activation/` -- nunca modifica `run.json`, ningun
+    `artifacts/01-10` ni ningun `diagnostics/*.json` preexistente.
+    Nunca inicializa un proveedor real, nunca publica una regla.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    result = materialize_unified_activation(run_dir, run_id, authorization_path=Path(authorization))
+
+    typer.echo(f"run_id: {result.run_id}")
+    typer.echo(f"action: {result.action.value}")
+    typer.echo(f"generation_id: {result.generation_id}")
+    typer.echo(f"active_lane: {result.active_lane.value}")
+    typer.echo(f"previous_generation: {result.previous_generation_id or '(none)'}")
+    typer.echo(f"fallback_generation: {result.fallback_generation_id}")
+    typer.echo(f"pointer_version: {result.pointer_version}")
+    typer.echo(f"event_id: {result.event_id}")
+    typer.echo(f"idempotent: {result.idempotent}")
+    typer.echo(f"materialized_file_count: {result.materialized_file_count}")
+    typer.echo("activation_dir: activation")
+
+    if json_output:
+        payload = {
+            "run_id": result.run_id,
+            "action": result.action.value,
+            "generation_id": result.generation_id,
+            "active_lane": result.active_lane.value,
+            "previous_generation_id": result.previous_generation_id,
+            "fallback_generation_id": result.fallback_generation_id,
+            "pointer_version": result.pointer_version,
+            "event_id": result.event_id,
+            "idempotent": result.idempotent,
+            "materialized_file_count": result.materialized_file_count,
+        }
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@app.command(name="unified-activation-status")
+@_guard
+def unified_activation_status(
+    run_id: RunIdArgument, json_output: UnifiedMaterializationJsonOption = False
+) -> None:
+    """Muestra el estado actual del control plane de materializacion de RUN_ID.
+
+    Solo lectura (Fase 14B Parte 13): nunca transiciona, nunca
+    modifica `activation/`. Revalida hash/bytes de cada archivo de la
+    generacion activa contra el filesystem real antes de reportar
+    `manifest_valid`/`integrity_status`.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    resolver = ActiveArtifactResolver(run_dir, run_id=run_id)
+    store = resolver.store
+    pointer = resolver.active_pointer()
+
+    manifest_valid = True
+    integrity_status = "OK"
+    generation_kind = "UNKNOWN"
+    try:
+        manifest = store.read_generation_manifest(pointer.active_generation_id)
+        generation_kind = manifest.kind.value
+        store.validate_generation_files(manifest)
+    except UnifiedActivationStoreError:
+        manifest_valid = False
+        integrity_status = "CORRUPT"
+
+    chain_length = 1
+    event = store.read_event(pointer.latest_event_id)
+    while event.previous_event_id is not None:
+        event = store.read_event(event.previous_event_id)
+        chain_length += 1
+
+    typer.echo(f"active_lane: {pointer.active_lane.value}")
+    typer.echo(f"generation_id: {pointer.active_generation_id}")
+    typer.echo(f"generation_kind: {generation_kind}")
+    typer.echo(f"pointer_version: {pointer.pointer_version}")
+    typer.echo(f"manifest_valid: {manifest_valid}")
+    typer.echo(f"fallback_generation: {pointer.fallback_generation_id}")
+    typer.echo(f"latest_event: {pointer.latest_event_id}")
+    typer.echo(f"chain_length: {chain_length}")
+    typer.echo(f"integrity_status: {integrity_status}")
+
+    if json_output:
+        payload = {
+            "active_lane": pointer.active_lane.value,
+            "generation_id": pointer.active_generation_id,
+            "generation_kind": generation_kind,
+            "pointer_version": pointer.pointer_version,
+            "manifest_valid": manifest_valid,
+            "fallback_generation": pointer.fallback_generation_id,
+            "latest_event": pointer.latest_event_id,
+            "chain_length": chain_length,
+            "integrity_status": integrity_status,
+        }
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@app.command(name="unified-activation-resolve")
+@_guard
+def unified_activation_resolve(
+    run_id: RunIdArgument,
+    artifact: UnifiedActivationResolveArtifactOption,
+    json_output: UnifiedMaterializationJsonOption = False,
+) -> None:
+    """Resuelve --artifact desde el lane activo de RUN_ID (con fallback ejecutable).
+
+    Fase 14B Parte 13: nunca acepta un proveedor, credencial, ruta de
+    generacion ni lane arbitrario -- UNICAMENTE un `logical_name`
+    tipado. Si el lane activo es UNIFIED y esta corrupto/incompleto,
+    y el puntero autoriza fallback, ejecuta `FALLBACK_TO_V1`
+    automaticamente (auditable, ver `unified-activation-status`) y
+    resuelve de nuevo desde V1.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    resolver = ActiveArtifactResolver(run_dir, run_id=run_id)
+    resolution = resolver.resolve(artifact)
+
+    typer.echo(f"artifact: {resolution.requested_logical_name}")
+    typer.echo(f"status: {resolution.status.value}")
+    typer.echo(f"resolved_lane: {resolution.resolved_lane.value}")
+    typer.echo(f"generation_id: {resolution.generation_id}")
+    typer.echo(f"relative_path: {resolution.relative_path or '(none)'}")
+    typer.echo(f"sha256: {resolution.sha256 or '(none)'}")
+    typer.echo(f"fallback_applied: {resolution.fallback_applied}")
+    typer.echo(f"fallback_event: {resolution.fallback_event_id or '(none)'}")
+
+    if json_output:
+        typer.echo(resolution.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="unified-activation-rollback")
+@_guard
+def unified_activation_rollback(
+    run_id: RunIdArgument,
+    authorization: UnifiedMaterializationAuthorizationOption,
+    json_output: UnifiedMaterializationJsonOption = False,
+) -> None:
+    """Ejecuta un rollback explicito de RUN_ID segun AUTHORIZATION.
+
+    Envoltorio delgado sobre `unified-activation-materialize` (Fase
+    14B Parte 13): rechaza, ANTES de ejecutar cualquier transicion,
+    una autorizacion cuya `action` no sea `ROLLBACK_TO_PREVIOUS`/
+    `ROLLBACK_TO_GENERATION` -- para ese proposito general esta
+    `unified-activation-materialize`.
+    """
+    authorization_path = Path(authorization)
+    action = peek_authorization_action(authorization_path)
+    if not action_is_rollback(action):
+        raise UnifiedMaterializationError(
+            f"unified-activation-rollback exige una accion de rollback, obtuvo: {action.value} "
+            "-- usar unified-activation-materialize para otras acciones"
+        )
+
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    result = materialize_unified_activation(run_dir, run_id, authorization_path=authorization_path)
+
+    typer.echo(f"run_id: {result.run_id}")
+    typer.echo(f"action: {result.action.value}")
+    typer.echo(f"generation_id: {result.generation_id}")
+    typer.echo(f"active_lane: {result.active_lane.value}")
+    typer.echo(f"previous_generation: {result.previous_generation_id or '(none)'}")
+    typer.echo(f"pointer_version: {result.pointer_version}")
+    typer.echo(f"event_id: {result.event_id}")
+    typer.echo(f"idempotent: {result.idempotent}")
+
+    if json_output:
+        payload = {
+            "run_id": result.run_id,
+            "action": result.action.value,
+            "generation_id": result.generation_id,
+            "active_lane": result.active_lane.value,
+            "previous_generation_id": result.previous_generation_id,
+            "pointer_version": result.pointer_version,
+            "event_id": result.event_id,
+            "idempotent": result.idempotent,
+        }
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
 
 
 @app.command(name="v2-candidates-shadow")
