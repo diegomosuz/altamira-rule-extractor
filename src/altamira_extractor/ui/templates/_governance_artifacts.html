@@ -1,0 +1,46 @@
+{% from "_components.html" import status_badge %}
+<div id="governance-artifacts">
+<div class="table-scroll">
+<table>
+  <caption class="visually-hidden">Artefactos resolubles del lane activo</caption>
+  <thead>
+    <tr>
+      <th scope="col">Nombre logico</th>
+      <th scope="col">Estado</th>
+      <th scope="col">Lane</th>
+      <th scope="col">Registros</th>
+      <th scope="col">Hash (sha256)</th>
+      <th scope="col">Descarga</th>
+      <th scope="col">Diagnostico</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for artifact in overview.artifacts %}
+    <tr>
+      <td class="cell-mono">{{ artifact.logical_name }}</td>
+      <td>{{ status_badge(artifact.status.value) }}</td>
+      <td>{{ artifact.resolved_lane.value if artifact.resolved_lane else "No informado" }}</td>
+      <td>{{ artifact.record_count if artifact.record_count is not none else "No informado" }}</td>
+      <td class="cell-mono small text-muted">{{ artifact.sha256[:16] ~ "..." if artifact.sha256 else "No informado" }}</td>
+      <td>
+        {% if artifact.downloadable %}
+        <a href="{{ url_for('download_governance_artifact', run_id=overview.run_id, logical_name=artifact.logical_name) }}">Descargar</a>
+        {% else %}
+        <span class="text-muted small">No disponible</span>
+        {% endif %}
+      </td>
+      <td class="small text-muted">
+        {% if artifact.diagnostics %}
+        <details class="collapsible"><summary><span class="collapsible-title">{{ artifact.diagnostics | length }} nota(s)</span></summary>
+        <ul>{% for note in artifact.diagnostics %}<li>{{ note }}</li>{% endfor %}</ul>
+        </details>
+        {% else %}
+        --
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</div>

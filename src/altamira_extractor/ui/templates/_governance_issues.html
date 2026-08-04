@@ -1,0 +1,42 @@
+{% from "_icons.html" import icon %}
+<div id="governance-issues">
+<form class="filter-bar" method="get"
+  action="{{ url_for('ui_governance', run_id=run_id) }}#issues"
+  hx-get="{{ url_for('ui_governance_issues_fragment', run_id=run_id) }}"
+  hx-target="#governance-issues" hx-swap="outerHTML" hx-push-url="false">
+  <label for="issue-filter-severity">Severidad</label>
+  <select id="issue-filter-severity" name="issue_severity">
+    <option value="" {{ "selected" if not filters.issue_severity }}>Todas</option>
+    {% for value in ("BLOCKING", "ERROR", "WARNING", "INFO") %}
+    <option value="{{ value }}" {{ "selected" if filters.issue_severity == value }}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-sm btn-secondary">Filtrar</button>
+</form>
+
+{% if issues %}
+<ul class="issue-list">
+  {% for issue in issues %}
+  <li class="alert alert-{{ 'error' if issue.severity.value in ('BLOCKING', 'ERROR') else ('warning' if issue.severity.value == 'WARNING' else 'info') }}" role="{{ 'alert' if issue.severity.value in ('BLOCKING', 'ERROR') else 'status' }}">
+    {{ icon("alert") }}
+    <div>
+      <p class="mb-0"><strong>{{ issue.severity.value }}</strong> -- <span class="cell-mono">{{ issue.code.value }}</span></p>
+      <p class="mb-0">{{ issue.message }}</p>
+      {% if issue.references %}
+      <p class="small text-muted mb-0">Referencias: {{ issue.references | join(", ") }}</p>
+      {% endif %}
+      {% if issue.diagnostics %}
+      <details class="collapsible"><summary><span class="collapsible-title">Diagnostico</span></summary>
+      <ul>{% for note in issue.diagnostics %}<li>{{ note }}</li>{% endfor %}</ul>
+      </details>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty-state">
+  <p>No hay issues que coincidan con el filtro.</p>
+</div>
+{% endif %}
+</div>

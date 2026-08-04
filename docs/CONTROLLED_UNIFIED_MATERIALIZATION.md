@@ -327,3 +327,7 @@ generaciones y eventos orphan quedan reservadas a una fase futura.
   downstream real cuyo resultado (`ContextPackage`/`RuleDraft`/
   `GuardrailReport`) esta fase materializa bajo `activation/` cuando
   una autorización lo aprueba.
+- `docs/OPERATIONAL_GOVERNANCE_UI.md` (Fase 15A): capa read-only (API +
+  UI) que audita y expone el puntero activo, las generaciones, la
+  cadena de eventos y los artifacts resolubles que esta fase produce
+  — sin ejecutar jamás una activación, un fallback ni un rollback.

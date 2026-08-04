@@ -422,6 +422,23 @@ table.compact th, table.compact td { padding: 0.4rem 0.6rem; font-size: 0.85rem;
   background: var(--info-bg); color: var(--info);
 }
 
+/* Gobierno operativo (Fase 15A): mismo esquema de color que los estados
+   productivos de arriba -- nunca un nuevo lenguaje visual. */
+.badge-healthy_v1, .badge-healthy_unified, .badge-valid, .badge-available,
+.badge-active, .badge-passed, .badge-resolved {
+  background: var(--success-bg); color: var(--success);
+}
+.badge-blocked, .badge-invalid, .badge-corrupt, .badge-blocking {
+  background: var(--danger-bg); color: var(--danger);
+}
+.badge-degraded, .badge-missing, .badge-orphan {
+  background: var(--warning-bg); color: var(--warning);
+}
+.badge-not_initialized, .badge-not_available_in_lane, .badge-not_evaluated,
+.badge-previous, .badge-historical, .badge-fallback, .badge-info {
+  background: var(--info-bg); color: var(--info);
+}
+
 .badge-dot {
   width: 0.5rem; height: 0.5rem;
   border-radius: 50%;

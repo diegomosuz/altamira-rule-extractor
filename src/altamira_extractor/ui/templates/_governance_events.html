@@ -1,0 +1,40 @@
+{% from "_components.html" import status_badge %}
+<div id="governance-events">
+<div class="table-scroll">
+<table>
+  <caption class="visually-hidden">Cadena de eventos de activacion (confirmados y huerfanos)</caption>
+  <thead>
+    <tr>
+      <th scope="col">Secuencia</th>
+      <th scope="col">Accion</th>
+      <th scope="col">Desde</th>
+      <th scope="col">Hacia</th>
+      <th scope="col">Lane resultante</th>
+      <th scope="col">Confirmado</th>
+      <th scope="col">Event ID</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for event in events %}
+    <tr data-status="{{ 'confirmed' if event.confirmed else 'orphan' }}">
+      <td>{{ event.sequence }}</td>
+      <td class="cell-mono">{{ event.action }}</td>
+      <td class="cell-mono small text-muted">{{ event.from_generation_id or "No aplica" }}</td>
+      <td class="cell-mono small text-muted">{{ event.to_generation_id }}</td>
+      <td>{{ event.resulting_lane.value }}</td>
+      <td>
+        {% if event.confirmed %}
+        <span class="badge badge-succeeded"><span class="badge-dot" aria-hidden="true"></span>Confirmado</span>
+        {% else %}
+        <span class="badge badge-orphan"><span class="badge-dot" aria-hidden="true"></span>Huerfano (no confirmado)</span>
+        {% endif %}
+      </td>
+      <td class="cell-mono small text-muted">{{ event.event_id }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7">No hay eventos registrados.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</div>

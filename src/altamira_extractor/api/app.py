@@ -55,6 +55,7 @@ from ..ui.presentation import omit_keys, program_name_from_source_file, status_l
 from ..ui.router import router as ui_router
 from .errors import ApiError, ExecutorAtCapacityError
 from .executor import RunExecutor
+from .routers.governance import router as governance_router
 from .routers.health import router as health_router
 from .routers.runs import router as runs_router
 
@@ -95,9 +96,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _render_error(
-    request: Request, *, status_code: int, code: str, message: str
-) -> Response:
+def _render_error(request: Request, *, status_code: int, code: str, message: str) -> Response:
     if _is_ui_path(request.url.path):
         templates: Jinja2Templates = request.app.state.templates
         return templates.TemplateResponse(
@@ -144,6 +143,7 @@ def create_app(settings: Settings) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(runs_router)
+    app.include_router(governance_router)
     app.include_router(ui_router)
 
     @app.get("/", include_in_schema=False)
@@ -173,9 +173,7 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def _handle_validation_error(
-        request: Request, exc: RequestValidationError
-    ) -> Response:
+    async def _handle_validation_error(request: Request, exc: RequestValidationError) -> Response:
         return _render_error(
             request,
             status_code=422,
@@ -184,9 +182,7 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def _handle_http_exception(
-        request: Request, exc: StarletteHTTPException
-    ) -> Response:
+    async def _handle_http_exception(request: Request, exc: StarletteHTTPException) -> Response:
         return _render_error(
             request, status_code=exc.status_code, code="http_error", message=str(exc.detail)
         )

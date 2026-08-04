@@ -253,6 +253,9 @@ evaluación producida aquí como precondición de toda materialización.
 - `docs/CONTROLLED_UNIFIED_MATERIALIZATION.md` (Fase 14B):
   materialización controlada, routing atómico, fallback y rollback
   reales, construidos sobre la evaluación de este control plane.
+- `docs/OPERATIONAL_GOVERNANCE_UI.md` (Fase 15A): proyecta la
+  disposición de readiness de este control plane en la UI/API de
+  gobierno operativo read-only.
 - `docs/UNIFIED_SHADOW_DOWNSTREAM_PIPELINE.md` (Fase 13): ejecución
   downstream real (`ContextPackage`/`RuleDraft`/`GuardrailReport`)
   cuyo resultado este control plane compara contra V1.

@@ -37,6 +37,14 @@ def test_at_least_the_expected_templates_exist() -> None:
         # e iconos SVG inline) -- nunca logica nueva, solo presentacion.
         "_icons.html",
         "_components.html",
+        # Gobierno operativo read-only (Fase 15A).
+        "governance.html",
+        "_governance_summary.html",
+        "_governance_artifacts.html",
+        "_governance_events.html",
+        "_governance_generations.html",
+        "_governance_groups.html",
+        "_governance_issues.html",
     }
 
 

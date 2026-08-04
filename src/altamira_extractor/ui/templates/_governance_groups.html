@@ -1,0 +1,57 @@
+{% from "_components.html" import status_badge %}
+<div id="governance-groups">
+{% if overview.active_lane and overview.active_lane.value == "UNIFIED" %}
+<form class="filter-bar" method="get"
+  action="{{ url_for('ui_governance', run_id=run_id) }}#grupos"
+  hx-get="{{ url_for('ui_governance_groups_fragment', run_id=run_id) }}"
+  hx-target="#governance-groups" hx-swap="outerHTML" hx-push-url="false">
+  <label for="group-filter-guardrail">Estado de guardrail</label>
+  <select id="group-filter-guardrail" name="guardrail_status">
+    <option value="" {{ "selected" if not filters.guardrail_status }}>Todos</option>
+    {% for value in ("PASSED", "REJECTED", "NOT_EVALUATED") %}
+    <option value="{{ value }}" {{ "selected" if filters.guardrail_status == value }}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-sm btn-secondary">Filtrar</button>
+</form>
+
+{% if groups %}
+{% for group in groups %}
+<details class="collapsible" id="group-{{ group.group_id }}">
+  <summary><span class="collapsible-title">{{ group.group_id }} -- {{ group.rule_family }} ({{ group.program }})</span> {{ status_badge(group.guardrail_status) }}</summary>
+  <dl class="meta-grid">
+    <dt>Programa</dt><dd class="cell-mono">{{ group.program }}</dd>
+    <dt>Target</dt><dd class="cell-mono">{{ group.target or "No informado" }}</dd>
+    <dt>Output literal</dt><dd class="cell-mono">{{ group.output_literal or "No informado" }}</dd>
+    <dt>Context package record</dt><dd class="cell-mono small text-muted">{{ group.context_package_record_id or "No disponible" }}</dd>
+    <dt>Rule draft record</dt><dd class="cell-mono small text-muted">{{ group.rule_draft_record_id or "No disponible" }}</dd>
+  </dl>
+  <p><strong>Members</strong> ({{ group.member_ids | length }}):</p>
+  <ul>{% for member_id in group.member_ids %}<li class="cell-mono small">{{ member_id }}</li>{% endfor %}</ul>
+  <p><strong>Candidatos fuente</strong> ({{ group.source_candidate_ids | length }}):</p>
+  <ul>{% for candidate_id in group.source_candidate_ids %}<li class="cell-mono small">{{ candidate_id }}</li>{% endfor %}</ul>
+  <p><strong>Decisiones de revision</strong> ({{ group.review_decision_ids | length }}):</p>
+  <ul>{% for decision_id in group.review_decision_ids %}<li class="cell-mono small">{{ decision_id }}</li>{% endfor %}</ul>
+  <p><strong>Evidence</strong> ({{ group.evidence_ids | length }}):</p>
+  <ul>{% for evidence_id in group.evidence_ids %}<li class="cell-mono small">{{ evidence_id }}</li>{% endfor %}</ul>
+  {% if group.evidence_aliases %}
+  <p><strong>Aliases de evidence</strong>:</p>
+  <ul>{% for alias in group.evidence_aliases %}<li class="cell-mono small">{{ alias }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if group.provenance_references %}
+  <p><strong>Provenance</strong>:</p>
+  <ul>{% for reference in group.provenance_references %}<li class="cell-mono small">{{ reference }}</li>{% endfor %}</ul>
+  {% endif %}
+</details>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+  <p>No hay grupos unified que coincidan con el filtro.</p>
+</div>
+{% endif %}
+{% else %}
+<div class="empty-state">
+  <p>El lane activo es V1 (o la activacion no esta inicializada): no existen grupos unified que mostrar.</p>
+</div>
+{% endif %}
+</div>

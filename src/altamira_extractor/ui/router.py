@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFi
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..api.errors import ApiError
+from ..api.errors import ApiError, RunNotFoundError
 from ..api.executor import RunExecutor
 from ..api.mappers import build_rule_response
 from ..api.reads import (
@@ -29,8 +29,19 @@ from ..config import Settings
 from ..contracts.context_manifest import ContextDirectoryManifest
 from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.guardrail_manifest import GuardrailDirectoryManifest
+from ..contracts.operational_governance import (
+    GovernanceEventSummary,
+    GovernanceGenerationSummary,
+    GovernanceIssue,
+    GovernanceUnifiedGroupSummary,
+    OperationalGovernanceOverview,
+)
 from ..contracts.rule_draft_manifest import RuleDraftDirectoryManifest
 from ..contracts.run_state import RunState
+from ..pipeline.operational_governance_reader import (
+    OperationalGovernanceReadError,
+    build_operational_governance_overview,
+)
 from .csrf import verify_same_origin
 from .deps import get_executor, get_settings, get_templates
 from .presentation import program_name_from_source_file
@@ -267,9 +278,7 @@ def run_status_fragment_ui(
     )
 
 
-@router.post(
-    "/runs/{run_id}/resume", name="ui_resume", dependencies=[Depends(verify_same_origin)]
-)
+@router.post("/runs/{run_id}/resume", name="ui_resume", dependencies=[Depends(verify_same_origin)])
 def resume_ui(
     request: Request,
     run_id: str,
@@ -397,3 +406,244 @@ def download_ui(
     state = read_run_state(run_dir)
     require_stage_succeeded(state, PipelineStage.COMPLETED)
     return templates.TemplateResponse(request, "download.html", {"run_id": run_id, "run": state})
+
+
+def _load_governance_overview(settings: Settings, run_id: str) -> OperationalGovernanceOverview:
+    """UNICO punto de entrada de lectura para toda la UI de gobierno
+    (Fase 15A Parte 8) -- traduce `OperationalGovernanceReadError` (run
+    ilegible) a `RunNotFoundError` (404), mismo comportamiento que el
+    resto de la UI para un run inexistente/corrupto."""
+    run_dir = _run_dir(settings, run_id)
+    try:
+        return build_operational_governance_overview(run_dir, run_id)
+    except OperationalGovernanceReadError as exc:
+        raise RunNotFoundError() from exc
+
+
+def _filter_generations(
+    generations: list[GovernanceGenerationSummary],
+    *,
+    lane: str | None,
+    generation_kind: str | None,
+    reachability: str | None,
+) -> list[GovernanceGenerationSummary]:
+    result = generations
+    if lane:
+        result = [g for g in result if g.lane is not None and g.lane.value == lane]
+    if generation_kind:
+        result = [g for g in result if g.kind is not None and g.kind.value == generation_kind]
+    if reachability:
+        result = [g for g in result if g.reachability.value == reachability]
+    return result
+
+
+def _filter_issues(
+    issues: list[GovernanceIssue], *, issue_severity: str | None
+) -> list[GovernanceIssue]:
+    if issue_severity:
+        return [i for i in issues if i.severity.value == issue_severity]
+    return issues
+
+
+def _filter_groups(
+    groups: list[GovernanceUnifiedGroupSummary], *, guardrail_status: str | None
+) -> list[GovernanceUnifiedGroupSummary]:
+    if guardrail_status:
+        return [g for g in groups if g.guardrail_status == guardrail_status]
+    return groups
+
+
+def _governance_context(
+    run_id: str,
+    overview: OperationalGovernanceOverview,
+    *,
+    lane: str | None,
+    generation_kind: str | None,
+    reachability: str | None,
+    issue_severity: str | None,
+    guardrail_status: str | None,
+) -> dict[str, object]:
+    available_artifact_count = sum(1 for a in overview.artifacts if a.status.value == "AVAILABLE")
+    return {
+        "run_id": run_id,
+        "overview": overview,
+        "available_artifact_count": available_artifact_count,
+        "orphan_total_count": overview.orphan_generation_count + overview.orphan_event_count,
+        "filters": {
+            "lane": lane or "",
+            "generation_kind": generation_kind or "",
+            "reachability": reachability or "",
+            "issue_severity": issue_severity or "",
+            "guardrail_status": guardrail_status or "",
+        },
+        "generations": _filter_generations(
+            overview.generations,
+            lane=lane,
+            generation_kind=generation_kind,
+            reachability=reachability,
+        ),
+        "events": overview.events,
+        "issues": _filter_issues(overview.issues, issue_severity=issue_severity),
+        "groups": _filter_groups(overview.unified_groups, guardrail_status=guardrail_status),
+    }
+
+
+@router.get("/runs/{run_id}/governance", response_class=HTMLResponse, name="ui_governance")
+def governance_ui(
+    request: Request,
+    run_id: str,
+    lane: str | None = None,
+    generation_kind: str | None = None,
+    reachability: str | None = None,
+    issue_severity: str | None = None,
+    guardrail_status: str | None = None,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    context = _governance_context(
+        run_id,
+        overview,
+        lane=lane,
+        generation_kind=generation_kind,
+        reachability=reachability,
+        issue_severity=issue_severity,
+        guardrail_status=guardrail_status,
+    )
+    return templates.TemplateResponse(request, "governance.html", context)
+
+
+@router.get(
+    "/runs/{run_id}/governance/summary-fragment",
+    response_class=HTMLResponse,
+    name="ui_governance_summary_fragment",
+)
+def governance_summary_fragment_ui(
+    request: Request,
+    run_id: str,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    context = _governance_context(
+        run_id,
+        overview,
+        lane=None,
+        generation_kind=None,
+        reachability=None,
+        issue_severity=None,
+        guardrail_status=None,
+    )
+    return templates.TemplateResponse(request, "_governance_summary.html", context)
+
+
+@router.get(
+    "/runs/{run_id}/governance/artifacts-fragment",
+    response_class=HTMLResponse,
+    name="ui_governance_artifacts_fragment",
+)
+def governance_artifacts_fragment_ui(
+    request: Request,
+    run_id: str,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    return templates.TemplateResponse(
+        request, "_governance_artifacts.html", {"run_id": run_id, "overview": overview}
+    )
+
+
+@router.get(
+    "/runs/{run_id}/governance/events-fragment",
+    response_class=HTMLResponse,
+    name="ui_governance_events_fragment",
+)
+def governance_events_fragment_ui(
+    request: Request,
+    run_id: str,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    events: list[GovernanceEventSummary] = overview.events
+    return templates.TemplateResponse(
+        request, "_governance_events.html", {"run_id": run_id, "events": events}
+    )
+
+
+@router.get(
+    "/runs/{run_id}/governance/generations-fragment",
+    response_class=HTMLResponse,
+    name="ui_governance_generations_fragment",
+)
+def governance_generations_fragment_ui(
+    request: Request,
+    run_id: str,
+    lane: str | None = None,
+    generation_kind: str | None = None,
+    reachability: str | None = None,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    context = _governance_context(
+        run_id,
+        overview,
+        lane=lane,
+        generation_kind=generation_kind,
+        reachability=reachability,
+        issue_severity=None,
+        guardrail_status=None,
+    )
+    return templates.TemplateResponse(request, "_governance_generations.html", context)
+
+
+@router.get(
+    "/runs/{run_id}/governance/groups-fragment",
+    response_class=HTMLResponse,
+    name="ui_governance_groups_fragment",
+)
+def governance_groups_fragment_ui(
+    request: Request,
+    run_id: str,
+    guardrail_status: str | None = None,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    context = _governance_context(
+        run_id,
+        overview,
+        lane=None,
+        generation_kind=None,
+        reachability=None,
+        issue_severity=None,
+        guardrail_status=guardrail_status,
+    )
+    return templates.TemplateResponse(request, "_governance_groups.html", context)
+
+
+@router.get(
+    "/runs/{run_id}/governance/issues-fragment",
+    response_class=HTMLResponse,
+    name="ui_governance_issues_fragment",
+)
+def governance_issues_fragment_ui(
+    request: Request,
+    run_id: str,
+    issue_severity: str | None = None,
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    overview = _load_governance_overview(settings, run_id)
+    context = _governance_context(
+        run_id,
+        overview,
+        lane=None,
+        generation_kind=None,
+        reachability=None,
+        issue_severity=issue_severity,
+        guardrail_status=None,
+    )
+    return templates.TemplateResponse(request, "_governance_issues.html", context)

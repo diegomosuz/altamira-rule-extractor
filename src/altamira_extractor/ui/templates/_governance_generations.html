@@ -1,0 +1,65 @@
+{% from "_components.html" import status_badge %}
+<div id="governance-generations">
+<form class="filter-bar" method="get"
+  action="{{ url_for('ui_governance', run_id=run_id) }}#generaciones"
+  hx-get="{{ url_for('ui_governance_generations_fragment', run_id=run_id) }}"
+  hx-target="#governance-generations" hx-swap="outerHTML" hx-push-url="false">
+  <label for="gen-filter-lane">Lane</label>
+  <select id="gen-filter-lane" name="lane">
+    <option value="" {{ "selected" if not filters.lane }}>Todos</option>
+    <option value="V1" {{ "selected" if filters.lane == "V1" }}>V1</option>
+    <option value="UNIFIED" {{ "selected" if filters.lane == "UNIFIED" }}>UNIFIED</option>
+  </select>
+  <label for="gen-filter-kind">Tipo</label>
+  <select id="gen-filter-kind" name="generation_kind">
+    <option value="" {{ "selected" if not filters.generation_kind }}>Todos</option>
+    <option value="V1_BASELINE" {{ "selected" if filters.generation_kind == "V1_BASELINE" }}>V1_BASELINE</option>
+    <option value="UNIFIED_CANARY" {{ "selected" if filters.generation_kind == "UNIFIED_CANARY" }}>UNIFIED_CANARY</option>
+    <option value="UNIFIED_PRIMARY" {{ "selected" if filters.generation_kind == "UNIFIED_PRIMARY" }}>UNIFIED_PRIMARY</option>
+  </select>
+  <label for="gen-filter-reachability">Reachability</label>
+  <select id="gen-filter-reachability" name="reachability">
+    <option value="" {{ "selected" if not filters.reachability }}>Todos</option>
+    {% for value in ("ACTIVE", "PREVIOUS", "FALLBACK", "HISTORICAL", "ORPHAN") %}
+    <option value="{{ value }}" {{ "selected" if filters.reachability == value }}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-sm btn-secondary">Filtrar</button>
+</form>
+
+<div class="table-scroll">
+<table>
+  <caption class="visually-hidden">Generaciones persistidas (V1 y unified)</caption>
+  <thead>
+    <tr>
+      <th scope="col">Generation ID</th>
+      <th scope="col">Lane</th>
+      <th scope="col">Tipo</th>
+      <th scope="col">Reachability</th>
+      <th scope="col">Integridad</th>
+      <th scope="col">Archivos</th>
+      <th scope="col">Grupos aprobados</th>
+      <th scope="col">Fallback</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for generation in generations %}
+    <tr>
+      <td class="cell-mono small">
+        <a href="{{ url_for('ui_governance', run_id=run_id) }}#gen-{{ generation.generation_id }}">{{ generation.generation_id }}</a>
+      </td>
+      <td>{{ generation.lane.value if generation.lane else "Desconocido" }}</td>
+      <td>{{ generation.kind.value if generation.kind else "Desconocido" }}</td>
+      <td>{{ status_badge(generation.reachability.value) }}</td>
+      <td>{{ status_badge(generation.manifest_integrity.value) }}</td>
+      <td>{{ generation.file_count }}</td>
+      <td>{{ generation.approved_group_ids | length }}</td>
+      <td class="cell-mono small text-muted">{{ generation.fallback_generation_id or "No aplica" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8">No hay generaciones que coincidan con el filtro.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</div>

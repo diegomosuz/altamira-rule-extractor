@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set active_nav = "runs" %}
+{% block title %}Gobierno operativo {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Gobierno operativo", none)]) }}
+</div>
+{% endblock %}
+{% block content %}
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>Gobierno operativo</h1>
+    <p class="page-lede">Lane activo, integridad de generaciones, cadena de eventos y artefactos resolubles de este run -- exclusivamente de lectura.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ icon("arrow-left") }}Volver al detalle</a>
+</div>
+
+<div class="alert alert-info" role="status">
+  {{ icon("alert") }}
+  <div>
+    <p class="mb-0"><strong>Esta pantalla es exclusivamente de lectura.</strong></p>
+    <p class="mb-0">Las operaciones de activacion requieren autorizacion explicita y se realizan fuera de esta interfaz.</p>
+    <p class="small text-muted mb-0">Esta aplicacion no implementa autenticacion de usuario. La validacion mostrada aqui es estructural: nunca equivale a una validacion funcional.</p>
+  </div>
+</div>
+
+<section aria-labelledby="governance-summary-heading">
+  <h2 id="governance-summary-heading">Resumen</h2>
+  {% include "_governance_summary.html" %}
+</section>
+
+<section aria-labelledby="governance-artifacts-heading" id="artefactos">
+  <h2 id="governance-artifacts-heading">Artefactos del lane activo</h2>
+  {% include "_governance_artifacts.html" %}
+</section>
+
+<section aria-labelledby="governance-events-heading" id="historial">
+  <h2 id="governance-events-heading">Historial de eventos</h2>
+  {% include "_governance_events.html" %}
+</section>
+
+<section aria-labelledby="governance-generations-heading" id="generaciones">
+  <h2 id="governance-generations-heading">Generaciones</h2>
+  {% include "_governance_generations.html" %}
+</section>
+
+<section aria-labelledby="governance-groups-heading" id="grupos">
+  <h2 id="governance-groups-heading">Grupos unified</h2>
+  {% include "_governance_groups.html" %}
+</section>
+
+<section aria-labelledby="governance-issues-heading" id="issues">
+  <h2 id="governance-issues-heading">Issues</h2>
+  {% include "_governance_issues.html" %}
+</section>
+{% endblock %}

@@ -1,0 +1,75 @@
+{% from "_components.html" import status_badge %}
+<div id="governance-summary">
+  <dl class="meta-grid">
+    <dt>Run ID</dt><dd class="cell-mono">{{ overview.run_id }}</dd>
+    <dt>Etapa del pipeline</dt><dd>{{ status_badge(overview.run_stage) }}</dd>
+    <dt>Estado de gobierno</dt><dd>{{ status_badge(overview.status.value) }}</dd>
+    <dt>Lane activo</dt>
+    <dd>{{ status_badge(overview.active_lane.value) if overview.active_lane else "No inicializado" }}</dd>
+    <dt>Tipo de generacion activa</dt>
+    <dd>{{ overview.active_generation_kind.value if overview.active_generation_kind else "No informado" }}</dd>
+    <dt>Version de puntero</dt>
+    <dd>{{ overview.pointer_version if overview.pointer_version is not none else "No informado" }}</dd>
+    <dt>Integridad del manifiesto activo</dt>
+    <dd>{{ status_badge(overview.active_manifest_integrity.value) }}</dd>
+    <dt>Cadena de eventos</dt><dd>{{ status_badge(overview.event_chain_status.value) }}</dd>
+  </dl>
+
+  <div class="card-grid" role="group" aria-label="resumen de gobierno operativo">
+    <div class="stat-card">
+      <p class="stat-value cell-mono small">{{ overview.active_generation_id or "--" }}</p>
+      <p class="stat-label mb-0">Generacion activa</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-value cell-mono small">{{ overview.previous_generation_id or "--" }}</p>
+      <p class="stat-label mb-0">Generacion anterior</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-value cell-mono small">{{ overview.fallback_generation_id or "--" }}</p>
+      <p class="stat-label mb-0">Fallback V1</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-value">{{ overview.readiness.readiness_disposition if overview.readiness else "No disponible" }}</p>
+      <p class="stat-label mb-0">Readiness de activacion</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-value">{{ overview.event_chain_length }}</p>
+      <p class="stat-label mb-0">Eventos confirmados</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-value">{{ overview.generation_count }}</p>
+      <p class="stat-label mb-0">Generaciones</p>
+    </div>
+    <div class="stat-card {{ 'stat-warning' if orphan_total_count else '' }}">
+      <p class="stat-value">{{ orphan_total_count }}</p>
+      <p class="stat-label mb-0">Huerfanos (generaciones + eventos)</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-value">{{ available_artifact_count }}</p>
+      <p class="stat-label mb-0">Artefactos disponibles</p>
+    </div>
+  </div>
+
+  {% if overview.readiness %}
+  <h2>Readiness de activacion (Fase 14A)</h2>
+  <dl class="meta-grid">
+    <dt>Modo</dt><dd class="cell-mono">{{ overview.readiness.mode }}</dd>
+    <dt>Lane solicitado</dt><dd class="cell-mono">{{ overview.readiness.requested_lane }}</dd>
+    <dt>Lane efectivo</dt><dd class="cell-mono">{{ overview.readiness.effective_lane }}</dd>
+    <dt>Lane de fallback</dt><dd class="cell-mono">{{ overview.readiness.fallback_lane }}</dd>
+    <dt>Disposicion</dt><dd class="cell-mono">{{ overview.readiness.readiness_disposition }}</dd>
+    <dt>Decision</dt><dd class="cell-mono">{{ overview.readiness.activation_decision }}</dd>
+    <dt>Canary seleccionado</dt>
+    <dd>{% if overview.readiness.canary_selected is none %}No aplica{% elif overview.readiness.canary_selected %}Si{% else %}No{% endif %}</dd>
+    <dt>Materializacion habilitada en la evaluacion</dt>
+    <dd>{{ "Si" if overview.readiness.materialization_enabled else "No" }}</dd>
+    <dt>Equivalentes exactos V1/unified</dt><dd>{{ overview.readiness.exact_equivalent_count }}</dd>
+    <dt>Adiciones unified</dt><dd>{{ overview.readiness.unified_additive_count }}</dd>
+    <dt>Solo en V1</dt><dd>{{ overview.readiness.v1_only_count }}</dd>
+    <dt>Conflictos</dt><dd>{{ overview.readiness.conflicting_count }}</dd>
+    <dt>Issues bloqueantes (evaluacion Fase 14A)</dt><dd>{{ overview.readiness.blocking_issue_count }}</dd>
+  </dl>
+  {% else %}
+  <p class="text-muted">No existe una evaluacion de activacion (Fase 14A) para este run.</p>
+  {% endif %}
+</div>
