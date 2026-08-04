@@ -560,6 +560,24 @@ class UnifiedCandidatesShadowError(PipelineError):
     candidates-shadow.json` parcial cuando esta excepcion se lanza."""
 
 
+class UnifiedShadowValidationError(PipelineError):
+    """Fallo DURO de `unified_shadow_validation_service.py` (Fase 12 de
+    la ampliacion semantica, validacion diferencial del artefacto
+    unificado en shadow mode, no-contractual, diagnostico bajo
+    demanda): el run no existe, `run.json` es invalido, el run no
+    alcanzo PARSED (SUCCEEDED), el run no registra
+    `source_package_hash`, o la escritura atomica del reporte fallo.
+    Deliberadamente NUNCA se lanza por una fuente estructural ausente o
+    invalida (`CandidateArtifact` V1, V2/interprocedural, assessment,
+    review package, plan, `UnifiedCandidatesShadowArtifact`) -- esa
+    situacion es una respuesta VALIDA de la validacion misma
+    (`UnifiedShadowValidationDisposition.NOT_EVALUATED`), nunca un
+    error de servicio: el reporte se genera y persiste igual. El
+    mensaje nunca incluye una ruta absoluta ni el contenido de un JSON
+    invalido. Nunca se persiste un `diagnostics/unified-shadow-
+    validation-report.json` parcial cuando esta excepcion se lanza."""
+
+
 class CandidatePromotionAssessmentError(PipelineError):
     """Fallo de `candidate_promotion_assessment_service.py`/
     `candidate_promotion_assessment_analyzer.py` (Fase 9 de la

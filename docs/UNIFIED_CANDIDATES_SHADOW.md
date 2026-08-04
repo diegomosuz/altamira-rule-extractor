@@ -281,7 +281,11 @@ Markdown, nunca reemplaza `artifacts/06-candidates.json`, nunca crea un
 Fase 11 tampoco resuelve la promoción real (deuda documentada desde
 Fase 9/10): un eventual flujo que tome un grupo shadow `VALID` y lo
 promueva a `CandidateArtifact` V1 productivo permanece fuera de
-alcance, para una fase futura.
+alcance, para una fase futura. Fase 12
+(`docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md`) da el primer paso
+hacia esa promoción futura: valida, de forma determinista y
+estructural (nunca funcional), si este artefacto está listo para
+alimentar un flujo downstream también en shadow mode.
 
 ## Ver también
 
@@ -289,3 +293,5 @@ alcance, para una fase futura.
   relaciones, conflictos, disposiciones.
 - `docs/CONTROLLED_CANDIDATE_PROMOTION_PLAN.md` (Fase 10): paquete de
   revisión humana y plan de promoción en dry-run.
+- `docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md` (Fase 12):
+  validación diferencial estructural de este artefacto contra V1.

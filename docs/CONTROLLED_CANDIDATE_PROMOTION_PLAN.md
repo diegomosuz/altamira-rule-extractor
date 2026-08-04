@@ -226,3 +226,9 @@ artefacto diagnostico, el baseline V1 inmutable junto a las propuestas
 shadow ya aprobadas por un humano — agrupando exclusivamente las que
 Fase 9 ya demostro `EXACT_MATCH` entre si. Sigue sin ser una promocion
 real: Fase 11 tampoco escribe en Neo4j ni genera reglas.
+
+Fase 12 (`docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md`) valida, de
+forma determinista y puramente estructural, si el artefacto de Fase 11
+esta listo para alimentar un eventual flujo downstream tambien en
+shadow mode — sigue sin ser una promocion real ni una validacion
+funcional.

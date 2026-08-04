@@ -21,6 +21,7 @@ Uso:
     python -m altamira_extractor.cli candidate-promotion-review-package <run_id> [--json]
     python -m altamira_extractor.cli candidate-promotion-plan <run_id> --decisions <path> [--json]
     python -m altamira_extractor.cli unified-candidates-shadow <run_id> [--json]
+    python -m altamira_extractor.cli unified-shadow-validate <run_id> [--json]
 
 `semantic-coverage` (Fase 1 de la ampliacion semantica,
 `feat/semantic-expansion-foundation`) calcula y persiste
@@ -181,6 +182,33 @@ unicamente que RUN_ID haya alcanzado PARSED (SUCCEEDED). Nunca modifica
 preexistente; nunca crea un candidato nuevo, nunca genera
 `ContextPackage`/`RuleDraft`/reglas Markdown, nunca escribe en Neo4j.
 
+`unified-shadow-validate` (Fase 12 de la ampliacion semantica,
+`feat/unified-shadow-differential-validation`) calcula y persiste
+`<run_dir>/diagnostics/unified-shadow-validation-report.json`: un
+reporte NO contractual, generado exclusivamente bajo demanda, que
+determina si un `UnifiedCandidatesShadowArtifact` (Fase 11) cumple las
+condiciones TECNICAS minimas para alimentar, en una fase posterior, un
+flujo downstream tambien en shadow mode -- ver docs/
+UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md. Distingue SIEMPRE validez
+ESTRUCTURAL (verificable automaticamente) de correccion FUNCIONAL
+(nunca inferida); `QUALIFIED_FOR_DOWNSTREAM_SHADOW` nunca significa
+regla validada, candidato promovido ni autorizacion productiva.
+Requiere que RUN_ID haya alcanzado PARSED (SUCCEEDED) Y que
+`diagnostics/unified-candidates-shadow.json` exista y sea valido -- el
+objeto PRINCIPAL de esta validacion, nunca una fuente opcional: su
+ausencia, JSON invalido, version incompatible o contrato Pydantic
+invalido es SIEMPRE un error de comando (exit code distinto de cero,
+sin reporte generado). La ausencia o invalidez de cualquier fuente
+SECUNDARIA (`CandidateArtifact` V1, V2/interprocedural, assessment,
+review package, plan) nunca es un error de comando -- se refleja como
+un hallazgo representable dentro del reporte (`NOT_EVALUATED`,
+`BLOCKED`, `REVIEW_REQUIRED` segun la causa), que igual se genera y
+persiste. Nunca modifica `run.json`, ningun `artifacts/01-10` ni
+ningun otro `diagnostics/` preexistente; nunca regenera el artefacto
+unificado, un plan o una decision humana ausentes; nunca promueve ni
+modifica ningun candidato; nunca accede a Neo4j ni invoca un proveedor
+LLM.
+
 Opera directamente sobre el filesystem local y las funciones Python
 compartidas del pipeline (`pipeline/runner.py`) y de lectura de
 artefactos (`api/reads.py`, `api/downloads.py`, `api/validation.py`,
@@ -236,6 +264,7 @@ from .pipeline.candidate_promotion_review_service import (
     compute_candidate_promotion_review_package,
     write_candidate_promotion_review_package,
 )
+from .pipeline.errors import PipelineError
 from .pipeline.interprocedural_call_linkage_service import (
     compute_interprocedural_call_linkage_artifact,
     write_interprocedural_call_linkage_artifact,
@@ -264,6 +293,10 @@ from .pipeline.semantic_propagation_service import (
 from .pipeline.unified_candidates_shadow_service import (
     compute_unified_candidates_shadow_artifact,
     write_unified_candidates_shadow_artifact,
+)
+from .pipeline.unified_shadow_validation_service import (
+    compute_unified_shadow_validation_report,
+    write_unified_shadow_validation_report,
 )
 from .pipeline.v2_shadow_candidates_service import (
     compute_v2_shadow_candidates_artifact,
@@ -369,6 +402,13 @@ UnifiedCandidatesShadowJsonOption = Annotated[
         help="Imprime el UnifiedCandidatesShadowArtifact completo en JSON estable",
     ),
 ]
+UnifiedShadowValidationJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json",
+        help="Imprime el UnifiedShadowValidationReport completo en JSON estable",
+    ),
+]
 
 # Exit codes estables (Prompt 13c). Mapeados por `ApiError.code` (nunca por
 # texto de mensaje): "resource not found" -> 3, "etapa/estado no valido
@@ -405,7 +445,25 @@ def _guard[**P, R](func: Callable[P, R]) -> Callable[P, R]:
     de `_EXIT_CODE_BY_ERROR_CODE`). `typer.Exit` (usado por `ingest`/
     `resume` para el exit code 1 de un pipeline FAILED) se re-lanza sin
     tocar: este wrapper solo interviene en rutas de error no manejadas
-    explicitamente por el comando."""
+    explicitamente por el comando.
+
+    Ninguna rama de este wrapper adjunta `exc_info` a un `LogRecord`
+    (nunca `logger.exception(...)`, nunca `exc_info=True`): el logger de
+    esta app nunca configura su propio handler (`logging_setup.
+    configure_logging` no se invoca desde el entrypoint CLI), asi que
+    cualquier `LogRecord` con `exc_info` adjunto llegaria al
+    `lastResort` handler de la libreria estandar de Python y este SI
+    imprime el traceback formateado completo en stderr sin impotar que
+    handler lo procese -- verificado empiricamente (`AttributeError`
+    real via subprocess). `PipelineError` (la base comun de TODAS las
+    excepciones de dominio del pipeline, Fase 9-12 incluidas) se
+    distingue de un error verdaderamente inesperado, pero NUNCA se
+    imprime su `str(exc)`: aunque la mayoria de sus subclases
+    documentan mensajes sin ruta absoluta, al menos una
+    (`AtomicWriteError`) documenta explicitamente incluir una ruta
+    destino -- mostrar solo el nombre de la clase es seguro
+    independientemente del contenido real del mensaje, hoy y ante
+    cualquier subclase futura."""
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -422,8 +480,12 @@ def _guard[**P, R](func: Callable[P, R]) -> Callable[P, R]:
         except ApiError as exc:
             typer.echo(exc.message, err=True)
             raise typer.Exit(code=_EXIT_CODE_BY_ERROR_CODE.get(exc.code, 1)) from exc
+        except PipelineError as exc:
+            logger.error("error de dominio en comando CLI: %s", type(exc).__name__)
+            typer.echo(f"error: {type(exc).__name__}", err=True)
+            raise typer.Exit(code=1) from None
         except Exception:
-            logger.exception("error interno inesperado en comando CLI")
+            logger.error("error interno inesperado en comando CLI")
             typer.echo("error interno", err=True)
             raise typer.Exit(code=1) from None
 
@@ -1033,6 +1095,61 @@ def unified_candidates_shadow(
 
     if json_output:
         typer.echo(artifact.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="unified-shadow-validate")
+@_guard
+def unified_shadow_validate(
+    run_id: RunIdArgument, json_output: UnifiedShadowValidationJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/unified-shadow-validation-report.json de RUN_ID.
+
+    Reporte NO contractual, bajo demanda (Fase 12 de la ampliacion
+    semantica, ver docs/UNIFIED_SHADOW_DIFFERENTIAL_VALIDATION.md):
+    determina si diagnostics/unified-candidates-shadow.json (Fase 11)
+    cumple las condiciones TECNICAS minimas para alimentar, en una fase
+    posterior, un flujo downstream tambien en shadow mode -- nunca
+    afirma correccion funcional, nunca promueve ningun candidato.
+    Requiere que RUN_ID haya alcanzado PARSED (SUCCEEDED) Y que
+    diagnostics/unified-candidates-shadow.json exista y sea valido --
+    su ausencia, JSON invalido, version incompatible o contrato
+    Pydantic invalido es SIEMPRE un error de comando (exit code
+    distinto de cero, sin reporte). La ausencia o invalidez de
+    cualquier fuente SECUNDARIA (CandidateArtifact V1, V2/
+    interprocedural, assessment, review package, plan) nunca impide
+    generar el reporte -- se refleja como un hallazgo representable
+    (NOT_EVALUATED/BLOCKED/REVIEW_REQUIRED segun la causa). Nunca
+    modifica run.json, ningun artifacts/01-10 ni ningun otro
+    diagnostics/ preexistente; nunca regenera el artefacto unificado,
+    un plan o una decision humana ausentes; nunca promueve ni modifica
+    ningun candidato; nunca escribe en Neo4j.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    report = compute_unified_shadow_validation_report(run_dir, run_id)
+    report_path = write_unified_shadow_validation_report(run_dir, report)
+    relative_report_path = report_path.relative_to(run_dir).as_posix()
+
+    summary = report.summary
+    gate_status_counts = {
+        status.value: count for status, count in summary.counts_by_gate_status.items()
+    }
+    typer.echo(f"run_id: {report.run_id}")
+    typer.echo(f"disposition: {report.disposition.value}")
+    typer.echo(f"baseline_candidates: {summary.baseline_candidate_count}")
+    typer.echo(f"shadow_members: {summary.shadow_member_count}")
+    typer.echo(f"shadow_groups: {summary.shadow_group_count}")
+    typer.echo(f"downstream_eligible_groups: {summary.downstream_eligible_group_count}")
+    typer.echo(f"errors: {summary.error_count}")
+    typer.echo(f"warnings: {summary.warning_count}")
+    typer.echo(f"blocking_issues: {summary.blocking_issue_count}")
+    typer.echo(f"gates_passed: {gate_status_counts.get('PASS', 0)}")
+    typer.echo(f"gates_failed: {gate_status_counts.get('FAIL', 0)}")
+    typer.echo(f"gates_not_evaluated: {gate_status_counts.get('NOT_EVALUATED', 0)}")
+    typer.echo(f"report: {relative_report_path}")
+
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2, exclude_none=False))
 
 
 @app.command(name="v2-candidates-shadow")
