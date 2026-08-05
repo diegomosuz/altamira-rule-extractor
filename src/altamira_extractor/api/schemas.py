@@ -27,6 +27,16 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
 
 
+class ReadinessResponse(BaseModel):
+    """`ready=false` UNICAMENTE por `config/security.yaml` ausente o
+    invalido (cierre Fase 15B1, "DISABLED_DEV explicito") -- nunca por
+    Neo4j/LLM/runs_dir (esos son fallos por-request, no de arranque).
+    `reason` es `None` cuando `ready=true`."""
+
+    ready: bool
+    reason: Literal["security_misconfigured"] | None
+
+
 class StageExecutionView(BaseModel):
     """Proyeccion 1:1 de `StageExecution` (`contracts/run_state.py`):
     todos sus campos ya son datos pensados para observabilidad, ninguno

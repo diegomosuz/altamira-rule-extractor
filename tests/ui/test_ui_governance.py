@@ -22,6 +22,7 @@ from altamira_extractor.contracts.unified_activation_materialization import (
     MaterializedActivationLane,
 )
 
+from ..e2e_support import write_disabled_dev_security_config
 from ..pipeline._operational_governance_fixtures import (
     build_materialization_fixture,
     governance_run_dir,
@@ -35,7 +36,10 @@ MALICIOUS_PROGRAM = "<script>alert(1)</script>"
 def _settings_for(tmp_path: Path) -> Settings:
     data_dir = tmp_path / "data"
     settings = Settings(
-        data_dir=data_dir, runs_dir=data_dir / "runs", incoming_dir=data_dir / "incoming"
+        data_dir=data_dir,
+        runs_dir=data_dir / "runs",
+        incoming_dir=data_dir / "incoming",
+        security_config_path=write_disabled_dev_security_config(tmp_path),
     )
     settings.runs_dir.mkdir(parents=True, exist_ok=True)
     return settings
@@ -113,7 +117,10 @@ def test_read_only_banner_visible(tmp_path: Path) -> None:
     with TestClient(create_app(settings)) as client:
         response = client.get(f"/ui/runs/{fx.run_id}/governance")
     assert "exclusivamente de lectura" in response.text.lower()
-    assert "las operaciones de activacion requieren autorizacion explicita" in response.text.lower()
+    # Fase 15B1: el aviso ahora enlaza a las acciones operativas
+    # controladas en vez de afirmar que no hay forma de ejecutarlas.
+    assert "requieren autorizacion explicita, permiso rbac y csrf" in response.text.lower()
+    assert "acciones operativas" in response.text.lower()
 
 
 # 79. aviso sin autenticacion.

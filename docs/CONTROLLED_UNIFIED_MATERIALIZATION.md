@@ -311,12 +311,21 @@ globalmente productivo.
 - No hay autenticación, API HTTP ni UI para materialización — solo CLI
   y servicios de aplicación.
 
-## Próxima fase (Fase 15)
+## Próxima fase (Fase 15) — parcialmente entregado en Fase 15B1
 
-Autenticación real de autorizaciones (firma criptográfica o identidad
-verificada), integración productiva opt-in con consumidores reales
-(API/UI), y una política explícita de retención/eliminación de
-generaciones y eventos orphan quedan reservadas a una fase futura.
+Al cierre de esta fase (14B), "identidad de operador verificada" e
+"integración productiva con consumidores reales (API/UI)" quedaban
+reservadas a una fase futura. **Fase 15B1**
+(`docs/SECURITY_AUTHORIZATION_AND_AUDIT.md`) entrega ambas, sin modificar
+ningún componente de esta fase: identidad delegada (`TRUSTED_PROXY_
+HEADERS`) + RBAC + workflow prepare/confirm/execute que invoca, sin
+cambios, `pipeline/unified_materialization_service.py::materialize_
+unified_activation`; y auditoría append-only de QUIÉN autorizó/ejecutó
+cada transición (`OperationalAuditEvent`, arbol `audit/` separado de
+`activation/`), complementaria a la cadena de `ActivationTransitionEvent`
+de esta fase. La firma criptográfica de la autorización en sí (más allá
+de la identidad delegada del operador) y la política de retención/
+eliminación de generaciones/eventos orphan siguen sin resolverse.
 
 ## Ver también
 
@@ -331,3 +340,7 @@ generaciones y eventos orphan quedan reservadas a una fase futura.
   UI) que audita y expone el puntero activo, las generaciones, la
   cadena de eventos y los artifacts resolubles que esta fase produce
   — sin ejecutar jamás una activación, un fallback ni un rollback.
+- `docs/SECURITY_AUTHORIZATION_AND_AUDIT.md` (Fase 15B1): identidad,
+  RBAC, CSRF y workflow controlado que invoca `materialize_unified_
+  activation` de esta fase desde la UI, más la auditoría append-only de
+  operador/revisor/resultado.

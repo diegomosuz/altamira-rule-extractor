@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from altamira_extractor.config import Settings
 
+from ..e2e_support import write_disabled_dev_security_config
 from ..pipeline.conftest import build_valid_package_zip
 from .conftest import SAME_ORIGIN
 
@@ -78,6 +79,7 @@ def test_upload_exceeds_limit_shows_sanitized_error(tmp_path: Path) -> None:
         runs_dir=tmp_path / "data" / "runs",
         incoming_dir=tmp_path / "data" / "incoming",
         max_package_size_bytes=10,
+        security_config_path=write_disabled_dev_security_config(tmp_path),
     )
     with TestClient(create_app(settings)) as client:
         response = client.post(

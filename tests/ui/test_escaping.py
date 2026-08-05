@@ -45,6 +45,12 @@ def test_at_least_the_expected_templates_exist() -> None:
         "_governance_generations.html",
         "_governance_groups.html",
         "_governance_issues.html",
+        # Acciones operativas controladas (Fase 15B1).
+        "governance_actions.html",
+        "governance_action_form.html",
+        "governance_action_confirm.html",
+        "governance_action_result.html",
+        "governance_audit.html",
     }
 
 

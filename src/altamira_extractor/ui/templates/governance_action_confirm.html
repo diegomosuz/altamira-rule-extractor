@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% set active_nav = "runs" %}
+{% block title %}Confirmar {{ intent.action.value }} {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Gobierno operativo", url_for('ui_governance', run_id=run_id)), ("Acciones", url_for('ui_governance_actions', run_id=run_id)), ("Confirmar", none)]) }}
+</div>
+{% endblock %}
+{% block content %}
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>Confirmar {{ intent.action.value }}</h1>
+    <p class="page-lede">Revise los datos antes de ejecutar. Esta pagina NUNCA ejecuta nada por si sola -- la ejecucion ocurre unicamente al enviar el formulario de confirmacion.</p>
+  </div>
+</div>
+
+<div class="alert alert-warning" role="status">
+  {{ icon("alert") }}
+  <p class="mb-0">Este challenge expira automaticamente a los pocos minutos de haberse preparado y solo es valido para esta sesion. Si el estado del run cambio desde que se preparo, la ejecucion se rechazara.</p>
+</div>
+
+<dl class="meta-grid">
+  <dt>Run</dt><dd class="cell-mono">{{ run_id }}</dd>
+  <dt>Accion</dt><dd class="cell-mono">{{ intent.action.value }}</dd>
+  <dt>Puntero de activacion esperado</dt><dd class="cell-mono small">{{ intent.expected_active_pointer_hash }}</dd>
+  {% if intent.target_generation_id %}
+  <dt>Generacion destino</dt><dd class="cell-mono small">{{ intent.target_generation_id }}</dd>
+  {% endif %}
+  <dt>Motivo</dt><dd class="cell-mono">{{ intent.reason_code.value }}</dd>
+  <dt>Referencia de revision</dt><dd>{{ intent.review_reference }}</dd>
+  <dt>Grupos aprobados</dt>
+  <dd>
+    {% if intent.approved_group_ids %}
+    <ul class="mb-0">
+      {% for group_id in intent.approved_group_ids %}
+      <li class="cell-mono small">{{ group_id }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}ninguno{% endif %}
+  </dd>
+  <dt>Preparado por</dt><dd class="cell-mono small">{{ intent.prepared_by_principal_id }}</dd>
+  <dt>Revisor distinto exigido</dt><dd>{{ "Si" if intent.distinct_reviewer_required else "No" }}</dd>
+  <dt>Operador que confirmara</dt><dd class="cell-mono small">{{ principal.principal_id }}</dd>
+</dl>
+
+{% if intent.distinct_reviewer_required and principal.principal_id == intent.prepared_by_principal_id %}
+<div class="alert alert-warning" role="status">
+  {{ icon("alert") }}
+  <p class="mb-0"><strong>Autoaprobacion detectada.</strong> Quien confirma esta accion es la misma identidad que la preparo. La ejecucion sera rechazada.</p>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('ui_governance_execute', run_id=run_id, action=intent.action.value) }}" novalidate>
+  <input type="hidden" name="{{ csrf_field_name }}" value="{{ csrf_token }}">
+  <input type="hidden" name="challenge_token" value="{{ challenge_token }}">
+  <button type="submit" class="btn btn-primary">{{ icon("check") }}Confirmar y ejecutar</button>
+  <a class="btn btn-secondary" href="{{ url_for('ui_governance_actions', run_id=run_id) }}">Cancelar</a>
+</form>
+{% endblock %}

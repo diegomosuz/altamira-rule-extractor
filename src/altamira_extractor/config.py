@@ -30,6 +30,10 @@ DEFAULT_ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
     }
 )
 
+# Piso minimo de longitud de ALTAMIRA_SESSION_SECRET (Fase 15B1, ver
+# Settings._check_session_secret_minimum_length).
+_MIN_SESSION_SECRET_LENGTH = 32
+
 
 def _discover_repo_root(start: Path | None = None) -> Path:
     """Ubica la raiz del repositorio buscando pyproject.toml hacia arriba.
@@ -90,6 +94,10 @@ def _default_prompt_path(filename: str) -> Path:
     return _discover_repo_root() / "prompts" / filename
 
 
+def _default_security_config_path() -> Path:
+    return _discover_repo_root() / "config" / "security.yaml"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -143,9 +151,7 @@ class Settings(BaseSettings):
     # pese al env_prefix="ALTAMIRA_" global de este modelo.
     neo4j_uri: str = Field(default="bolt://localhost:7687", validation_alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", validation_alias="NEO4J_USER")
-    neo4j_password: SecretStr = Field(
-        default=SecretStr("neo4j"), validation_alias="NEO4J_PASSWORD"
-    )
+    neo4j_password: SecretStr = Field(default=SecretStr("neo4j"), validation_alias="NEO4J_PASSWORD")
     neo4j_database: str = Field(default="neo4j", validation_alias="NEO4J_DATABASE")
     neo4j_connection_timeout_seconds: float = Field(default=30.0, gt=0)
     neo4j_max_transaction_retry_time_seconds: float = Field(default=30.0, gt=0)
@@ -191,9 +197,7 @@ class Settings(BaseSettings):
     q7_glossary_cypher_path: Path = Field(
         default_factory=lambda: _default_context_query_path("q7_glossary.cypher")
     )
-    context_package_schema_path: Path = Field(
-        default_factory=_default_context_package_schema_path
-    )
+    context_package_schema_path: Path = Field(default_factory=_default_context_package_schema_path)
 
     # Profundidad de DATA_DEPENDS_ON/CONTROL_DEPENDS_ON usada por
     # Q2/Q3a/Q3b/Q5b (siempre la misma dentro de una misma corrida de
@@ -295,6 +299,48 @@ class Settings(BaseSettings):
     # unicamente por proceso -- V1 requiere un unico worker de Uvicorn (ver
     # docstring de api/app.py). No es una cola externa ni distribuida.
     api_max_workers: int = Field(default=1, ge=1, le=8)
+
+    # Identidad/RBAC/CSRF (Fase 15B1, ver contracts/security_config.py y
+    # security/). `security_config_path` apunta a un YAML EXTERNO NUNCA
+    # versionado (config/security.example.yaml es el unico ejemplo
+    # seguro versionado); su ausencia hace que la aplicacion arranque
+    # en DISABLED_DEV (ver security/security_config_loader.py). El
+    # secreto de firma de sesion NUNCA tiene un default de produccion:
+    # ausente en TRUSTED_PROXY_HEADERS falla de forma segura al
+    # arrancar; en tests se inyecta explicitamente como kwarg (nunca
+    # via archivo real).
+    security_config_path: Path = Field(default_factory=_default_security_config_path)
+    session_secret: SecretStr | None = Field(
+        default=None, validation_alias="ALTAMIRA_SESSION_SECRET"
+    )
+
+    @field_validator("session_secret")
+    @classmethod
+    def _check_session_secret_minimum_length(cls, value: SecretStr | None) -> SecretStr | None:
+        """Defecto real encontrado en la auditoria criptografica de Fase
+        15B1 (cierre): el campo no tenia ningun piso de longitud, por lo
+        que `ALTAMIRA_SESSION_SECRET=x` (una clave HMAC trivialmente
+        adivinable) se aceptaba en silencio. 32 caracteres (>=128 bits
+        de entropia si es hex, mas si es base64/texto libre) es un piso
+        minimo defendible para una clave HMAC-SHA256 -- no reemplaza un
+        generador criptografico real (`secrets.token_hex(32)`
+        recomendado), solo rechaza secretos trivialmente debiles."""
+        if value is not None and len(value.get_secret_value()) < _MIN_SESSION_SECRET_LENGTH:
+            raise ValueError(
+                f"ALTAMIRA_SESSION_SECRET debe tener al menos {_MIN_SESSION_SECRET_LENGTH} "
+                "caracteres (clave HMAC demasiado debil)"
+            )
+        return value
+
+    # Hardening web (Fase 15B1 Parte 14). `trusted_hosts=["*"]` es el
+    # default permisivo de V1 (identico al comportamiento previo a esta
+    # fase) -- un despliegue productivo detras de un reverse proxy debe
+    # fijarlo al hostname real (ver
+    # docs/REVERSE_PROXY_SECURITY_REQUIREMENTS.md). `hsts_enabled=false`
+    # por defecto: V1 no garantiza que el trafico llegue por HTTPS: solo
+    # el operador del proxy TLS sabe si es seguro anunciar HSTS.
+    trusted_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    hsts_enabled: bool = False
 
 
 def load_settings() -> Settings:

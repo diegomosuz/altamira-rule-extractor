@@ -229,22 +229,34 @@ corrupción se detecta y se reporta sin que ninguna lectura de gobierno
 dispare el fallback; el fallback real solo ocurre cuando otro
 consumidor optado explícitamente lo ejecuta).
 
-## Ausencia de autenticación
+## Ausencia de autenticación (histórico Fase 15A) → identidad delegada (Fase 15B1)
 
-Esta aplicación **no implementa autenticación de usuario** — el
-banner de la UI lo declara de forma visible y permanente (issue
-`USER_AUTHENTICATION_NOT_AVAILABLE`, siempre presente en el overview,
-independientemente del estado del run). Nunca se afirma ni se simula
-un control de acceso mientras esta limitación siga vigente.
+Al cierre de Fase 15A esta aplicación no implementaba ningún control de
+acceso. **Fase 15B1** (`docs/SECURITY_AUTHORIZATION_AND_AUDIT.md`) agrega
+identidad delegada (`DISABLED_DEV`/`TRUSTED_PROXY_HEADERS`) y RBAC sobre
+las acciones de escritura descritas más abajo. Este overview read-only
+(`OperationalGovernanceOverview`, construido por
+`pipeline/operational_governance_reader.py`) sigue siendo de solo lectura
+y sigue sin exigir identidad para consultarse por API JSON directa — los
+issues `USER_AUTHENTICATION_NOT_AVAILABLE`/`WRITE_OPERATIONS_DISABLED`
+que emite reflejan el estado de **este lector**, no el de la superficie de
+escritura nueva: la UI HTML (`/ui/runs/{run_id}/governance*`) sí exige
+identidad/RBAC desde Fase 15B1 (ver más abajo).
 
-## Operaciones de escritura solo por CLI
+## Operaciones de escritura: CLI (histórico) + UI controlada (Fase 15B1)
 
-Activación, fallback y rollback **reales** siguen siendo,
-exclusivamente, responsabilidad de la CLI de Fase 14B
+Al cierre de Fase 15A, activación/fallback/rollback reales eran
+exclusivamente responsabilidad de la CLI de Fase 14B
 (`unified-activation-materialize`, `unified-activation-rollback`) con
-autorización explícita — issue `WRITE_OPERATIONS_DISABLED`, siempre
-presente, lo declara en la UI. Fase 15A no agrega ningún camino nuevo
-de escritura.
+autorización explícita vía YAML — issue `WRITE_OPERATIONS_DISABLED`, que
+esta pantalla read-only sigue emitiendo sin cambios. **Fase 15B1** agrega
+un segundo camino, sin modificar el CLI ni este lector: la UI de acciones
+operativas (`/ui/runs/{run_id}/governance/actions`), con identidad
+delegada, RBAC, CSRF, workflow de dos pasos (prepare/confirm/execute) y
+auditoría append-only propia — ver `docs/SECURITY_AUTHORIZATION_AND_AUDIT.md`.
+Ambos caminos invocan, sin modificarlo, el mismo
+`pipeline/unified_materialization_service.py::materialize_unified_activation`
+de Fase 14B.
 
 ## Consumidores legacy
 
@@ -297,3 +309,7 @@ reservadas a una fase futura.
 - `docs/CONTROLLED_UNIFIED_ACTIVATION.md` (Fase 14A): evaluación de
   activación cuyo resultado se proyecta en la sección "readiness" del
   overview.
+- `docs/SECURITY_AUTHORIZATION_AND_AUDIT.md` (Fase 15B1): identidad
+  delegada, RBAC, CSRF y workflow controlado que agrega la superficie de
+  escritura de esta pantalla (`/ui/runs/{run_id}/governance/actions*`),
+  sin modificar este lector read-only ni el overview que construye.

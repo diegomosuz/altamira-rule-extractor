@@ -114,3 +114,60 @@ class ServiceUnavailableError(ApiError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, status_code=503, code="service_unavailable")
+
+
+class SecurityMisconfiguredError(ApiError):
+    """`config/security.yaml` esta ausente o es invalido (cierre Fase
+    15B1, "DISABLED_DEV explicito") -- fail-closed: ninguna ruta que
+    dependa de `get_principal`/`get_session`/`get_security_config`
+    entrega datos, y NUNCA se construye un principal anonimo por
+    defecto. 503 (el proceso esta vivo -- `/health` sigue
+    respondiendo -- pero no listo para servir trafico protegido)."""
+
+    def __init__(
+        self, message: str = "configuracion de seguridad ausente o invalida"
+    ) -> None:
+        super().__init__(message, status_code=503, code="security_misconfigured")
+
+
+class UnauthenticatedError(ApiError):
+    """`authentication_mode=TRUSTED_PROXY_HEADERS` sin identidad valida
+    (marker header ausente/incorrecto, user header ausente, identidad
+    malformada). 401. Nunca ocurre en `DISABLED_DEV` (el principal
+    anonimo siempre resuelve, `authenticated=False` pero sin excepcion)."""
+
+    def __init__(self, message: str = "identidad no verificada") -> None:
+        super().__init__(message, status_code=401, code="unauthenticated")
+
+
+class ForbiddenError(ApiError):
+    """El principal esta autenticado (o es el anonimo de `DISABLED_DEV`)
+    pero no tiene el `OperationalPermission` requerido para la accion
+    solicitada. 403. El backend SIEMPRE revalida esto, incluso si la UI
+    ya oculto el boton correspondiente."""
+
+    def __init__(self, message: str = "permiso insuficiente") -> None:
+        super().__init__(message, status_code=403, code="forbidden")
+
+
+class OperationalPreconditionError(ApiError):
+    """El estado real del run cambio entre `prepare` y `confirm`/
+    `execute` (pointer, readiness, grupo aprobado, accion, target
+    generation, challenge expirado/reutilizado/de otra sesion,
+    principal distinto) -- la operacion se aborta ANTES de tocar
+    `activation/`. 409."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, status_code=409, code="operational_precondition_failed")
+
+
+class RequestBodyTooLargeError(ApiError):
+    """Un endpoint de formulario (no de upload de paquete -- ver
+    `UploadTooLargeError` para eso) recibio un cuerpo mayor al limite
+    esperado para sus campos (Fase 15B1 Parte 14: gobierno operativo,
+    formularios pequenos, nunca archivos). 413."""
+
+    def __init__(
+        self, message: str = "el cuerpo de la solicitud excede el limite permitido"
+    ) -> None:
+        super().__init__(message, status_code=413, code="request_body_too_large")

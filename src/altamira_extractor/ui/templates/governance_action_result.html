@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% set active_nav = "runs" %}
+{% block title %}Resultado {{ action.value }} {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Gobierno operativo", url_for('ui_governance', run_id=run_id)), ("Acciones", url_for('ui_governance_actions', run_id=run_id)), ("Resultado", none)]) }}
+</div>
+{% endblock %}
+{% block content %}
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>{{ action.value }} ejecutado</h1>
+    <p class="page-lede">La transicion se aplico y quedo registrada de forma inmutable.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('ui_governance', run_id=run_id) }}">{{ icon("check") }}Ver gobierno operativo</a>
+</div>
+
+<div class="alert alert-info" role="status">
+  {{ icon("check") }}
+  <p class="mb-0"><strong>Operacion completada.</strong> {{ "Esta ejecucion fue idempotente: el estado ya coincidia con la transicion solicitada." if idempotent else "Se aplico una nueva transicion." }}</p>
+</div>
+
+<dl class="meta-grid">
+  <dt>Run</dt><dd class="cell-mono">{{ run_id }}</dd>
+  <dt>Accion</dt><dd class="cell-mono">{{ action.value }}</dd>
+  <dt>Lane activo final</dt><dd class="cell-mono">{{ active_lane }}</dd>
+  <dt>Generacion activa</dt><dd class="cell-mono small">{{ generation_id }}</dd>
+  <dt>Version de puntero</dt><dd>{{ pointer_version }}</dd>
+  <dt>Evento de activacion</dt><dd class="cell-mono small">{{ event_id }}</dd>
+  <dt>Evento de auditoria</dt><dd class="cell-mono small">{{ audit_event_id or "no disponible" }}</dd>
+  <dt>Idempotente</dt><dd>{{ "Si" if idempotent else "No" }}</dd>
+  <dt>Ejecutado por</dt><dd class="cell-mono small">{{ principal.principal_id }}</dd>
+</dl>
+{% endblock %}

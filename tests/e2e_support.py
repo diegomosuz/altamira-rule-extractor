@@ -289,12 +289,44 @@ def write_prompt_files(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def write_disabled_dev_security_config(tmp_path: Path) -> Path:
+    """Escribe un `security.yaml` EXPLICITO en `DISABLED_DEV` (mismos
+    valores que `contracts.security_config.default_disabled_dev_
+    security_config`) para que los tests que usan `build_settings`
+    nunca dependan del fallback implicito que el cierre de Fase 15B1
+    ("DISABLED_DEV explicito") elimino -- la app ahora entra en
+    `SECURITY_MISCONFIGURED` (fail-closed, incluye `/ui/runs` y
+    `/api/runs`) cuando `security_config_path` no apunta a un archivo
+    real. Los tests que necesiten ejercer especificamente el estado
+    misconfigured deben construir su propio `Settings` sin llamar a
+    esta funcion (ver `tests/security/test_security_config_loader.py`
+    y `tests/ui/test_security_misconfigured.py`)."""
+    path = tmp_path / "security.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                'schema_version: "1.0"',
+                "authentication_mode: DISABLED_DEV",
+                'trusted_proxy_header_user: "X-Altamira-Verified-User"',
+                'trusted_proxy_required_marker_header: "X-Altamira-Trusted-Proxy"',
+                'trusted_proxy_required_marker_value: "dev-marker-not-enforced"',
+                'session_cookie_name: "altamira_session"',
+                "session_cookie_secure: false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def build_settings(tmp_path: Path) -> Settings:
     prompts = write_prompt_files(tmp_path)
     return Settings(
         data_dir=tmp_path / "data",
         runs_dir=tmp_path / "data" / "runs",
         incoming_dir=tmp_path / "data" / "incoming",
+        security_config_path=write_disabled_dev_security_config(tmp_path),
         LLM_PROVIDER="openai",
         OPENAI_API_KEY="sk-test-key",
         OPENAI_BASE_URL="https://api.example.com/v1",

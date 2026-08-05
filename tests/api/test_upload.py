@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from altamira_extractor.config import Settings
 from altamira_extractor.contracts.run_state import RunState
 
+from ..e2e_support import write_disabled_dev_security_config
 from ..pipeline.conftest import build_valid_package_zip
 
 
@@ -60,6 +61,7 @@ def test_upload_exceeds_limit_is_413(tmp_path: Path) -> None:
         runs_dir=tmp_path / "data" / "runs",
         incoming_dir=tmp_path / "data" / "incoming",
         max_package_size_bytes=10,
+        security_config_path=write_disabled_dev_security_config(tmp_path),
     )
     payload = b"x" * 1000
 

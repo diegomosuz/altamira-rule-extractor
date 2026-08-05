@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from altamira_extractor.api.app import create_app
 from altamira_extractor.config import Settings
 
+from .e2e_support import write_disabled_dev_security_config
 from .pipeline._operational_governance_fixtures import (
     build_materialization_fixture,
     governance_run_dir,
@@ -27,7 +28,10 @@ from .pipeline._operational_governance_fixtures import (
 def _settings_for(tmp_path: Path) -> Settings:
     data_dir = tmp_path / "data"
     settings = Settings(
-        data_dir=data_dir, runs_dir=data_dir / "runs", incoming_dir=data_dir / "incoming"
+        data_dir=data_dir,
+        runs_dir=data_dir / "runs",
+        incoming_dir=data_dir / "incoming",
+        security_config_path=write_disabled_dev_security_config(tmp_path),
     )
     settings.runs_dir.mkdir(parents=True, exist_ok=True)
     return settings

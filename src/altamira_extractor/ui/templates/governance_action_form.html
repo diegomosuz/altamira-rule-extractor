@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% set active_nav = "runs" %}
+{% block title %}{{ action.value }} {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Gobierno operativo", url_for('ui_governance', run_id=run_id)), ("Acciones", url_for('ui_governance_actions', run_id=run_id)), (action.value, none)]) }}
+</div>
+{% endblock %}
+{% block content %}
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>{{ action.value }}</h1>
+    <p class="page-lede">Este formulario SOLO prepara la intencion -- ninguna transicion se ejecuta hasta confirmar en el siguiente paso.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_governance_actions', run_id=run_id) }}">{{ icon("arrow-left") }}Volver a acciones</a>
+</div>
+
+<dl class="meta-grid">
+  <dt>Puntero de activacion esperado</dt><dd class="cell-mono small">{{ pointer_hash or "no inicializado" }}</dd>
+  <dt>Revisor distinto exigido</dt><dd>{{ "Si" if distinct_reviewer_required else "No" }}</dd>
+</dl>
+
+{% if distinct_reviewer_required %}
+<div class="alert alert-warning" role="status">
+  {{ icon("alert") }}
+  <p class="mb-0">Esta accion exige que quien confirme y ejecute sea una identidad distinta de quien prepara esta solicitud. La ejecucion se rechazara si coinciden.</p>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('ui_governance_prepare', run_id=run_id, action=action.value) }}" novalidate>
+  <input type="hidden" name="{{ csrf_field_name }}" value="{{ csrf_token }}">
+
+  <div class="form-field">
+    <label for="reason_code">Motivo (reason_code)</label>
+    <select id="reason_code" name="reason_code" required>
+      {% for code in reason_codes %}
+      <option value="{{ code.value }}">{{ code.value }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="form-field">
+    <label for="review_reference">Referencia de revision (ticket, incidente, etc.)</label>
+    <input type="text" id="review_reference" name="review_reference" maxlength="500" required>
+  </div>
+
+  {% if action.value in ("ACTIVATE_UNIFIED_CANARY", "ACTIVATE_UNIFIED_PRIMARY") %}
+  <fieldset>
+    <legend>Grupos aprobados</legend>
+    {% if groups %}
+    {% for group in groups %}
+    <label class="checkbox-field">
+      <input type="checkbox" name="approved_group_ids" value="{{ group.group_id }}">
+      <span class="cell-mono small">{{ group.group_id }}</span> -- {{ group.rule_family }} / {{ group.program }}
+    </label>
+    {% endfor %}
+    {% else %}
+    <p class="text-muted small">No hay grupos unified disponibles para este run.</p>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+
+  {% if action.value == "ROLLBACK_TO_GENERATION" %}
+  <div class="form-field">
+    <label for="target_generation_id">Generacion destino</label>
+    <select id="target_generation_id" name="target_generation_id" required>
+      {% for generation_id in generations %}
+      <option value="{{ generation_id }}">{{ generation_id }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
+  <button type="submit" class="btn btn-primary">{{ icon("check") }}Preparar</button>
+</form>
+{% endblock %}

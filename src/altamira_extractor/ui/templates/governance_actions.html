@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% set active_nav = "runs" %}
+{% block title %}Acciones operativas {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Gobierno operativo", url_for('ui_governance', run_id=run_id)), ("Acciones", none)]) }}
+</div>
+{% endblock %}
+{% block content %}
+{% from "_icons.html" import icon %}
+<div class="page-header">
+  <div>
+    <h1>Acciones operativas</h1>
+    <p class="page-lede">Activacion, fallback y rollback controlados del lane unificado para este run.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_governance', run_id=run_id) }}">{{ icon("arrow-left") }}Volver a gobierno</a>
+</div>
+
+<section aria-labelledby="identity-heading">
+  <h2 id="identity-heading">Identidad</h2>
+  <div class="alert {{ 'alert-warning' if not principal.authenticated else 'alert-info' }}" role="status">
+    {{ icon("alert") }}
+    <div>
+      {% if not principal.authenticated %}
+      <p class="mb-0"><strong>Modo desarrollo (DISABLED_DEV): sin identidad verificada.</strong></p>
+      <p class="mb-0">El principal es anonimo y de solo lectura. Ninguna accion que exija un revisor distinto del operador puede ejecutarse en este modo.</p>
+      {% else %}
+      <p class="mb-0"><strong>Identidad verificada por el proxy confiable.</strong></p>
+      <p class="mb-0 cell-mono small">{{ principal.principal_id }}</p>
+      {% endif %}
+      <p class="small text-muted mb-0">Roles: {{ principal.roles | map(attribute='value') | join(', ') if principal.roles else 'ninguno' }}</p>
+    </div>
+  </div>
+  <p><a href="{{ url_for('ui_governance_audit', run_id=run_id) }}">Ver auditoria de este run</a></p>
+</section>
+
+<section aria-labelledby="actions-heading">
+  <h2 id="actions-heading">Acciones disponibles</h2>
+  {% if not pointer_initialized %}
+  <div class="alert alert-warning" role="status">
+    {{ icon("alert") }}
+    <p class="mb-0">Este run todavia no tiene un puntero de activacion inicializado (Fase 14B). Inicializarlo requiere el flujo de materializacion por CLI antes de usar esta UI.</p>
+  </div>
+  {% elif not visible_actions %}
+  <div class="alert alert-info" role="status">
+    {{ icon("alert") }}
+    <p class="mb-0">Su identidad actual no tiene permiso para preparar ninguna accion operativa sobre este run.</p>
+  </div>
+  {% else %}
+  <ul class="action-list">
+    {% for action in visible_actions %}
+    <li>
+      <a class="btn btn-secondary" href="{{ url_for('ui_governance_action_form', run_id=run_id, action=action.value) }}">{{ action.value }}</a>
+      <span class="small text-muted">requiere {{ required_permission[action.value] }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="small text-muted">El backend revalida el permiso especifico en cada paso (preparar/confirmar/ejecutar) -- esta lista solo controla que botones se muestran.</p>
+</section>
+{% endblock %}

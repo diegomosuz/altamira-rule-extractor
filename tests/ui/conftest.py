@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 from altamira_extractor.api.app import create_app
 from altamira_extractor.config import Settings
 
+from ..e2e_support import write_disabled_dev_security_config
+
 # same-origin valido para TestClient (base_url por defecto de httpx/starlette).
 SAME_ORIGIN = "http://testserver"
 FOREIGN_ORIGIN = "http://evil.example.org"
@@ -26,6 +28,7 @@ def settings(tmp_path: Path) -> Settings:
         data_dir=tmp_path / "data",
         runs_dir=tmp_path / "data" / "runs",
         incoming_dir=tmp_path / "data" / "incoming",
+        security_config_path=write_disabled_dev_security_config(tmp_path),
     )
 
 

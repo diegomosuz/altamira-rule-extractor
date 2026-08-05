@@ -15,6 +15,7 @@ _EXPECTED_PATHS = {
     "/api/runs/{run_id}/candidates/{candidate_id}/rule",
     "/api/runs/{run_id}/download",
     "/health",
+    "/ready",
     # Gobierno operativo read-only (Fase 15A) -- exclusivamente GET/HEAD.
     "/api/runs/{run_id}/governance",
     "/api/runs/{run_id}/governance/generations",

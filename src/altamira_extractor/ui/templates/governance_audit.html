@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active_nav = "runs" %}
+{% block title %}Auditoria {{ run_id }} -- Altamira Rule Extractor{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb-bar">
+{% from "_components.html" import breadcrumb %}
+{{ breadcrumb([("Ejecuciones", url_for('ui_runs')), (run_id, url_for('ui_run_status', run_id=run_id)), ("Gobierno operativo", url_for('ui_governance', run_id=run_id)), ("Auditoria", none)]) }}
+</div>
+{% endblock %}
+{% block content %}
+{% from "_icons.html" import icon %}
+{% from "_components.html" import status_badge %}
+<div class="page-header">
+  <div>
+    <h1>Auditoria operativa</h1>
+    <p class="page-lede">Cadena append-only de quien solicito, autorizo y ejecuto cada accion sobre este run -- distinta de la cadena tecnica de eventos de activacion.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_governance_actions', run_id=run_id) }}">{{ icon("arrow-left") }}Volver a acciones</a>
+</div>
+
+{% if not events %}
+<p class="text-muted">Todavia no hay eventos de auditoria para este run.</p>
+{% else %}
+<div class="table-wrap">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th scope="col">#</th>
+      <th scope="col">Principal</th>
+      <th scope="col">Roles</th>
+      <th scope="col">Accion</th>
+      <th scope="col">Resultado</th>
+      <th scope="col">Motivo</th>
+      <th scope="col">Correlacion</th>
+      <th scope="col">Evento de activacion</th>
+      <th scope="col">Codigo de error</th>
+      <th scope="col">Ocurrido (UTC)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for event in events %}
+    <tr>
+      <td>{{ event.sequence }}</td>
+      <td class="cell-mono small">{{ event.principal_id }}</td>
+      <td class="small">{{ event.roles | map(attribute='value') | join(', ') if event.roles else '--' }}</td>
+      <td>{{ status_badge(event.action.value) }}</td>
+      <td>{{ status_badge(event.outcome.value) }}</td>
+      <td class="small">{{ event.reason_code.value if event.reason_code else '--' }}</td>
+      <td class="cell-mono small">{{ event.correlation_id }}</td>
+      <td class="cell-mono small">{{ event.activation_event_id or '--' }}</td>
+      <td class="small">{{ event.error_code or '--' }}</td>
+      <td class="cell-mono small">{{ event.occurred_at_utc or '--' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

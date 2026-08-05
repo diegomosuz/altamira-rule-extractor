@@ -14,15 +14,19 @@
     <h1>Gobierno operativo</h1>
     <p class="page-lede">Lane activo, integridad de generaciones, cadena de eventos y artefactos resolubles de este run -- exclusivamente de lectura.</p>
   </div>
-  <a class="btn btn-secondary" href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ icon("arrow-left") }}Volver al detalle</a>
+  <div class="actions mt-0">
+    <a class="btn btn-secondary" href="{{ url_for('ui_governance_actions', run_id=run_id) }}">Acciones operativas</a>
+    <a class="btn btn-secondary" href="{{ url_for('ui_governance_audit', run_id=run_id) }}">Auditoria</a>
+    <a class="btn btn-secondary" href="{{ url_for('ui_run_status', run_id=run_id) }}">{{ icon("arrow-left") }}Volver al detalle</a>
+  </div>
 </div>
 
 <div class="alert alert-info" role="status">
   {{ icon("alert") }}
   <div>
     <p class="mb-0"><strong>Esta pantalla es exclusivamente de lectura.</strong></p>
-    <p class="mb-0">Las operaciones de activacion requieren autorizacion explicita y se realizan fuera de esta interfaz.</p>
-    <p class="small text-muted mb-0">Esta aplicacion no implementa autenticacion de usuario. La validacion mostrada aqui es estructural: nunca equivale a una validacion funcional.</p>
+    <p class="mb-0">Las operaciones de activacion (canary, primary, fallback, rollback) requieren autorizacion explicita, permiso RBAC y CSRF -- disponibles en <a href="{{ url_for('ui_governance_actions', run_id=run_id) }}">Acciones operativas</a>.</p>
+    <p class="small text-muted mb-0">La validacion mostrada aqui es estructural: nunca equivale a una validacion funcional del contenido de la regla.</p>
   </div>
 </div>
 

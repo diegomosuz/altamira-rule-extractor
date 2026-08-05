@@ -1,0 +1,39 @@
+# Ejemplo SEGURO de config/security.yaml (Fase 15B1).
+#
+# Este archivo se versiona; config/security.yaml (el archivo REAL que
+# la aplicacion carga en produccion) NUNCA se versiona y NUNCA existe
+# en este repositorio. La AUSENCIA de config/security.yaml hace que la
+# aplicacion arranque en DISABLED_DEV de todos modos (ver
+# contracts/security_config.py::default_disabled_dev_security_config).
+#
+# Sin identidades reales. Sin emails reales. Sin secretos.
+
+schema_version: "1.0"
+authentication_mode: DISABLED_DEV
+
+trusted_proxy_header_user: "X-Altamira-Verified-User"
+trusted_proxy_header_email: "X-Altamira-Verified-Email"
+trusted_proxy_header_groups: "X-Altamira-Verified-Groups"
+trusted_proxy_required_marker_header: "X-Altamira-Trusted-Proxy"
+# Valor de ejemplo, nunca un secreto real -- en TRUSTED_PROXY_HEADERS
+# real este valor debe ser un marcador conocido unicamente por el
+# proxy y la aplicacion, provisto fuera de este repositorio.
+trusted_proxy_required_marker_value: "example-marker-never-use-in-production"
+
+trusted_proxy_allowed_roles: []
+group_role_mapping: {}
+default_authenticated_role: VIEWER
+
+session_cookie_name: "altamira_session"
+session_cookie_secure: false
+session_cookie_httponly: true
+session_cookie_samesite: strict
+csrf_enabled: true
+csrf_token_ttl_seconds: 3600
+session_ttl_seconds: 28800
+
+require_distinct_reviewer_for_primary: true
+require_distinct_reviewer_for_rollback: false
+
+audit_enabled: true
+diagnostics: []

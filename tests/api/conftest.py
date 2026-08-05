@@ -59,6 +59,8 @@ from altamira_extractor.contracts.rules_manifest import RulesDirectoryManifest, 
 from altamira_extractor.contracts.run_state import RunState, StageExecution
 from altamira_extractor.pipeline.markdown_renderer import MARKDOWN_RENDERER_VERSION, render_markdown
 
+from ..e2e_support import write_disabled_dev_security_config
+
 HASH_A = "a" * 64
 RUN_ID = "20260724T120000123456-deadbeef"
 CANDIDATE_ID = "candidate::det::1.0::" + HASH_A + "::dec-1"
@@ -70,6 +72,7 @@ def settings(tmp_path: Path) -> Settings:
         data_dir=tmp_path / "data",
         runs_dir=tmp_path / "data" / "runs",
         incoming_dir=tmp_path / "data" / "incoming",
+        security_config_path=write_disabled_dev_security_config(tmp_path),
     )
 
 
