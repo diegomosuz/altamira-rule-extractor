@@ -1,0 +1,20 @@
+# Configuracion de observabilidad (Fase 15B2-B).
+#
+# A diferencia de config/security.yaml, este archivo SI se versiona: no
+# contiene secretos, solo el NOMBRE de la variable de entorno que
+# contendria el token de /internal/metrics (nunca el token en si). Su
+# ausencia o invalidez NUNCA activa un gate global de fail-closed (ver
+# contracts/observability.py::default_observability_config) -- a
+# diferencia de config/security.yaml, cuya ausencia SI condiciona el
+# arranque en modo DISABLED_DEV/SECURITY_MISCONFIGURED.
+schema_version: "1.0"
+logging:
+  format: JSON
+  level: INFO
+metrics:
+  mode: DISABLED
+  access_mode: DISABLED
+health:
+  mode: ENABLED
+readiness:
+  mode: ENABLED

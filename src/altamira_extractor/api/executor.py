@@ -20,6 +20,9 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
+from ..contracts.run_state import RunState
+from ..logging_setup import LogEventName, log_event
+from ..observability.metrics import ObservabilityRegistry
 from ..pipeline.errors import RunStatePersistenceError
 
 logger = logging.getLogger(__name__)
@@ -28,11 +31,12 @@ SubmitResult = Literal["submitted", "already_active", "at_capacity"]
 
 
 class RunExecutor:
-    def __init__(self, max_workers: int) -> None:
+    def __init__(self, max_workers: int, *, metrics: ObservabilityRegistry | None = None) -> None:
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._max_workers = max_workers
         self._lock = threading.Lock()
         self._active_run_ids: set[str] = set()
+        self._metrics = metrics
 
     def is_active(self, run_id: str) -> bool:
         with self._lock:
@@ -47,12 +51,18 @@ class RunExecutor:
             if run_id in self._active_run_ids:
                 return "already_active"
             if len(self._active_run_ids) >= self._max_workers:
+                if self._metrics is not None:
+                    self._metrics.inc_executor_capacity_rejection()
                 return "at_capacity"
             self._active_run_ids.add(run_id)
+            if self._metrics is not None:
+                self._metrics.set_executor_active_runs(len(self._active_run_ids))
 
         def _wrapped() -> None:
             try:
-                fn()
+                result = fn()
+                if self._metrics is not None and isinstance(result, RunState):
+                    self._metrics.observe_pipeline_run(result)
             except RunStatePersistenceError as exc:
                 # Checkpoint correctivo (defecto real de estabilizacion de
                 # baseline): distinto de un fallo generico -- run.json en
@@ -83,11 +93,19 @@ class RunExecutor:
                         exc.transition,
                         type(exc.cause).__name__,
                     )
-            except Exception:
-                logger.exception("fallo no controlado ejecutando run_id=%s en background", run_id)
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    LogEventName.BACKGROUND_RUN_FAILED,
+                    run_id=run_id,
+                    exception_type=type(exc).__name__,
+                )
             finally:
                 with self._lock:
                     self._active_run_ids.discard(run_id)
+                    if self._metrics is not None:
+                        self._metrics.set_executor_active_runs(len(self._active_run_ids))
 
         self._executor.submit(_wrapped)
         return "submitted"

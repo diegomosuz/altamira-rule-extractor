@@ -15,6 +15,8 @@ ningun archivo parcial."""
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,13 +41,41 @@ from .test_cli_unified_candidates_shadow import (
 
 _FORBIDDEN_SUBSTRINGS = ("Traceback", "/workspace/", "C:\\")
 
+# Nombres exactos y patrones de variables sensibles/de proveedor LLM a
+# eliminar del entorno heredado (cierre correctivo 15B2-B, Seccion 7):
+# nunca se reemplaza `os.environ` por un mapa incompleto (eso rompia la
+# resolucion de site-packages en Windows, que depende de `SystemRoot`/
+# `USERPROFILE`/`APPDATA`/`PATH`) -- se hereda todo y se elimina
+# unicamente lo sensible.
+_SENSITIVE_ENV_VAR_PATTERN = re.compile(
+    r"(API_KEY|SECRET|TOKEN|PASSWORD)", re.IGNORECASE
+)
+_PROVIDER_ENV_VAR_PREFIXES = ("LLM_", "OPENAI_", "PWC_GENAI_", "ALTAMIRA_")
+
+
+def _sanitized_inherited_env() -> dict[str, str]:
+    """Entorno heredado del proceso de test (nunca un mapa incompleto:
+    conserva `PATH`/`SystemRoot`/`USERPROFILE`/`APPDATA`, necesarios en
+    Windows para que el subproceso hijo resuelva `site-packages` e
+    importe `altamira_extractor`), con variables sensibles y de
+    proveedor/config de la app eliminadas -- nunca provider real,
+    nunca secretos heredados del entorno del desarrollador."""
+    sanitized: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if _SENSITIVE_ENV_VAR_PATTERN.search(key):
+            continue
+        if any(key.startswith(prefix) for prefix in _PROVIDER_ENV_VAR_PREFIXES):
+            continue
+        sanitized[key] = value
+    return sanitized
+
 
 def _settings_env(tmp_path: Path) -> dict[str, str]:
-    return {
-        "ALTAMIRA_DATA_DIR": str(tmp_path / "data"),
-        "ALTAMIRA_RUNS_DIR": str(tmp_path / "data" / "runs"),
-        "ALTAMIRA_INCOMING_DIR": str(tmp_path / "data" / "incoming"),
-    }
+    env = _sanitized_inherited_env()
+    env["ALTAMIRA_DATA_DIR"] = str(tmp_path / "data")
+    env["ALTAMIRA_RUNS_DIR"] = str(tmp_path / "data" / "runs")
+    env["ALTAMIRA_INCOMING_DIR"] = str(tmp_path / "data" / "incoming")
+    return env
 
 
 def _run_cli(args: list[str], *, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -71,6 +101,51 @@ def _assert_sanitized_failure(
     # Ninguna ruta absoluta de este run: el directorio de datos del
     # escenario nunca debe filtrarse a la salida.
     assert env["ALTAMIRA_RUNS_DIR"] not in combined
+
+
+# --- Cierre correctivo 15B2-B, Seccion 7: regresion del entorno heredado ---
+
+
+def test_sanitized_env_strips_sensitive_and_provider_vars_but_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regresion Windows: el defecto real corregido en este bloque fue
+    reemplazar `os.environ` completo por un mapa de 3 claves, lo que
+    rompia la resolucion de `site-packages` en Windows (faltaban
+    `SystemRoot`/`USERPROFILE`/`PATH`) y producia
+    `ModuleNotFoundError: No module named 'altamira_extractor'` en el
+    subproceso -- nunca un fallo de seguridad real, pero rompia estos
+    18 tests. La correccion hereda `os.environ` y elimina solo lo
+    sensible/de proveedor."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-should-be-removed")
+    monkeypatch.setenv("PWC_GENAI_API_KEY", "should-be-removed-too")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("NEO4J_PASSWORD", "should-be-removed-as-well")
+    monkeypatch.setenv("SOME_RANDOM_SECRET_TOKEN", "should-be-removed")
+    monkeypatch.setenv("ALTAMIRA_SESSION_SECRET", "should-be-removed")
+
+    sanitized = _sanitized_inherited_env()
+
+    for forbidden_key in (
+        "OPENAI_API_KEY",
+        "PWC_GENAI_API_KEY",
+        "LLM_PROVIDER",
+        "NEO4J_PASSWORD",
+        "SOME_RANDOM_SECRET_TOKEN",
+        "ALTAMIRA_SESSION_SECRET",
+    ):
+        assert forbidden_key not in sanitized
+
+    # Variables necesarias en Windows para que un subproceso hijo
+    # resuelva Python/site-packages -- nunca deben eliminarse. El
+    # nombre exacto de la variable de sistema varia segun el shell
+    # (`SystemRoot` en cmd/PowerShell, `SYSTEMROOT` en Git Bash), asi
+    # que se compara sin distinguir mayusculas.
+    assert "PATH" in sanitized
+    assert sanitized["PATH"] == os.environ["PATH"]
+    sanitized_upper_keys = {k.upper() for k in sanitized}
+    if any(k.upper() == "SYSTEMROOT" for k in os.environ):
+        assert "SYSTEMROOT" in sanitized_upper_keys
 
 
 # --- Parte 1: unified-shadow-validate ---

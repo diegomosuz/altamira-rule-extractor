@@ -51,6 +51,8 @@ from ..contracts.operational_authorization_request import OperationalAction
 from ..contracts.security_config import OperationalPermission, SecurityConfig
 from ..contracts.security_identity import AuthenticatedPrincipal
 from ..contracts.unified_materialization_authorization import UnifiedMaterializationReasonCode
+from ..logging_setup import LogEventName, log_event
+from ..observability.metrics import ObservabilityRegistry
 from ..pipeline.operational_governance_reader import (
     OperationalGovernanceReadError,
     build_operational_governance_overview,
@@ -178,8 +180,14 @@ def _record(
             reason_code=reason_code,
             error_code=error_code,
         )
-    except OperationalAuditError:
-        logger.exception("fallo al registrar evento de auditoria operativa (run_id=%s)", run_id)
+    except OperationalAuditError as exc:
+        log_event(
+            logger,
+            logging.ERROR,
+            LogEventName.AUDIT_EVENT_REGISTRATION_FAILED,
+            run_id=run_id,
+            exception_type=type(exc).__name__,
+        )
         return None
 
     logger.info(
@@ -194,6 +202,18 @@ def _record(
         },
     )
     return event.audit_event_id
+
+
+def _record_operational_action_metric(request: Request, *, action_type: str, outcome: str) -> None:
+    """`altamira_operational_actions_total` (Fase 15B2-B, Seccion 8):
+    unicamente para el desenlace de `execute` (canary/primary/fallback/
+    rollback) -- `prepare` todavia no aplica ninguna transicion. Las
+    denegaciones de seguridad (403/CSRF/security_misconfigured) ya se
+    cuentan de forma centralizada en `api/app.py::_handle_api_error`,
+    nunca aqui."""
+    registry: ObservabilityRegistry | None = getattr(request.app.state, "observability", None)
+    if registry is not None:
+        registry.inc_operational_action(action_type=action_type, outcome=outcome)
 
 
 def _visible_actions(principal: AuthenticatedPrincipal) -> list[OperationalAction]:
@@ -531,8 +551,12 @@ async def governance_execute_ui(
                 reason_code=peeked_intent.reason_code if peeked_intent is not None else None,
                 error_code=exc.code,
             )
+            _record_operational_action_metric(
+                request, action_type=failed_operational_action.value, outcome="failed"
+            )
         raise
 
+    _record_operational_action_metric(request, action_type=parsed_action.value, outcome="succeeded")
     audit_event_id = _record(
         run_dir,
         run_id,

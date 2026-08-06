@@ -270,6 +270,7 @@ from .contracts.functional_dataset_validation import FunctionalDatasetLane
 from .contracts.interprocedural_rule_candidates import InterproceduralRuleType
 from .contracts.run_state import RunState
 from .contracts.semantic_coverage import SemanticSupportStatus
+from .logging_setup import configure_logging
 from .pipeline.active_artifact_resolver import ActiveArtifactResolver
 from .pipeline.candidate_promotion_assessment_service import (
     compute_candidate_promotion_assessment_artifact,
@@ -366,6 +367,16 @@ logger = logging.getLogger(__name__)
 
 app = typer.Typer(add_completion=False, help="Altamira Rule Extractor - pipeline de ingesta")
 
+
+@app.callback()
+def _bootstrap_logging() -> None:
+    """Configura logging JSON estructurado antes de cualquier comando
+    (Fase 15B2-B). `configure_logging` es idempotente (limpia handlers
+    previos en cada llamada), asi que invocarlo aqui es seguro incluso
+    si un comando individual lo invocara de nuevo."""
+    configure_logging(load_settings().log_level)
+
+
 PackageArgument = Annotated[
     Path,
     typer.Argument(
@@ -419,9 +430,7 @@ DatasetLaneOption = Annotated[
 ]
 DatasetRunIdsOption = Annotated[
     list[str],
-    typer.Option(
-        "--run-id", help="run_id a incluir en la agregacion (repetible, minimo 1)"
-    ),
+    typer.Option("--run-id", help="run_id a incluir en la agregacion (repetible, minimo 1)"),
 ]
 FunctionalDatasetValidationJsonOption = Annotated[
     bool,
@@ -592,14 +601,13 @@ def _guard[**P, R](func: Callable[P, R]) -> Callable[P, R]:
     explicitamente por el comando.
 
     Ninguna rama de este wrapper adjunta `exc_info` a un `LogRecord`
-    (nunca `logger.exception(...)`, nunca `exc_info=True`): el logger de
-    esta app nunca configura su propio handler (`logging_setup.
-    configure_logging` no se invoca desde el entrypoint CLI), asi que
-    cualquier `LogRecord` con `exc_info` adjunto llegaria al
-    `lastResort` handler de la libreria estandar de Python y este SI
-    imprime el traceback formateado completo en stderr sin impotar que
-    handler lo procese -- verificado empiricamente (`AttributeError`
-    real via subprocess). `PipelineError` (la base comun de TODAS las
+    (nunca `logger.exception(...)`, nunca `exc_info=True`): aunque desde
+    la Fase 15B2-B el entrypoint CLI SI configura un handler JSON
+    (`logging_setup.configure_logging`, invocado por el callback
+    `_bootstrap_logging`), un traceback adjunto seguiria siendo
+    informacion interna que este wrapper decide nunca emitir -- el
+    unico dato de la excepcion que se loguea es `type(exc).__name__`.
+    `PipelineError` (la base comun de TODAS las
     excepciones de dominio del pipeline, Fase 9-12 incluidas) se
     distingue de un error verdaderamente inesperado, pero NUNCA se
     imprime su `str(exc)`: aunque la mayoria de sus subclases

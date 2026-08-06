@@ -123,12 +123,46 @@ def test_no_security_module_imports_a_provider_client() -> None:
         assert not offenders, f"{module.__name__} importa {offenders}"
 
 
-def _raise_socket_connect(*_args: object, **_kwargs: object) -> None:
+_REAL_SOCKET_CONNECT = socket.socket.connect
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _raise_socket_connect(
+    self: socket.socket, address: object, *args: object, **kwargs: object
+) -> object:
+    """Bloquea por DESTINO, nunca por mecanismo (cierre correctivo
+    15B2-B, Seccion 7): en Windows, `asyncio.ProactorEventLoop` abre un
+    self-pipe interno via `socket.socketpair()`, que interna mente usa
+    `socket.connect()` de loopback -- eso es IPC del runtime, nunca una
+    conexion de red externa real, y `TestClient.__enter__` lo dispara
+    al construir su event loop. Loopback se deja pasar; cualquier otro
+    destino sigue bloqueado."""
+    host = address[0] if isinstance(address, tuple) and address else None
+    if host in _LOOPBACK_HOSTS:
+        return _REAL_SOCKET_CONNECT(self, address, *args, **kwargs)
     raise AssertionError("intento de conexion de red prohibido (socket.socket.connect)")
 
 
 def _raise_create_connection(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("intento de conexion de red prohibido (socket.create_connection)")
+
+
+# Regresion Windows (cierre correctivo 15B2-B, Seccion 7): ver la misma
+# nota en `test_operational_governance_isolation.py`.
+def test_socket_guard_allows_loopback_but_blocks_external_destination() -> None:
+    dummy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(AssertionError, match="intento de conexion de red prohibido"):
+            _raise_socket_connect(dummy_socket, ("93.184.216.34", 443))
+    finally:
+        dummy_socket.close()
+
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(OSError):
+            _raise_socket_connect(probe_socket, ("127.0.0.1", 1))
+    finally:
+        probe_socket.close()
 
 
 def _raise_httpx_client_init(*_args: object, **_kwargs: object) -> None:

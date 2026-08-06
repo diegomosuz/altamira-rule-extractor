@@ -1,6 +1,13 @@
 """OpenAPI (Prompt 13b): exactamente las rutas documentadas en
 docs/ARCHITECTURE.md Seccion 5 -- ningun endpoint adicional, en
-particular ningun `/guardrail` separado."""
+particular ningun `/guardrail` separado.
+
+Fase 15B2-B agrega exactamente una ruta documentada mas
+(`/api/operations/component-diagnostics`, protegida por
+`OperationalPermission.VIEW_SECURITY_STATUS`) -- `GET /internal/metrics`
+NO aparece aqui: se registra con `include_in_schema=False` a proposito
+(ver `api/routers/metrics.py`), nunca forma parte de la API publica
+documentada."""
 
 from __future__ import annotations
 
@@ -23,6 +30,8 @@ _EXPECTED_PATHS = {
     "/api/runs/{run_id}/governance/events",
     "/api/runs/{run_id}/governance/groups",
     "/api/runs/{run_id}/governance/artifacts/{logical_name}",
+    # Diagnostico de componentes (Fase 15B2-B, Seccion 12).
+    "/api/operations/component-diagnostics",
 }
 
 

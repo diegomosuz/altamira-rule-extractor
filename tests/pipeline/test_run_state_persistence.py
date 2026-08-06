@@ -11,7 +11,7 @@ de `run.json`), el artefacto durable de emergencia
 
 from __future__ import annotations
 
-import logging
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from altamira_extractor.config import Settings
 from altamira_extractor.contracts.enums import PipelineStage, StageStatus
 from altamira_extractor.contracts.run_state import RunState, StageExecution
 from altamira_extractor.contracts.run_state_recovery import RunStatePersistenceFailureRecord
+from altamira_extractor.logging_setup import configure_logging
 from altamira_extractor.pipeline import runner as runner_module
 from altamira_extractor.pipeline.artifact_store import atomic_write_json
 from altamira_extractor.pipeline.errors import AtomicWriteError, RunStatePersistenceError
@@ -526,9 +527,30 @@ def test_read_run_state_without_any_emergency_artifact_behaves_exactly_as_before
 # ---------------------------------------------------------------------------
 
 
+def _json_log_records(captured_text: str) -> list[dict[str, Any]]:
+    """Fase 15B2-B: `configure_logging` fija `propagate=False` en el
+    logger `altamira_extractor` (para no imprimir dos veces via el
+    `lastResort` handler de la libreria estandar) -- eso corta la
+    propagacion hacia el logger raiz, exactamente donde `caplog` de
+    pytest instala su handler por defecto. Desde que `create_app`/el
+    callback CLI invocan `configure_logging` en cada test que los
+    ejercita, `caplog` ya no puede usarse de forma confiable contra
+    loggers `altamira_extractor.*` en el resto de la sesion de pytest
+    -- estos tests leen la salida JSON real via `capsys`, igual que
+    `tests/test_bootstrap_smoke.py`."""
+    records = []
+    for line in captured_text.strip().splitlines():
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
 def test_executor_logs_warning_when_emergency_artifact_exists(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    configure_logging("INFO")
     executor = RunExecutor(max_workers=1)
     exc = RunStatePersistenceError(
         "no se pudo persistir run.json",
@@ -542,19 +564,22 @@ def test_executor_logs_warning_when_emergency_artifact_exists(
     def _raises() -> None:
         raise exc
 
-    with caplog.at_level(logging.WARNING, logger="altamira_extractor.api.executor"):
-        result = executor.try_submit("run-1", _raises)
-        executor.shutdown(wait=True)
+    capsys.readouterr()
+    result = executor.try_submit("run-1", _raises)
+    executor.shutdown(wait=True)
+    captured = capsys.readouterr()
+    records = _json_log_records(captured.err + captured.out)
 
     assert result == "submitted"
     assert not executor.is_active("run-1")
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
-    assert not any(record.levelno >= logging.CRITICAL for record in caplog.records)
+    assert any(r["level"] == "WARNING" for r in records)
+    assert not any(r["level"] == "CRITICAL" for r in records)
 
 
 def test_executor_logs_critical_when_no_emergency_artifact_exists(
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    configure_logging("INFO")
     executor = RunExecutor(max_workers=1)
     exc = RunStatePersistenceError(
         "no se pudo persistir run.json ni la emergencia",
@@ -568,32 +593,43 @@ def test_executor_logs_critical_when_no_emergency_artifact_exists(
     def _raises() -> None:
         raise exc
 
-    with caplog.at_level(logging.WARNING, logger="altamira_extractor.api.executor"):
-        result = executor.try_submit("run-2", _raises)
-        executor.shutdown(wait=True)
+    capsys.readouterr()
+    result = executor.try_submit("run-2", _raises)
+    executor.shutdown(wait=True)
+    captured = capsys.readouterr()
+    records = _json_log_records(captured.err + captured.out)
 
     assert result == "submitted"
     assert not executor.is_active("run-2")
-    assert any(record.levelno == logging.CRITICAL for record in caplog.records)
+    assert any(r["level"] == "CRITICAL" for r in records)
 
 
 def test_executor_generic_exception_still_handled_as_before(
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Regresion: un fallo generico (no relacionado con persistencia de
     run.json) sigue cayendo en el manejador original, sin cambios."""
+    configure_logging("INFO")
     executor = RunExecutor(max_workers=1)
 
     def _raises() -> None:
         raise ValueError("fallo generico no relacionado")
 
-    with caplog.at_level(logging.ERROR, logger="altamira_extractor.api.executor"):
-        result = executor.try_submit("run-3", _raises)
-        executor.shutdown(wait=True)
+    capsys.readouterr()
+    result = executor.try_submit("run-3", _raises)
+    executor.shutdown(wait=True)
+    captured = capsys.readouterr()
+    records = _json_log_records(captured.err + captured.out)
 
     assert result == "submitted"
     assert not executor.is_active("run-3")
-    assert any("fallo no controlado" in record.message for record in caplog.records)
+    # Fase 15B2-B: el catch-all de RunExecutor emite un evento
+    # estructurado cerrado (`event_name=background_run_failed`) en vez
+    # del mensaje libre anterior -- nunca el texto/tipo de la excepcion
+    # original mas alla de `exception_type`.
+    assert any(r.get("message") == "background_run_failed" for r in records)
+    assert any(r.get("run_id") == "run-3" for r in records)
+    assert any(r.get("exception_type") == "ValueError" for r in records)
 
 
 # ---------------------------------------------------------------------------

@@ -798,7 +798,13 @@ def test_unexpected_exception_sanitized_exit_1(
     result = runner.invoke(cli_module.app, ["status", NONEXISTENT_RUN_ID])
 
     assert result.exit_code == 1
-    assert result.stderr.strip() == "error interno"
+    # Desde Fase 15B2-B, el callback `_bootstrap_logging` conecta
+    # logging JSON estructurado al entrypoint CLI: `logger.error(...)`
+    # ahora SI escribe una linea JSON a stderr ademas del
+    # `typer.echo("error interno", err=True)` de siempre -- la ultima
+    # linea de stderr sigue siendo el texto plano para el usuario.
+    stderr_lines = result.stderr.strip().splitlines()
+    assert stderr_lines[-1] == "error interno"
     assert "hunter2" not in result.stdout
     assert "hunter2" not in result.stderr
     assert "/var/secret/path" not in result.stderr

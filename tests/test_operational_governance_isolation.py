@@ -52,8 +52,23 @@ from .pipeline._operational_governance_fixtures import (
     materialize_unified_canary,
 )
 
+_REAL_SOCKET_CONNECT = socket.socket.connect
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
-def _raise_socket_connect(*_args: object, **_kwargs: object) -> None:
+
+def _raise_socket_connect(
+    self: socket.socket, address: object, *args: object, **kwargs: object
+) -> object:
+    """Bloquea por DESTINO, nunca por mecanismo (cierre correctivo
+    15B2-B, Seccion 7): en Windows, `asyncio.ProactorEventLoop` abre un
+    self-pipe interno via `socket.socketpair()`, que internamente usa
+    `socket.connect()` de loopback -- eso es IPC del runtime, nunca una
+    conexion de red externa real, y `TestClient.__enter__` lo dispara
+    al construir su event loop. Loopback se deja pasar; cualquier otro
+    destino sigue bloqueado."""
+    host = address[0] if isinstance(address, tuple) and address else None
+    if host in _LOOPBACK_HOSTS:
+        return _REAL_SOCKET_CONNECT(self, address, *args, **kwargs)
     raise AssertionError("intento de conexion de red prohibido (socket.socket.connect)")
 
 
@@ -180,6 +195,31 @@ def _settings_for(tmp_path: Path) -> Settings:
     )
     settings.runs_dir.mkdir(parents=True, exist_ok=True)
     return settings
+
+
+# Regresion Windows (cierre correctivo 15B2-B, Seccion 7): el guard
+# original bloqueaba TODO `socket.socket.connect`, incluido el self-pipe
+# interno que `asyncio.ProactorEventLoop` abre por loopback al construir
+# su event loop -- eso rompia `TestClient.__enter__` en Windows con un
+# `AssertionError` que nada tenia que ver con una fuga de red real.
+def test_socket_guard_allows_loopback_but_blocks_external_destination() -> None:
+    dummy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(AssertionError, match="intento de conexion de red prohibido"):
+            _raise_socket_connect(dummy_socket, ("93.184.216.34", 443))
+    finally:
+        dummy_socket.close()
+
+    # Loopback (IPC interno del runtime): se delega a la implementacion
+    # real -- se prueba que NO lanza `AssertionError` (fallara con un
+    # error de conexion real de sockets si nada escucha en ese puerto,
+    # nunca con el guard).
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(OSError):
+            _raise_socket_connect(probe_socket, ("127.0.0.1", 1))
+    finally:
+        probe_socket.close()
 
 
 def test_full_governance_surface_under_write_and_network_block(

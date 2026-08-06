@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -55,14 +56,18 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import ui
 from ..config import Settings, load_settings
+from ..contracts.observability import ObservabilityMode
 from ..contracts.security_config import AuthenticationMode
+from ..logging_setup import LogEventName, configure_logging, log_event
+from ..observability.config_loader import load_observability_config
+from ..observability.metrics import ObservabilityRegistry
 from ..security.correlation import (
     CORRELATION_HEADER_NAME,
+    get_correlation_id,
     resolve_correlation_id,
     set_correlation_id,
 )
 from ..security.fastapi_deps import pending_session
-from ..security.identity_resolver import resolve_principal
 from ..security.security_config_loader import SecurityConfigOutcome, load_security_config
 from ..security.session import sign_session_cookie
 from ..ui.governance_actions_router import router as governance_actions_router
@@ -70,8 +75,10 @@ from ..ui.presentation import omit_keys, program_name_from_source_file, status_l
 from ..ui.router import router as ui_router
 from .errors import ApiError, ExecutorAtCapacityError
 from .executor import RunExecutor
+from .routers.diagnostics import router as diagnostics_router
 from .routers.governance import router as governance_router
 from .routers.health import router as health_router
+from .routers.metrics import router as metrics_router
 from .routers.runs import router as runs_router
 
 logger = logging.getLogger(__name__)
@@ -101,6 +108,20 @@ def _is_sensitive_ui_path(path: str) -> bool:
 
 
 _PERMISSIONS_POLICY = "geolocation=(), microphone=(), camera=(), payment=()"
+
+# Subconjunto cerrado de `ApiError.code` que cuenta como denegacion de
+# seguridad para `altamira_security_denials_total` (Fase 15B2-B,
+# Seccion 8) -- unico choke point: TODO `ApiError` de la app pasa por
+# `_handle_api_error` mas abajo, asi que instrumentar aqui cubre tanto
+# la API JSON como el gobierno operativo HTML sin tocar cada router.
+_SECURITY_DENIAL_CODES = frozenset(
+    {
+        "forbidden",
+        "unauthenticated",
+        "csrf_rejected",
+        "security_misconfigured",
+    }
+)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -202,15 +223,30 @@ class SecurityMisconfiguredGateMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def _route_template(request: Request) -> str:
+    """Plantilla de ruta registrada (p. ej. `/api/runs/{run_id}`), nunca
+    el path crudo -- Starlette solo fija `request.scope["route"]"`
+    despues de que el enrutador resuelve la request (disponible una vez
+    que `call_next` retorna). Sin match (404 antes de enrutar), un
+    marcador cerrado en lugar del path arbitrario del cliente."""
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    return path if isinstance(path, str) else "UNMATCHED_ROUTE"
+
+
 class CorrelationLoggingMiddleware(BaseHTTPMiddleware):
     """Correlation ID por request (Fase 15B1 Parte 15) -- resuelto UNA
     sola vez aqui (`resolve_correlation_id`), guardado en
     `request.state` para que los handlers lo reutilicen
     (`get_correlation_id`) y devuelto en el header de respuesta.
-    Registra UNA linea estructurada por request: `correlation_id`,
-    metodo, ruta, status, `principal_id` normalizado (nunca el header
-    crudo). NUNCA loguea query string completa, cuerpo de formulario,
-    cookies, token CSRF, headers de identidad crudos ni codigo fuente."""
+
+    Registra EXACTAMENTE una linea estructurada por request
+    (`event_name=http_request_completed`, Fase 15B2-B Seccion 7): forma
+    cerrada de campos (`correlation_id`, `http_method`, `http_route`
+    -- plantilla, nunca path crudo --, `http_status_code`,
+    `duration_ms`, `outcome`). NUNCA incluye `principal_id`, query
+    string, cuerpo de formulario, cookies, token CSRF, headers de
+    identidad crudos ni codigo fuente."""
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -223,25 +259,32 @@ class CorrelationLoggingMiddleware(BaseHTTPMiddleware):
         )
         set_correlation_id(request, correlation_id)
 
+        started_at = time.perf_counter()
         response = await call_next(request)
+        duration_seconds = time.perf_counter() - started_at
         response.headers[CORRELATION_HEADER_NAME] = correlation_id
 
-        principal_id = "-"
-        if security_config is not None:
-            try:
-                principal_id = resolve_principal(request.headers, security_config).principal_id
-            except ApiError:
-                principal_id = "-"
-        logger.info(
-            "request completed",
-            extra={
-                "correlation_id": correlation_id,
-                "http_method": request.method,
-                "http_path": request.url.path,
-                "http_status_code": response.status_code,
-                "principal_id": principal_id,
-            },
+        route_template = _route_template(request)
+        log_event(
+            logger,
+            logging.INFO,
+            LogEventName.HTTP_REQUEST_COMPLETED,
+            correlation_id=correlation_id,
+            http_method=request.method,
+            http_route=route_template,
+            http_status_code=response.status_code,
+            duration_ms=round(duration_seconds * 1000, 3),
+            outcome="success" if response.status_code < 500 else "error",
         )
+
+        registry: ObservabilityRegistry | None = getattr(request.app.state, "observability", None)
+        if registry is not None:
+            registry.observe_http_request(
+                method=request.method,
+                route=route_template,
+                status_code=response.status_code,
+                duration_seconds=duration_seconds,
+            )
         return response
 
 
@@ -260,10 +303,34 @@ def _render_error(request: Request, *, status_code: int, code: str, message: str
 
 
 def create_app(settings: Settings) -> FastAPI:
+    # Configurado sincronicamente, antes de que exista la instancia de
+    # FastAPI: cualquier log emitido durante el arranque (incluida la
+    # propia carga de configuracion mas abajo, en `lifespan`) ya pasa
+    # por el formatter JSON endurecido (Fase 15B2-B). Idempotente
+    # (`configure_logging` limpia handlers previos), asi que recrear la
+    # app repetidamente en tests nunca duplica handlers.
+    configure_logging(settings.log_level)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
-        app.state.executor = RunExecutor(max_workers=settings.api_max_workers)
+
+        # Observabilidad (Fase 15B2-B): la ausencia/invalidez de
+        # `config/observability.yaml` NUNCA activa un gate de
+        # fail-closed (a diferencia de `security_config` mas abajo) --
+        # `load_observability_config` ya devuelve un default seguro
+        # utilizable en cualquier `outcome`.
+        obs_result = load_observability_config(settings.observability_config_path)
+        app.state.observability_config = obs_result.config
+        app.state.observability_config_outcome = obs_result.outcome
+        app.state.observability_config_error = obs_result.error
+        app.state.observability = ObservabilityRegistry(
+            enabled=obs_result.config.metrics.mode == ObservabilityMode.ENABLED
+        )
+
+        app.state.executor = RunExecutor(
+            max_workers=settings.api_max_workers, metrics=app.state.observability
+        )
         app.state.templates = Jinja2Templates(directory=str(ui.TEMPLATES_DIR))
         app.state.templates.env.filters["status_label"] = status_label
         app.state.templates.env.filters["program_name"] = program_name_from_source_file
@@ -343,6 +410,8 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(runs_router)
     app.include_router(governance_router)
     app.include_router(governance_actions_router)
+    app.include_router(metrics_router)
+    app.include_router(diagnostics_router)
     app.include_router(ui_router)
 
     @app.get("/", include_in_schema=False)
@@ -367,6 +436,12 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.exception_handler(ApiError)
     async def _handle_api_error(request: Request, exc: ApiError) -> Response:
+        if exc.code in _SECURITY_DENIAL_CODES:
+            registry: ObservabilityRegistry | None = getattr(
+                request.app.state, "observability", None
+            )
+            if registry is not None:
+                registry.inc_security_denial(reason_code=exc.code)
         return _render_error(
             request, status_code=exc.status_code, code=exc.code, message=exc.message
         )
@@ -388,7 +463,18 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected_error(request: Request, exc: Exception) -> Response:
-        logger.exception("error interno no controlado en la API")
+        # Fase 15B2-B Seccion 6: forma cerrada, nunca traceback/mensaje
+        # crudo de la excepcion -- unicamente el nombre de su clase.
+        log_event(
+            logger,
+            logging.ERROR,
+            LogEventName.UNEXPECTED_ERROR,
+            error_code="internal_error",
+            exception_type=type(exc).__name__,
+            correlation_id=get_correlation_id(request),
+            http_route=_route_template(request),
+            http_status_code=500,
+        )
         return _render_error(
             request, status_code=500, code="internal_error", message="error interno"
         )

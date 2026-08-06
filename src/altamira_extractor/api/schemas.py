@@ -20,6 +20,7 @@ from ..contracts.enums import (
     Severity,
     StageStatus,
 )
+from ..contracts.observability import ComponentStatus
 from ..contracts.rule_draft import RuleDraft
 
 
@@ -27,14 +28,38 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
 
 
+# Codigos de motivo cerrados de `/ready` (Fase 15B2-B, Seccion 11):
+# `security_misconfigured` es el original del cierre Fase 15B1, los
+# demas son bounded process-readiness checks nuevos -- nunca Neo4j/LLM/
+# ausencia de runs (fallos por-request, no de arranque del proceso).
+ReadinessReasonCode = Literal[
+    "security_misconfigured",
+    "parser_jar_missing",
+    "data_root_unavailable",
+    "executor_unavailable",
+]
+
+
+class ReadinessCheckResult(BaseModel):
+    """Detalle de un chequeo individual de `/ready` -- nunca expone un
+    path absoluto, hostname, credencial ni texto de excepcion."""
+
+    component_id: str
+    status: ComponentStatus
+    reason_code: ReadinessReasonCode | None
+
+
 class ReadinessResponse(BaseModel):
-    """`ready=false` UNICAMENTE por `config/security.yaml` ausente o
-    invalido (cierre Fase 15B1, "DISABLED_DEV explicito") -- nunca por
-    Neo4j/LLM/runs_dir (esos son fallos por-request, no de arranque).
-    `reason` es `None` cuando `ready=true`."""
+    """`ready=false` por el primer chequeo NOT_READY, en orden de
+    prioridad (cierre Fase 15B1 + extension Fase 15B2-B): config de
+    seguridad, JAR del parser, data root, executor -- nunca por Neo4j/
+    LLM/runs_dir vacio (esos son fallos por-request, no de arranque).
+    `reason` es `None` cuando `ready=true`; `checks` siempre lista el
+    detalle completo de los 4 chequeos, con o sin fallo."""
 
     ready: bool
-    reason: Literal["security_misconfigured"] | None
+    reason: ReadinessReasonCode | None
+    checks: list[ReadinessCheckResult]
 
 
 class StageExecutionView(BaseModel):
@@ -167,3 +192,57 @@ class RuleResponse(BaseModel):
     candidate_id: str
     final_rule_draft: RuleDraft
     guardrail: GuardrailView
+
+
+# Codigos de motivo cerrados de `/api/operations/component-diagnostics`
+# (Fase 15B2-B, Seccion 12) -- uno por componente, nunca texto libre de
+# excepcion/path/hostname/credencial.
+ComponentReasonCode = Literal[
+    "security_config_loaded",
+    "security_config_missing",
+    "security_config_invalid",
+    "parser_jar_present",
+    "parser_jar_missing",
+    "data_root_present",
+    "data_root_missing",
+    "executor_initialized",
+    "executor_unavailable",
+    "neo4j_configuration_valid",
+    "neo4j_configuration_invalid",
+    "neo4j_reachable",
+    "neo4j_unreachable",
+    "neo4j_authentication_failed",
+    "neo4j_timeout",
+    "neo4j_not_attempted",
+    "metrics_enabled",
+    "metrics_disabled",
+    "logging_configured",
+    "logging_not_configured",
+    "functional_validation_config_present",
+    "functional_validation_config_missing",
+    "release_readiness_config_present",
+    "release_readiness_config_missing",
+    "provider_disabled",
+    "provider_configured",
+    "provider_misconfigured",
+]
+
+
+class ComponentDiagnostic(BaseModel):
+    """Un componente del diagnostico operativo -- NUNCA expone hostname,
+    URI, usuario, token, path absoluto ni texto de excepcion; solo un
+    `reason_code` cerrado. `required_for_*` documenta el impacto de un
+    estado distinto de `READY`, no el estado en si."""
+
+    component_id: str
+    status: ComponentStatus
+    reason_code: ComponentReasonCode
+    checked_at_utc: datetime
+    required_for_ingestion: bool
+    required_for_query: bool
+    required_for_operational_actions: bool
+
+
+class ComponentDiagnosticsResponse(BaseModel):
+    generated_at_utc: datetime
+    components: list[ComponentDiagnostic]

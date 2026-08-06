@@ -110,6 +110,10 @@ def _default_release_readiness_policy_path() -> Path:
     return _discover_repo_root() / "config" / "release_readiness_policy.yaml"
 
 
+def _default_observability_config_path() -> Path:
+    return _discover_repo_root() / "config" / "observability.yaml"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -369,6 +373,14 @@ class Settings(BaseSettings):
     release_readiness_policy_path: Path = Field(
         default_factory=_default_release_readiness_policy_path
     )
+
+    # Localizacion estable de config/observability.yaml (Fase 15B2-B:
+    # logging estructurado, metricas, health/readiness, diagnostico de
+    # componentes). Mismo patron que security_config_path: no depende del
+    # CWD -- pero, a diferencia de security_config_path, su ausencia
+    # NUNCA activa un gate global de fail-closed (ver
+    # contracts/observability.py).
+    observability_config_path: Path = Field(default_factory=_default_observability_config_path)
 
 
 def load_settings() -> Settings:
