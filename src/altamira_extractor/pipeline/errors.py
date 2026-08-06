@@ -420,6 +420,73 @@ class SemanticCoverageError(PipelineError):
     json` parcial cuando esta excepcion se lanza."""
 
 
+class SemanticCoverageObservationsError(PipelineError):
+    """Fallo de `semantic_coverage_observations_service.py` (Fase 15B2-A,
+    Parte D, diagnostico bajo demanda): el run no existe, `run.json` es
+    invalido, el run no alcanzo PARSED (SUCCEEDED), el run no registra
+    `source_package_hash`, o `artifacts/02-canonical/` esta ausente,
+    vacio, no es JSON valido, o no valida contra `CanonicalProgram`. El
+    mensaje nunca incluye una ruta absoluta ni el contenido del JSON
+    invalido. Nunca se persiste un `diagnostics/semantic-coverage-
+    observations.json` parcial cuando esta excepcion se lanza. Distinta
+    de `SemanticCoverageError` (Fase 1, misma familia de artefactos de
+    entrada pero requiere ADEMAS dependencies/semantic-graph/candidates)
+    y de `SemanticCoverageRegistryError` (Parte C, nunca depende de un
+    `run_id`)."""
+
+
+class FunctionalValidationError(PipelineError):
+    """Fallo de `functional_validation_service.py`/
+    `functional_validation_matcher.py` (Fase 15B2-A, Parte F, diagnostico
+    bajo demanda): `config/ground_truth/synthetic_engineering.yaml` esta
+    ausente/mal formado/no valida contra `FunctionalGroundTruthSet`, o
+    `compute_candidate_promotion_assessment_artifact` (Fase 9) fallo
+    (`CandidatePromotionAssessmentError`, envuelta aqui). El mensaje nunca
+    incluye una ruta absoluta ni el contenido de un YAML/JSON invalido.
+    Nunca se persiste un `diagnostics/functional-validation-report.json`
+    parcial cuando esta excepcion se lanza."""
+
+
+class ReleaseReadinessError(PipelineError):
+    """Fallo de `release_readiness_service.py`/`release_readiness_
+    evaluator.py` (Fase 15B2-A, Parte G, diagnostico bajo demanda):
+    `config/release_readiness_policy.yaml` esta ausente/mal formado/no
+    valida contra `ReleaseReadinessPolicy`, `config/semantic_coverage.yaml`
+    no valida (`SemanticCoverageRegistryError`, envuelta aqui), o
+    `compute_functional_validation_report` (Parte F) fallo
+    (`FunctionalValidationError`, envuelta aqui). El mensaje nunca incluye
+    una ruta absoluta ni el contenido de un YAML/JSON invalido. Nunca se
+    persiste un `diagnostics/release-readiness-assessment.json` parcial
+    cuando esta excepcion se lanza."""
+
+
+class FunctionalDatasetAggregationError(PipelineError):
+    """Fallo de `functional_validation_aggregator.py`/`functional_
+    dataset_validation_service.py` (cierre de Fase 15B2-A, agregador
+    multi-run): dos `FunctionalValidationReport` de entrada declaran
+    `ground_truth_catalog_edition` distinta (dataset/version
+    incompatibles), un `run_id` se repite, o el mismo `case_id` resulta
+    APPLICABLE con outcomes DISTINTOS en dos reportes de entrada
+    (conflicto bloqueante -- nunca se resuelve en silencio eligiendo
+    uno). El mensaje nunca incluye una ruta absoluta ni contenido COBOL.
+    Nunca se persiste un `FunctionalDatasetValidationReport` parcial
+    cuando esta excepcion se lanza."""
+
+
+class SemanticCoverageRegistryError(PipelineError):
+    """Fallo de `semantic_coverage_registry.py` (Fase 15B2-A, Parte C,
+    reconciliacion ejecutable del manifiesto estatico `config/
+    semantic_coverage.yaml`): el YAML esta ausente, mal formado, no
+    valida contra `SemanticCoverageManifest`, o `check_manifest_
+    reconciled` detecto que `manifest.issues` no coincide con una
+    reconciliacion fresca contra V1/`V2_DETECTOR_REGISTRY`/
+    `INTERPROCEDURAL_RULE_DETECTOR_REGISTRY`/`UnifiedRuleFamily`
+    (manifiesto desactualizado respecto del codigo real). Distinta de
+    `SemanticCoverageError` (Fase 1, diagnostico POR-RUN sobre artefactos
+    V1 de un run concreto): esta excepcion nunca depende de un `run_id`
+    ni de artefactos de ejecucion."""
+
+
 class SemanticEffectsError(PipelineError):
     """Fallo de `semantic_effects_service.py` (Fase 2 de la ampliacion
     semantica, no-contractual, diagnostico bajo demanda): el run no

@@ -26,7 +26,27 @@ para RULE_DRAFTS_GENERATED: lee el ContextPackage real incrustado en
 cada prompt efectivamente renderizado, reconstruye su `EvidenceCatalog`
 con la MISMA funcion que usa produccion (`build_evidence_catalog`, sin
 reimplementarla) y arma claims con `evidence_refs` apuntando a los alias
-reales de esa corrida."""
+reales de esa corrida.
+
+Checkpoint correctivo (endurecimiento de `build_settings`, cierre de
+Fase 15B2-A): el incidente que origino `tests/hermetic_llm_support.py`
+fue exactamente un `Settings()` sin `_env_file=None` cargando `.env`
+implicitamente. `build_settings` SIEMPRE parcheo `OpenAICompatibleChatClient`
+via los helpers de este modulo (nunca dependio de un proveedor real para
+funcionar), pero construia `Settings(...)` sin `_env_file=None` -- si
+`.env` existiera en el CWD del proceso de test, sus valores de
+`LLM_PROVIDER`/`OPENAI_*` podrian filtrarse a los campos NO
+sobrescritos explicitamente aqui. `_env_file=None` cierra esa brecha
+igual que `hermetic_llm_support.py::build_hermetic_settings`; el sentinel
+`FAKE_LLM_BASE_URL`/`FAKE_LLM_API_KEY`/`FAKE_LLM_MODEL` (RFC 2606
+`.invalid`, reutilizado del helper hermetico) reemplaza los valores
+`https://api.example.com/v1`/`sk-test-key` anteriores -- mismo principio
+de defensa en profundidad, nunca un dominio que pudiera resolver por
+accidente. Ver `tests/test_hermetic_harness_regression.py::
+test_e2e_support_build_settings_ignores_polluted_environment` para el
+test de regresion que reproduce el escenario exacto (`.env` contaminado
+descubrible + variables de entorno de un proveedor real) y prueba esta
+correccion."""
 
 from __future__ import annotations
 
@@ -41,6 +61,8 @@ import pytest
 from altamira_extractor.config import Settings
 from altamira_extractor.contracts.context_package import ContextPackage
 from altamira_extractor.pipeline.evidence_catalog import EvidenceCatalog, build_evidence_catalog
+
+from .hermetic_llm_support import FAKE_LLM_API_KEY, FAKE_LLM_BASE_URL, FAKE_LLM_MODEL
 
 _JSON_DECODER = json.JSONDecoder()
 
@@ -321,16 +343,25 @@ def write_disabled_dev_security_config(tmp_path: Path) -> Path:
 
 
 def build_settings(tmp_path: Path) -> Settings:
+    """Settings sinteticas para los E2E de proceso unico. `_env_file=None`
+    (checkpoint correctivo): nunca carga `.env`, sin importar que archivo
+    exista en el CWD del proceso de test -- mismo mecanismo que
+    `hermetic_llm_support.py::build_hermetic_settings`, cuyos sentinels
+    `FAKE_LLM_*` (`.invalid`, RFC 2606) se reutilizan aqui en vez de un
+    dominio de ejemplo que, aunque nunca deberia dialarse (todo E2E real
+    parchea `OpenAICompatibleChatClient`), no ofrecia la misma garantia
+    de "nunca resuelve DNS" que el sentinel hermetico."""
     prompts = write_prompt_files(tmp_path)
-    return Settings(
+    return Settings(  # type: ignore[call-arg]
+        _env_file=None,
         data_dir=tmp_path / "data",
         runs_dir=tmp_path / "data" / "runs",
         incoming_dir=tmp_path / "data" / "incoming",
         security_config_path=write_disabled_dev_security_config(tmp_path),
         LLM_PROVIDER="openai",
-        OPENAI_API_KEY="sk-test-key",
-        OPENAI_BASE_URL="https://api.example.com/v1",
-        OPENAI_MODEL="gpt-test",
+        OPENAI_API_KEY=FAKE_LLM_API_KEY,
+        OPENAI_BASE_URL=FAKE_LLM_BASE_URL,
+        OPENAI_MODEL=FAKE_LLM_MODEL,
         rule_writer_system_prompt_path=prompts["writer_system"],
         rule_writer_user_prompt_path=prompts["writer_user"],
         rule_repair_system_prompt_path=prompts["repair_system"],

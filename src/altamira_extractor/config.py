@@ -98,6 +98,18 @@ def _default_security_config_path() -> Path:
     return _discover_repo_root() / "config" / "security.yaml"
 
 
+def _default_semantic_coverage_manifest_path() -> Path:
+    return _discover_repo_root() / "config" / "semantic_coverage.yaml"
+
+
+def _default_ground_truth_path() -> Path:
+    return _discover_repo_root() / "config" / "ground_truth" / "synthetic_engineering.yaml"
+
+
+def _default_release_readiness_policy_path() -> Path:
+    return _discover_repo_root() / "config" / "release_readiness_policy.yaml"
+
+
 class Settings(BaseSettings):
     """Configuracion de la aplicacion, poblada desde variables de entorno.
 
@@ -341,6 +353,22 @@ class Settings(BaseSettings):
     # el operador del proxy TLS sabe si es seguro anunciar HSTS.
     trusted_hosts: list[str] = Field(default_factory=lambda: ["*"])
     hsts_enabled: bool = False
+
+    # Localizacion estable de config/semantic_coverage.yaml (Fase 15B2-A
+    # Parte B/C/D: manifiesto estatico de cobertura semantica y
+    # reconciliacion/observaciones ejecutadas sobre el). Mismo patron que
+    # semantic_tags_path/security_config_path: no depende del CWD.
+    semantic_coverage_manifest_path: Path = Field(
+        default_factory=_default_semantic_coverage_manifest_path
+    )
+
+    # Localizacion estable de config/ground_truth/synthetic_engineering.yaml
+    # y config/release_readiness_policy.yaml (Fase 15B2-A Parte E/F/G).
+    # Mismo patron: no depende del CWD.
+    ground_truth_path: Path = Field(default_factory=_default_ground_truth_path)
+    release_readiness_policy_path: Path = Field(
+        default_factory=_default_release_readiness_policy_path
+    )
 
 
 def load_settings() -> Settings:

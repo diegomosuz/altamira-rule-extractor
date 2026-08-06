@@ -1,0 +1,109 @@
+# Ground truth funcional VERSIONADO (Fase 15B2-A, Parte E).
+#
+# EXCLUSIVAMENTE fixtures sinteticas, expectativas derivadas leyendo el
+# codigo fuente real de los detectores -- NUNCA ejecutando el pipeline y
+# copiando su salida (unica excepcion documentada: la verificacion
+# POSTERIOR contra el JAR/pipeline real, nunca la fuente de la
+# expectativa misma -- ver contracts/functional_ground_truth.py, decision
+# #2). Ver ese mismo modulo para las tres decisiones arquitectonicas
+# obligatorias que gobiernan este archivo.
+schema_version: "1.0"
+catalog_edition: fase-15b2-a-2026.08.05
+cases:
+- case_id: gt-negative-untagged-counter-decision
+  kind: NEGATIVE
+  program: GTNEG001
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_negative_001.cbl
+    sha256: 7c0227a34d9366980c0569ee2f8ab2fd54b4d382c1671a4420b8370531df483c
+  description: 'IF WS-CONTADOR > 10 ... MOVE 1/0 TO WS-CONTADOR: una decision ordinaria
+    sobre un DataItem que no coincide con ninguna regla de config/semantic-tags.yml
+    (no contiene COD/CODE+RET/RETURN/RESP, SQLCODE, IMPORTE/MONTO/AMOUNT, LIMITE/TOPE/THRESHOLD,
+    TIPO+OP ni SEGMENTO/SEGMENT). Prueba que un WS-CONTADOR generico nunca produce un falso
+    positivo RETURN_CODE via Q0 (sink.semantic_tag=return_code es un requisito estructural
+    de queries/v1/q0_candidates.cypher que este DataItem nunca cumple).'
+  expected_rules: []
+- case_id: gt-positive-by-reference-output-unconditional-move
+  kind: POSITIVE
+  program: GTBRCLR1
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_by_reference_output_callee_001.cbl
+    sha256: d4db8a7994ae649e010e01647b1f04e9a383fc907ee6f78bbb53eb356a84ab8d
+  - relative_path: config/ground_truth/fixtures/gt_by_reference_output_caller_001.cbl
+    sha256: 19b5352db448eefe16f57f846fd046d92a79deb355421082812c86170f2a5fa9
+  description: 'GTBRCLR1 (caller) invoca CALL ''GTBRCLE1'' USING BY REFERENCE WS-STATUS;
+    GTBRCLE1 (callee) ejecuta MOVE ''OK00'' TO LK-STATUS de forma UNCONDICIONAL (unico statement
+    de MAIN-PARA, sin IF/EVALUATE) antes de GOBACK -- caso interprocedural genuino: dos
+    programas, dos fixtures.'
+  expected_rules:
+  - expectation_id: gt-positive-by-reference-output-unconditional-move::interprocedural-by-reference
+    rule_family: BY_REFERENCE_OUTPUT
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'detect_by_reference_rule exige exit_fact status=PROPAGATED
+      (_exit_fact_for_binding -> _known_literal_at con parent_scope=None): busca el ULTIMO
+      PropagatedValueFact de GTBRCLE1 escrito a LK-STATUS fuera de cualquier decision. La unica
+      escritura es MOVE ''OK00'' TO LK-STATUS, top-level en MAIN-PARA -- produce un unico fact
+      literal, exit_fact queda PROPAGATED con literal=''OK00''. callee_exit_barrier=None (GOBACK
+      nunca es barrera). binding RESOLVED_POSITIONAL (unico parametro LINKAGE). Mapeo
+      BY_REFERENCE_RULE -> BY_REFERENCE_OUTPUT via candidate_source_adapters.py,
+      program=caller_program, paragraph=caller_paragraph. Confirmado end-to-end con el pipeline
+      real hasta PARSED + compute_interprocedural_rule_candidates_artifact (sin Neo4j): 1
+      candidato support=DETERMINISTIC caller=GTBRCLR1 callee=GTBRCLE1 target=WS-STATUS
+      output_literal=OK00, sin barriers ni diagnostics.'
+- case_id: gt-positive-level88-return-code-nested-set
+  kind: POSITIVE
+  program: GTL88001
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_level88_return_code_001.cbl
+    sha256: 4eb7f6772a35b59821e5c2c69f3adcb629c0c46f5bc9075cf204fa89ab20f325
+  description: 'IF WS-MONTO > 1000 SET COD-OPERACION-VALIDA TO TRUE END-IF: SET de
+    una condicion-88 anidado DENTRO de la rama de un IF (a diferencia del fixture
+    del parser Java parser/src/test/resources/fixtures/level-88.cbl, cuyos SET estan
+    al nivel de MAIN-PARA, fuera de cualquier decision).'
+  expected_rules:
+  - expectation_id: gt-positive-level88-return-code-nested-set::v2-level88
+    rule_family: LEVEL_88_RETURN_CODE
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'pipeline/v2_detectors.py::detect_level_88_return_code (lineas 363-454)
+      exige: (a) kind=SET con condition_name_target/condition_set_value=True; (b) un
+      SemanticEffectKind.SET_CONDITION_TRUE demostrado; (c) decision_statement=
+      _nearest_enclosing_decision(...) no nulo [SET anidado dentro del IF, a diferencia de
+      level-88.cbl]; (d) CONDITION_LITERAL resuelto contra un unico VALUE [COD-OPERACION-VALIDA
+      tiene solo ''0000'', sin THRU ni multiples valores -- a diferencia de COD-RANGO-ERROR/
+      COD-MULTI-VALOR en level-88.cbl, que caerian en V2_LEVEL_88_VALUE_NOT_UNIQUE]; (e)
+      semantic_tag=return_code en el padre WS-COD-RETORNO. Confirmado con el JAR real (parser
+      parse): condition_name_target=COD-OPERACION-VALIDA, condition_set_value=true,
+      parent_statement_id apunta al IF, condition_names[...].values tiene un unico elemento.'
+- case_id: gt-positive-return-code-if-else
+  kind: POSITIVE
+  program: GTRC001
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_return_code_001.cbl
+    sha256: fc64626ecaf91901bd6983476dfd6fa0053e113bd8f9834509d9f011d537e582
+  description: 'IF WS-MONTO > 1000 MOVE 99 TO WS-COD-RETORNO ELSE MOVE 0 TO WS-COD-RETORNO:
+    decision IF cuyas dos ramas escriben un DataItem taggeado return_code.'
+  expected_rules:
+  - expectation_id: gt-positive-return-code-if-else::q0
+    rule_family: RETURN_CODE
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'WS-COD-RETORNO coincide con la regla return-code-name de
+      config/semantic-tags.yml ((?i).*(COD|CODE).*(RET|RETURN|RESP).*: contiene
+      "COD" seguido de "RETORNO", que contiene "RET"). semantic_graph_builder.py
+      construye Decision+LEADS_TO unicamente desde IF/EVALUATE, con LEADS_TO hacia
+      los DataItem escritos en las ramas (ver notas de construct_id=IF en
+      config/semantic_coverage.yaml). queries/v1/q0_candidates.cypher exige
+      exactamente Program-[:CONTAINS]->Paragraph-[:HAS_DECISION]->Decision-[:LEADS_TO]->DataItem
+      con DataItem.semantic_tag=''return_code'' -- ambas ramas de este IF satisfacen
+      ese patron para WS-COD-RETORNO, por lo que Q0 (detector_id=q0-return-code-decision)
+      debe producir al menos una fila. Confirmado con el JAR real de ProLeap (parser/target/
+      altamira-cobol-parser.jar parse): ambos MOVE (branch=THEN/ELSE) declaran
+      target_data_items=[WS-COD-RETORNO] con parent_statement_id apuntando al mismo IF, y
+      unsupported_constructs=[] (sin degradacion de extraccion).'
+summary:
+  case_count: 4
+  positive_case_count: 3
+  negative_case_count: 1
+  expected_rule_count: 3

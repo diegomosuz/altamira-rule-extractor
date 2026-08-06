@@ -11,6 +11,13 @@ Uso:
     python -m altamira_extractor.cli rule <run_id> <candidate_id>
     python -m altamira_extractor.cli download <run_id> [--output PATH]
     python -m altamira_extractor.cli semantic-coverage <run_id> [--json]
+    python -m altamira_extractor.cli semantic-coverage-report <run_id> [--json]
+    python -m altamira_extractor.cli functional-validate <run_id> [--json]
+    python -m altamira_extractor.cli functional-validate-dataset --dataset <id> \
+        --lane <lane> --run-id <run_id> [--run-id <run_id> ...] [--json]
+    python -m altamira_extractor.cli release-readiness-assess <run_id> [--json]
+    python -m altamira_extractor.cli release-readiness-assess-dataset --dataset <id> \
+        --lane <lane> --run-id <run_id> [--run-id <run_id> ...] [--json]
     python -m altamira_extractor.cli semantic-effects <run_id> [--json]
     python -m altamira_extractor.cli semantic-propagation <run_id> [--json]
     python -m altamira_extractor.cli v2-candidates-shadow <run_id> [--json]
@@ -259,6 +266,7 @@ from .api.reads import (
 from .api.validation import validate_candidate_id, validate_run_id
 from .config import Settings, load_settings
 from .contracts.enums import PipelineStage
+from .contracts.functional_dataset_validation import FunctionalDatasetLane
 from .contracts.interprocedural_rule_candidates import InterproceduralRuleType
 from .contracts.run_state import RunState
 from .contracts.semantic_coverage import SemanticSupportStatus
@@ -280,6 +288,14 @@ from .pipeline.errors import (
     UnifiedActivationStoreError,
     UnifiedMaterializationError,
 )
+from .pipeline.functional_dataset_validation_service import (
+    compute_functional_dataset_validation_report,
+    write_functional_dataset_validation_report,
+)
+from .pipeline.functional_validation_service import (
+    compute_functional_validation_report,
+    write_functional_validation_report,
+)
 from .pipeline.interprocedural_call_linkage_service import (
     compute_interprocedural_call_linkage_artifact,
     write_interprocedural_call_linkage_artifact,
@@ -292,7 +308,21 @@ from .pipeline.interprocedural_rule_candidates_service import (
     compute_interprocedural_rule_candidates_artifact,
     write_interprocedural_rule_candidates_artifact,
 )
+from .pipeline.release_readiness_service import (
+    compute_release_readiness_assessment,
+    compute_release_readiness_assessment_for_dataset,
+    write_dataset_release_readiness_assessment,
+    write_release_readiness_assessment,
+)
 from .pipeline.runner import run_ingestion
+from .pipeline.semantic_coverage_observations_service import (
+    compute_semantic_coverage_observations,
+    write_semantic_coverage_observations,
+)
+from .pipeline.semantic_coverage_registry import (
+    load_semantic_coverage_manifest,
+    reconcile_manifest,
+)
 from .pipeline.semantic_coverage_service import (
     compute_semantic_coverage_report,
     write_semantic_coverage_report,
@@ -364,6 +394,50 @@ OutputOption = Annotated[
 SemanticCoverageJsonOption = Annotated[
     bool,
     typer.Option("--json", help="Imprime el SemanticCoverageReport completo en JSON estable"),
+]
+SemanticCoverageObservationsJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json", help="Imprime el SemanticCoverageObservationsArtifact completo en JSON estable"
+    ),
+]
+FunctionalValidationJsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Imprime el FunctionalValidationReport completo en JSON estable"),
+]
+DatasetIdOption = Annotated[
+    str,
+    typer.Option(
+        "--dataset",
+        help="dataset_id logico CERRADO (ver functional_dataset_validation_service.py); "
+        "nunca una ruta",
+    ),
+]
+DatasetLaneOption = Annotated[
+    FunctionalDatasetLane,
+    typer.Option("--lane", help="Superficie de candidatos agregada (motor cerrado)"),
+]
+DatasetRunIdsOption = Annotated[
+    list[str],
+    typer.Option(
+        "--run-id", help="run_id a incluir en la agregacion (repetible, minimo 1)"
+    ),
+]
+FunctionalDatasetValidationJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json", help="Imprime el FunctionalDatasetValidationReport completo en JSON estable"
+    ),
+]
+ReleaseReadinessJsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Imprime el ReleaseReadinessAssessment completo en JSON estable"),
+]
+DatasetReleaseReadinessJsonOption = Annotated[
+    bool,
+    typer.Option(
+        "--json", help="Imprime el DatasetReleaseReadinessAssessment completo en JSON estable"
+    ),
 ]
 SemanticEffectsJsonOption = Annotated[
     bool,
@@ -795,6 +869,302 @@ def semantic_coverage(
 
     if json_output:
         typer.echo(report.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="semantic-coverage-report")
+@_guard
+def semantic_coverage_report(
+    run_id: RunIdArgument, json_output: SemanticCoverageObservationsJsonOption = False
+) -> None:
+    """Reconcilia config/semantic_coverage.yaml y persiste diagnostics/
+    semantic-coverage-observations.json de RUN_ID.
+
+    Dos senales DISTINTAS combinadas en un unico comando (Fase 15B2-A,
+    Partes B/C/D, ver docs/SEMANTIC_COVERAGE.md): (1) reconciliacion
+    ESTATICA del manifiesto `config/semantic_coverage.yaml` contra los
+    registries reales de detectores (`pipeline/semantic_coverage_
+    registry.py`, independiente de RUN_ID -- se imprime siempre, nunca
+    se persiste por run); (2) observaciones POR-RUN de cuantas veces se
+    encontro cada construct_id del catalogo en `artifacts/02-canonical/`
+    de RUN_ID (`pipeline/semantic_coverage_observations_service.py`,
+    persistidas). Requiere que RUN_ID ya haya alcanzado PARSED
+    (SUCCEEDED). Nunca modifica run.json ni ningun artifacts/01-10; nunca
+    accede a Neo4j ni invoca un proveedor LLM.
+    """
+    settings = load_settings()
+    manifest = load_semantic_coverage_manifest(settings.semantic_coverage_manifest_path)
+    issues = reconcile_manifest(manifest)
+    error_issue_count = sum(1 for issue in issues if issue.severity.value == "ERROR")
+    typer.echo(f"manifest_edition: {manifest.manifest_edition}")
+    typer.echo(f"reconciliation_issues: {len(issues)} (error={error_issue_count})")
+    for issue in issues:
+        typer.echo(f"  [{issue.severity.value}] {issue.reason_code}: {issue.issue_id}")
+
+    run_dir = _run_dir(settings, run_id)
+    observations = compute_semantic_coverage_observations(run_dir, run_id, manifest)
+    observations_path = write_semantic_coverage_observations(run_dir, observations)
+    relative_observations_path = observations_path.relative_to(run_dir).as_posix()
+
+    summary = observations.summary
+    typer.echo(f"run_id: {observations.run_id}")
+    typer.echo(f"catalog_constructs: {summary.construct_count}")
+    typer.echo(f"observed_constructs: {summary.observed_construct_count}")
+    typer.echo(f"unsupported_identities: {summary.unsupported_identity_count}")
+    typer.echo(f"mapped_unsupported_identities: {summary.mapped_unsupported_identity_count}")
+    typer.echo(f"observations: {relative_observations_path}")
+
+    if json_output:
+        typer.echo(observations.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="functional-validate")
+@_guard
+def functional_validate(
+    run_id: RunIdArgument, json_output: FunctionalValidationJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/functional-validation-report.json
+    de RUN_ID.
+
+    Informe NO contractual, bajo demanda (Fase 15B2-A, Parte F, ver
+    docs/FUNCTIONAL_VALIDATION.md): compara config/ground_truth/
+    synthetic_engineering.yaml contra los UnifiedCandidateReference
+    reales de RUN_ID (CandidatePromotionAssessmentArtifact, Fase 9) con
+    matching deterministico y exacto -- nunca LLM, nunca embeddings,
+    nunca similitud semantica. Requiere que RUN_ID ya haya alcanzado
+    PARSED (SUCCEEDED). Nunca modifica run.json ni ningun
+    artifacts/01-10; nunca accede a Neo4j ni invoca un proveedor LLM.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    report = compute_functional_validation_report(run_dir, run_id, settings.ground_truth_path)
+    report_path = write_functional_validation_report(run_dir, report)
+    relative_report_path = report_path.relative_to(run_dir).as_posix()
+
+    typer.echo(f"run_id: {report.run_id}")
+    typer.echo(f"ground_truth_catalog_edition: {report.ground_truth_catalog_edition}")
+    typer.echo(f"dataset_applicability: {report.dataset_applicability.value}")
+    typer.echo(f"coverage_status: {report.coverage_status.value}")
+    typer.echo(
+        f"required_cases: {report.evaluated_required_case_count}/{report.required_case_count} "
+        f"evaluated  forbidden_cases: "
+        f"{report.evaluated_forbidden_case_count}/{report.forbidden_case_count} evaluated"
+    )
+    if report.pending_case_ids:
+        typer.echo(f"pending_case_ids: {', '.join(report.pending_case_ids)}")
+    typer.echo(f"dataset_disposition: {report.dataset_disposition.value}")
+    for case in report.case_results:
+        typer.echo(
+            f"  {case.case_id} [{case.kind.value}] applicability={case.applicability.value}: "
+            f"{case.outcome.value}"
+        )
+    metrics = report.metrics
+    typer.echo(
+        f"tp={metrics.true_positive_count} fn={metrics.false_negative_count} "
+        f"fp={metrics.false_positive_count} tn={metrics.true_negative_count}"
+    )
+    typer.echo(f"precision: {metrics.precision}")
+    typer.echo(f"recall: {metrics.recall}")
+    typer.echo(f"f1_score: {metrics.f1_score}")
+    typer.echo(f"report: {relative_report_path}")
+
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="functional-validate-dataset")
+@_guard
+def functional_validate_dataset(
+    dataset: DatasetIdOption,
+    lane: DatasetLaneOption,
+    run_ids: DatasetRunIdsOption,
+    json_output: FunctionalDatasetValidationJsonOption = False,
+) -> None:
+    """Calcula y persiste diagnostics/functional-dataset-validation-
+    report.json bajo el PRIMER --run-id (el "ancla" de la invocacion).
+
+    Submodo cerrado (cierre de Fase 15B2-A, Seccion 2/3): agrega N
+    FunctionalValidationReport (uno por --run-id, recalculado en
+    memoria, nunca releido de un diagnostico persistido) contra el
+    catalogo COMPLETO de --dataset (clave logica CERRADA, ver
+    functional_dataset_validation_service.py -- nunca una ruta), para
+    cubrir casos cuyas fixtures viven en runs/paquetes distintos (p. ej.
+    BY_REFERENCE_OUTPUT). --dataset/--lane son motores cerrados; --run-id
+    exige el formato exacto de run_id (rechaza cualquier desviacion que
+    pudiera interpretarse como ruta). Un FunctionalValidationReport de UN
+    SOLO run NUNCA puede afirmar PASS_ENGINEERING del dataset completo --
+    ver coverage_status en `functional-validate`. Requiere que cada
+    RUN_ID ya haya alcanzado PARSED (SUCCEEDED). Nunca modifica run.json
+    ni ningun artifacts/01-10 de ningun run; nunca accede a Neo4j ni
+    invoca un proveedor LLM.
+    """
+    if not run_ids:
+        raise _UsageError("se requiere al menos un --run-id")
+    settings = load_settings()
+    anchor_run_dir = _run_dir(settings, run_ids[0])
+    report = compute_functional_dataset_validation_report(
+        settings, run_ids, dataset_id=dataset, lane=lane
+    )
+    report_path = write_functional_dataset_validation_report(anchor_run_dir, report)
+    relative_report_path = report_path.relative_to(anchor_run_dir).as_posix()
+
+    typer.echo(f"report_id: {report.report_id}")
+    typer.echo(f"dataset_id: {report.dataset_id}")
+    typer.echo(f"dataset_version: {report.dataset_version}")
+    typer.echo(f"lane: {report.lane.value}")
+    typer.echo(f"source_run_ids: {', '.join(report.source_run_ids)}")
+    typer.echo(f"coverage_status: {report.coverage_status.value}")
+    typer.echo(
+        f"required_cases: {report.evaluated_required_case_count}/{report.required_case_count} "
+        f"evaluated  forbidden_cases: "
+        f"{report.evaluated_forbidden_case_count}/{report.forbidden_case_count} evaluated"
+    )
+    if report.pending_case_ids:
+        typer.echo(f"pending_case_ids: {', '.join(report.pending_case_ids)}")
+    if report.duplicate_case_ids:
+        typer.echo(f"duplicate_case_ids: {', '.join(report.duplicate_case_ids)}")
+    typer.echo(f"dataset_disposition: {report.dataset_disposition.value}")
+    for case in report.case_results:
+        source = f" (run={case.source_run_id})" if case.source_run_id else ""
+        typer.echo(
+            f"  {case.case_id} [{case.kind.value}] applicability={case.applicability.value}: "
+            f"{case.outcome.value}{source}"
+        )
+    metrics = report.metrics
+    typer.echo(
+        f"tp={metrics.true_positive_count} fn={metrics.false_negative_count} "
+        f"fp={metrics.false_positive_count} tn={metrics.true_negative_count}"
+    )
+    typer.echo(f"precision: {metrics.precision}")
+    typer.echo(f"recall: {metrics.recall}")
+    typer.echo(f"f1_score: {metrics.f1_score}")
+    typer.echo(f"report: {relative_report_path}")
+
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="release-readiness-assess")
+@_guard
+def release_readiness_assess(
+    run_id: RunIdArgument, json_output: ReleaseReadinessJsonOption = False
+) -> None:
+    """Calcula y persiste diagnostics/release-readiness-assessment.json
+    de RUN_ID.
+
+    Informe NO contractual, bajo demanda (Fase 15B2-A, Parte G, ver
+    docs/RELEASE_READINESS.md): evalua config/release_readiness_
+    policy.yaml contra la reconciliacion estatica del catalogo semantico
+    (Parte C) y el FunctionalValidationReport de RUN_ID (Parte F, se
+    recalcula aqui -- nunca relee un diagnostics/functional-validation-
+    report.json persistido). ALCANCE ACOTADO: `disposition=
+    FUNCTIONAL_CRITERIA_MET` NUNCA significa que el release completo esta
+    aprobado -- ver docs/RELEASE_READINESS.md para lo que este comando
+    deliberadamente NO evalua (Docker/Helm/K3s, backup/restore,
+    consolidacion de version). Requiere que RUN_ID ya haya alcanzado
+    PARSED (SUCCEEDED). Nunca modifica run.json ni ningun
+    artifacts/01-10; nunca accede a Neo4j ni invoca un proveedor LLM.
+    """
+    settings = load_settings()
+    run_dir = _run_dir(settings, run_id)
+    assessment = compute_release_readiness_assessment(
+        run_dir,
+        run_id,
+        policy_path=settings.release_readiness_policy_path,
+        semantic_coverage_manifest_path=settings.semantic_coverage_manifest_path,
+        ground_truth_path=settings.ground_truth_path,
+    )
+    assessment_path = write_release_readiness_assessment(run_dir, assessment)
+    relative_assessment_path = assessment_path.relative_to(run_dir).as_posix()
+
+    typer.echo(f"run_id: {assessment.run_id}")
+    typer.echo(f"policy_edition: {assessment.policy_edition}")
+    typer.echo(f"disposition: {assessment.disposition.value}")
+    typer.echo(f"structural_readiness: {assessment.structural_readiness.value}")
+    typer.echo(
+        f"engineering_functional_readiness: {assessment.engineering_functional_readiness.value}"
+    )
+    typer.echo(f"domain_functional_readiness: {assessment.domain_functional_readiness.value}")
+    for result in assessment.criteria_results:
+        typer.echo(f"  {result.criterion_id} [{result.kind.value}]: {result.status.value}")
+    typer.echo(
+        f"criteria: {assessment.summary.criterion_count} "
+        f"(passed={assessment.summary.passed_count} failed={assessment.summary.failed_count} "
+        f"not_evaluated={assessment.summary.not_evaluated_count})"
+    )
+    for warning in assessment.warnings:
+        typer.echo(f"  WARNING [{warning.code.value}]: {warning.message}")
+    typer.echo(f"assessment: {relative_assessment_path}")
+
+    if json_output:
+        typer.echo(assessment.model_dump_json(indent=2, exclude_none=False))
+
+
+@app.command(name="release-readiness-assess-dataset")
+@_guard
+def release_readiness_assess_dataset(
+    dataset: DatasetIdOption,
+    lane: DatasetLaneOption,
+    run_ids: DatasetRunIdsOption,
+    json_output: DatasetReleaseReadinessJsonOption = False,
+) -> None:
+    """Calcula y persiste diagnostics/dataset-release-readiness-
+    assessment.json bajo el PRIMER --run-id (el "ancla" de la
+    invocacion).
+
+    Variante multi-run de `release-readiness-assess` (cierre de Fase
+    15B2-A, Seccion 4): agrega los FunctionalValidationReport de todos
+    los --run-id (mismo mecanismo que `functional-validate-dataset`) y
+    evalua config/release_readiness_policy.yaml contra el
+    FunctionalDatasetValidationReport resultante -- nunca contra un solo
+    run aislado. `engineering_functional_readiness=PASSED` exige
+    `coverage_status=COMPLETELY_EVALUATED` (todos los casos REQUIRED/
+    FORBIDDEN del dataset evaluados en algun run incluido); un run
+    aislado con casos pendientes en otro paquete queda `disposition=
+    NOT_EVALUATED`, nunca FUNCTIONAL_CRITERIA_MET. ALCANCE ACOTADO: ver
+    docs/RELEASE_READINESS.md -- `domain_functional_readiness` nunca
+    excede PENDING_DOMAIN_REVIEW. Requiere que cada RUN_ID ya haya
+    alcanzado PARSED (SUCCEEDED). Nunca modifica run.json ni ningun
+    artifacts/01-10 de ningun run; nunca accede a Neo4j ni invoca un
+    proveedor LLM.
+    """
+    if not run_ids:
+        raise _UsageError("se requiere al menos un --run-id")
+    settings = load_settings()
+    anchor_run_dir = _run_dir(settings, run_ids[0])
+    assessment = compute_release_readiness_assessment_for_dataset(
+        settings,
+        run_ids,
+        dataset_id=dataset,
+        lane=lane,
+        policy_path=settings.release_readiness_policy_path,
+        semantic_coverage_manifest_path=settings.semantic_coverage_manifest_path,
+    )
+    assessment_path = write_dataset_release_readiness_assessment(anchor_run_dir, assessment)
+    relative_assessment_path = assessment_path.relative_to(anchor_run_dir).as_posix()
+
+    typer.echo(f"report_id: {assessment.report_id}")
+    typer.echo(f"dataset_id: {assessment.dataset_id}")
+    typer.echo(f"dataset_version: {assessment.dataset_version}")
+    typer.echo(f"policy_edition: {assessment.policy_edition}")
+    typer.echo(f"disposition: {assessment.disposition.value}")
+    typer.echo(f"structural_readiness: {assessment.structural_readiness.value}")
+    typer.echo(
+        f"engineering_functional_readiness: {assessment.engineering_functional_readiness.value}"
+    )
+    typer.echo(f"domain_functional_readiness: {assessment.domain_functional_readiness.value}")
+    for result in assessment.criteria_results:
+        typer.echo(f"  {result.criterion_id} [{result.kind.value}]: {result.status.value}")
+    typer.echo(
+        f"criteria: {assessment.summary.criterion_count} "
+        f"(passed={assessment.summary.passed_count} failed={assessment.summary.failed_count} "
+        f"not_evaluated={assessment.summary.not_evaluated_count})"
+    )
+    for warning in assessment.warnings:
+        typer.echo(f"  WARNING [{warning.code.value}]: {warning.message}")
+    typer.echo(f"assessment: {relative_assessment_path}")
+
+    if json_output:
+        typer.echo(assessment.model_dump_json(indent=2, exclude_none=False))
 
 
 @app.command(name="semantic-effects")

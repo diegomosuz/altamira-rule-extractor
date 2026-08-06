@@ -1,0 +1,12 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GTL88001.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-COD-RETORNO           PIC X(4).
+          88 COD-OPERACION-VALIDA  VALUE '0000'.
+       01 WS-MONTO                 PIC 9(7)V99.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           IF WS-MONTO > 1000
+               SET COD-OPERACION-VALIDA TO TRUE
+           END-IF.

@@ -1,0 +1,3313 @@
+# generado por gen_semantic_coverage_yaml.py -- ver docs/SEMANTIC_COVERAGE.md
+# NO editar a mano; regenerar via el script y validar con SemanticCoverageManifest.model_validate().
+schema_version: '1.0'
+manifest_edition: fase-15b2-a-2026.08.01
+constructs:
+- construct_id: ADD
+  display_name: Add (aritmetica sin COMPUTE)
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.add.AddStatement
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
+      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
+      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: source_file/line se preservan aunque kind=OTHER.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - ADD no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  - El JAR de ProLeap expone 4 clases ASG distintas para variantes de ADD (AddStatementImpl, AddToStatementImpl,
+    AddToGivingStatementImpl, AddCorrespondingStatementImpl, confirmadas por inspeccion directa del JAR);
+    las 4 colapsan al mismo construct_id=ADD, sin distincion de variante en unsupported_constructs mas
+    alla del nombre de clase.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: BARE_EXIT
+  display_name: EXIT (sin PROGRAM/PERFORM/SECTION)
+  category: PROGRAM_TERMINATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.statement.GobackStatement/ExitStatement/StopStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: convertExit distingue EXIT PROGRAM (ExitStatementContext.PROGRAM() no nulo) de EXIT simple
+      EXCLUSIVAMENTE via esa API tipada; un EXIT simple es un marcador no-operativo (nunca termina el
+      programa) y se enruta explicitamente a convertOther (kind=OTHER, nunca PROGRAM_TERMINATION).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ProgramTerminationClassificationTest.java::bareExitStaysOtherNeverProgramTermination
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs (mismo mecanismo que OTHER_STATEMENT_BUCKET),
+      sin modelo estructurado propio.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+    notes: EXIT simple es un no-op estructural, distinto de EXIT PROGRAM.
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Ningun detector usa EXIT simple como evidencia.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: Se preserva la ubicacion (paragraph/linea) via el mecanismo generico de convertOther, no el
+      texto de la sentencia.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/program-termination.cbl
+  limitations:
+  - 'EXIT simple (sin PROGRAM/PERFORM/SECTION) nunca se clasifica kind=PROGRAM_TERMINATION: cae en el
+    bucket tecnico OTHER via convertOther, igual que cualquier statement sin converter dedicado.'
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: BATCH_JOB
+  display_name: BatchJob (nodo de metamodelo para jobs de scheduler batch)
+  category: RESIDUAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: No corresponde a un constructo de gramatica COBOL; es un nodo del metamodelo semantico para
+      artefactos de scheduling externos (JCL/Control-M/etc.), fuera del ambito del parser.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_APPLICABLE
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_APPLICABLE
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: BatchJob esta permitido por el contrato del metamodelo (docs/NEO4J_METAMODEL.md) pero ningun
+      pipeline actual construye instancias de este nodo.
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: NOT_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  graph_nodes:
+  - BatchJob
+  graph_relationships:
+  - TRIGGERS
+  fixtures: []
+  limitations:
+  - Nodo de metamodelo reservado, sin productor implementado en ninguna etapa del pipeline actual.
+  unknown_behavior: BatchJob y TRIGGERS estan definidos en el metamodelo permitido pero ningun servicio
+    del pipeline los construye actualmente; su origen (JCL, Control-M u otro scheduler) no se ingesta
+    en V1.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: CALL_DYNAMIC
+  display_name: CALL identifier (nombre de programa dinamico)
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.call.CallStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: CallTargetKind.DYNAMIC; called_program_expression preservada, called_program_name ausente.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageGapTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+  - layer: INTERPROCEDURAL
+    status: PARTIALLY_SUPPORTED
+    notes: ProgramResolutionStatus.UNRESOLVED_DYNAMIC -- nunca se resuelve el programa real invocado.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_call_linkage_analyzer.py
+  - layer: DETECTOR
+    status: PARTIALLY_SUPPORTED
+    notes: Los detectores interprocedurales bloquean con InterproceduralPropagationBarrier.DYNAMIC_CALL.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Sin programa resuelto, no hay evidencia interprocedural citable mas alla del texto local.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: CALL
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-gap-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-gap-caller.cbl
+  limitations: []
+  unknown_behavior: El programa real invocado en tiempo de ejecucion nunca se determina estaticamente.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: CALL_LITERAL
+  display_name: CALL 'PROGRAMA-LITERAL'
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.call.CallStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: CallTargetKind.LITERAL, called_program_name resuelto estructuralmente.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: CALL nunca produce nodo/relacion en Neo4j; no existe grafo de llamadas persistido.
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+    notes: El flujo de datos de un CALL se modela via USING/RETURNING (constructs separados), no por CALL
+      en si.
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: CALL no alimenta el CPG reducido Paragraph->Paragraph (ese solo modela GO_TO/PERFORM).
+  - layer: INTERPROCEDURAL
+    status: SUPPORTED
+    notes: ProgramResolutionStatus.RESOLVED_INTERNAL cuando el programa esta en el mismo paquete.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_call_linkage_analyzer.py
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: Base de los tres detectores interprocedurales (Fase 8). Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: CALL
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-caller.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: CLOSE
+  display_name: CLOSE
+  category: FILE_IO
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.close.impl.CloseStatementImpl/ClosePortFileIoStatementImpl/CloseReelUnitStatementImpl/CloseRelativeStatementImpl
+      description: 4 clases ASG confirmadas por inspeccion directa del JAR resuelto (jar tf), no solo
+        una.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en StatementExtractor.convertOne(); cae en convertOther() (kind=OTHER).
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs, sin modelo estructurado propio.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: NOT_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures: []
+  limitations:
+  - El JAR de ProLeap expone 4 clases ASG distintas para variantes de CLOSE (forma simple, PORT/FILE IO,
+    REEL/UNIT, RELATIVE); las 4 colapsan al mismo construct_id=CLOSE.
+  - FILE_IO no tiene converter dedicado; se reporta solo como StatementKind.OTHER, un bucket tecnico sin
+    significado funcional propio.
+  unknown_behavior: Los archivos secuenciales/indexados (FD, READ/WRITE/OPEN/CLOSE) no se modelan como
+    Table ni como ningun otro nodo; el efecto de I/O sobre archivos permanece invisible al grafo.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: COMPUTE
+  display_name: COMPUTE target = expression
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::computeCapturesTargetAndExpression
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/StatementExtractorNormalizedExpressionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: expression + normalized_expression. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: SemanticEffectKind.COMPUTE_VALUE; propagacion se bloquea en COMPUTED_VALUE (no se sigue el
+      valor numerico). Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo
+      especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: PARTIALLY_SUPPORTED
+    notes: V2_STATE_CHANGE puede capturar el efecto de un COMPUTE sobre un dato ordinario, pero termina
+      en UnifiedRuleFamily.UNKNOWN.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+    notes: Ningun caso de ground truth sintetico ejercita COMPUTE especificamente en este cierre.
+  java_statement_kind: COMPUTE
+  propagation_support: 'Barrera COMPUTED_VALUE: el valor numerico resultante nunca se propaga como literal.'
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  - parser/src/test/resources/fixtures/normalized_expression.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: CONDITIONS_COMPOUND
+  display_name: Condiciones compuestas (AND/OR/NOT, class condition, sign condition)
+  category: CONDITIONAL_LOGIC
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.valuestmt.condition.AndOrCondition
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: PARTIALLY_SUPPORTED
+    notes: La condicion completa se preserva como texto (branch_condition); no se descompone en sub-condiciones
+      estructuradas.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/MultipleDecisionsPerParagraphTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: PARTIALLY_SUPPORTED
+    notes: branch_condition es un string; operands lista los identificadores involucrados, sin arbol logico.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: operands de la condicion compuesta se agregan a USES igual que una condicion simple. Evidencia
+      del mecanismo generico compartido; no existe test dedicado a este constructo especifico en esta
+      capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: Cubierto indirectamente via el IF/EVALUATE padre. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: IF
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - branch_condition preserva el texto completo de la condicion compuesta; no hay arbol AND/OR estructurado.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: COPYBOOK
+  display_name: COPY (copybooks, incluyendo REPLACING)
+  category: DATA_STRUCTURE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.preprocessor.sub.document.impl.io.CobolCopyLibraryImpl
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: El preprocesador de ProLeap expande el COPY antes del parseo; DclgenCopyTest.java cubre copybooks
+      generados por DCLGEN.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: PARTIALLY_SUPPORTED
+    notes: El contenido expandido se representa; el origen (nombre de copybook, REPLACING aplicado) se
+      preserva solo como span/ubicacion, no como metadato estructurado por item.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_APPLICABLE
+    notes: Los items copiados se modelan como DataItem/Paragraph ordinarios; no existe un nodo COPYBOOK.
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: PARTIALLY_SUPPORTED
+    notes: La procedencia indica el archivo fuente expandido, no el copybook original de forma independiente.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/copybook-caller.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: DISPLAY
+  display_name: DISPLAY identifier/literal [UPON mnemonic] [WITH NO ADVANCING]
+  category: OUTPUT
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.display.impl.DisplayStatementImpl
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf), con sub-elementos
+        propios Operand/At/Upon/With tambien confirmados.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en StatementExtractor.convertOne(); cae en convertOther() (kind=OTHER). Confirmado
+      empiricamente con el JAR real (parser parse) sobre la fixture display-exec-cics.cbl -- unsupported_constructs
+      contiene exactamente "DisplayStatementImpl en paragraph MAIN-PARA no decodificado estructuralmente
+      (kind=OTHER, source_text conservado)".
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/pipeline/test_display_exec_cics_observation_integration.py
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs, sin modelo estructurado propio (el operando mostrado
+      nunca se registra en variables_read).
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Sin variables_read estructurado pese a que el operando DISPLAY referencia un DataItem real;
+      SemanticEffectKind.UNSUPPORTED_STATEMENT.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: source_file/line se preservan aunque kind=OTHER.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/display-exec-cics.cbl
+  limitations:
+  - DISPLAY no tiene converter dedicado; el operando mostrado (incluyendo si referencia un DataItem semantic_tag=return_code)
+    nunca se extrae de forma estructurada.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: DIVIDE
+  display_name: Divide (aritmetica sin COMPUTE)
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.divide.DivideStatement
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
+      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
+      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: source_file/line se preservan aunque kind=OTHER.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - DIVIDE no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: ELSE
+  display_name: ELSE (rama negativa de IF)
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: ELSE no es un StatementContext propio de ProLeap; es parte de IfStatementContext.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::ifStatementHasThenAndElseBranches
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: branch_kind=ELSE en CanonicalStatement hijo. Evidencia del mecanismo generico compartido; no
+      existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Los statements de la rama ELSE contribuyen a LEADS_TO igual que THEN. Evidencia del mecanismo
+      generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: USES agregado igual que cualquier statement. Evidencia del mecanismo generico compartido; no
+      existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: 'Mismo limite que IF: sin arista CONTROL_DEPENDS_ON propia.'
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: Cubierto indirectamente via el IF padre. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    notes: Mismo alcance que IF.
+  java_statement_kind: IF
+  canonical_representation: CanonicalStatement con branch_kind=ELSE, parent_statement_id apunta al IF
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: EVALUATE
+  display_name: EVALUATE
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::evaluateHasWhenAndWhenOtherBranches
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: EVALUATE produce Decision igual que IF (_DECISION_STATEMENT_KINDS). Evidencia del mecanismo
+      generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: 'Mismo limite que IF: branching interno sin arista CPG propia.'
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: Q0, V2_RETURN_CODE_PROPAGATION y V2_STATE_CHANGE consumen decisiones EVALUATE igual que IF.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+  java_statement_kind: EVALUATE
+  canonical_representation: CanonicalStatement(kind=EVALUATE), WHEN/WHEN_OTHER como hijos
+  graph_nodes:
+  - Decision
+  graph_relationships:
+  - HAS_DECISION
+  - LEADS_TO
+  detectors:
+  - detector_id: V2_RETURN_CODE_PROPAGATION
+    rule_families:
+    - RETURN_CODE
+    notes: Mismo alcance que en IF -- consume cualquier Decision, no solo IF.
+  - detector_id: V2_STATE_CHANGE
+    rule_families:
+    - UNKNOWN
+    notes: 'V2RuleType.STATE_CHANGE_RULE nunca se mapea a STATE_TRANSITION: se conserva como UNKNOWN.
+      support=PARTIAL.'
+  rule_families:
+  - rule_family: RETURN_CODE
+    status: SUPPORTED
+  - rule_family: UNKNOWN
+    status: PARTIALLY_SUPPORTED
+    notes: V2_STATE_CHANGE detecta cambios deterministicos sobre data items ordinarios; rule_family permanece
+      UNKNOWN por diseno.
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: EXEC_CICS
+  display_name: EXEC CICS ... END-EXEC (bloque embebido)
+  category: CICS
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.execcics.impl.ExecCicsStatementImpl
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf); ProLeap
+        tambien expone Cobol85Parser$CicsDfhRespLiteralContext/CicsDfhValueLiteralContext (literales DFHRESP/DFHVALUE),
+        a diferencia de EXEC SQL, que no tiene gramatica dedicada.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en StatementExtractor.convertOne(); cae en convertOther() (kind=OTHER). Confirmado
+      empiricamente con el JAR real (parser parse) sobre la fixture display-exec-cics.cbl -- unsupported_constructs
+      contiene exactamente "ExecCicsStatementImpl en paragraph MAIN-PARA no decodificado estructuralmente
+      (kind=OTHER, source_text conservado)".
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/pipeline/test_display_exec_cics_observation_integration.py
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs, sin modelo estructurado propio. El preprocesador
+      de ProLeap neutraliza el bloque EXEC CICS como comentarios (prefijo *>EXECCICS por linea) dentro
+      de source_text -- nunca se preserva como texto CICS ejecutable literal, pero tampoco se decodifica
+      ningun campo (FROM/LENGTH/comando) de forma estructurada.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Sin variables_read/written estructurados pese a que FROM (WS-MSG) referencia un DataItem real;
+      SemanticEffectKind.UNSUPPORTED_STATEMENT.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Nunca citable como evidencia de un claim (source_text no estructurado, y ademas neutralizado
+      por el preprocesador).
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: source_file/line se preservan aunque kind=OTHER.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/display-exec-cics.cbl
+  limitations:
+  - 'EXEC CICS no tiene ningun extractor propio (a diferencia de EXEC SQL, que tiene EmbeddedSqlExtractor):
+    ningun comando CICS (SEND, RECEIVE, READ, WRITE, LINK, XCTL, RETURN, etc.) se interpreta ni parcialmente;
+    todo el bloque cae en el mismo bucket tecnico OTHER sin distincion de comando.'
+  unknown_behavior: El repertorio completo de comandos CICS que un programa real pueda usar no esta enumerado
+    ni clasificado; este constructo cubre unicamente la deteccion generica de un bloque EXEC CICS presente,
+    nunca su semantica interna.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: EXEC_SQL
+  display_name: EXEC SQL ... END-EXEC (bloque embebido)
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: UNKNOWN
+    notes: ProLeap no tiene gramatica SQL propia; EXEC SQL se procesa como bloque opaco delimitado por
+      el lexer COBOL. Sin evidencia local de un ASG SQL.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: 'EmbeddedSqlExtractor.java: extractor propio de Altamira basado en regex, no en gramatica SQL
+      real.'
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/main/java/com/altamira/extractor/parser/sql/EmbeddedSqlExtractor.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalSqlStatement con sql_kind, tables, raw_text preservado solo en el artefacto canonico.
+      Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: El bloque EXEC SQL como tal no se modela; se traduce a relaciones directas Paragraph-[READS|WRITES|UPDATES|INSERTS]->Table.
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: Las tablas referenciadas alimentan USES/READS/WRITES; las columnas y predicados SQL no se modelan
+      como data flow.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: PARTIALLY_SUPPORTED
+    notes: Los detectores usan las relaciones Table resultantes, no el bloque SQL en si.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    notes: El efecto de tabla es evidenciable, no el texto SQL crudo (nunca se persiste). Evidencia del
+      mecanismo generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: EXEC_SQL
+  graph_relationships:
+  - READS
+  - WRITES
+  - UPDATES
+  - INSERTS
+  fixtures:
+  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  limitations:
+  - EmbeddedSqlExtractor es un extractor basado en regex de un subconjunto de sentencias SELECT/INSERT/UPDATE/DELETE
+    simples, no una gramatica SQL completa; sin soporte de cursores.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: EXIT_PROGRAM
+  display_name: EXIT PROGRAM
+  category: PROGRAM_TERMINATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.statement.GobackStatement/ExitStatement/StopStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: StatementKind.EXIT_PROGRAM distinguido explicitamente (no cae en OTHER).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ProgramTerminationClassificationTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: PROGRAM_TERMINATION no se modela como nodo/relacion en SemanticGraph.
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: Equivalente funcional a GOBACK en un programa llamado.
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Ningun detector usa la terminacion de programa como evidencia.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: PROGRAM_TERMINATION
+  fixtures:
+  - parser/src/test/resources/fixtures/program-termination.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: FILE_READ
+  display_name: READ (archivo secuencial/indexado)
+  category: FILE_IO
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.read.impl.ReadStatementImpl
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf).
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en StatementExtractor.convertOne(); cae en convertOther() (kind=OTHER).
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs, sin modelo estructurado propio.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: NOT_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures: []
+  limitations:
+  - FILE_IO no tiene converter dedicado; se reporta solo como StatementKind.OTHER, un bucket tecnico sin
+    significado funcional propio.
+  unknown_behavior: Los archivos secuenciales/indexados (FD, READ/WRITE/OPEN/CLOSE) no se modelan como
+    Table ni como ningun otro nodo; el efecto de I/O sobre archivos permanece invisible al grafo.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: FILE_WRITE
+  display_name: WRITE / REWRITE
+  category: FILE_IO
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.write.impl.WriteStatementImpl/RewriteStatementImpl
+      description: 2 clases ASG distintas (WRITE y REWRITE) confirmadas por inspeccion directa del JAR
+        resuelto (jar tf).
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en StatementExtractor.convertOne(); cae en convertOther() (kind=OTHER).
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs, sin modelo estructurado propio.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: NOT_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures: []
+  limitations:
+  - FILE_IO no tiene converter dedicado; se reporta solo como StatementKind.OTHER, un bucket tecnico sin
+    significado funcional propio.
+  - REWRITE (actualizacion de un registro existente, semantica mas cercana a UPDATE que a WRITE) tiene
+    su propia clase ASG (RewriteStatementImpl, confirmada por inspeccion directa del JAR) pero colapsa
+    al mismo construct_id=FILE_WRITE; no se modela como construct_id separado.
+  unknown_behavior: Los archivos secuenciales/indexados (FD, READ/WRITE/OPEN/CLOSE) no se modelan como
+    Table ni como ningun otro nodo; el efecto de I/O sobre archivos permanece invisible al grafo.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: GOBACK
+  display_name: GOBACK
+  category: PROGRAM_TERMINATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.statement.GobackStatement/ExitStatement/StopStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: StatementKind.GOBACK distinguido explicitamente (no cae en OTHER).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ProgramTerminationClassificationTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: PROGRAM_TERMINATION no se modela como nodo/relacion en SemanticGraph.
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: GOBACK termina el programa; no genera arista CONTROL_DEPENDS_ON adicional.
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Ningun detector usa la terminacion de programa como evidencia.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: PROGRAM_TERMINATION
+  fixtures:
+  - parser/src/test/resources/fixtures/program-termination.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: GO_TO
+  display_name: GO TO paragraph-name (simple)
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::goToCapturesTargetParagraph
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: SUPPORTED
+    notes: Alimenta CONTROL_DEPENDS_ON.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_dependency_builder.py
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: GO_TO
+  graph_relationships:
+  - CONTROL_DEPENDS_ON
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: GO_TO_DEPENDING_ON
+  display_name: GO TO ... DEPENDING ON
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.Cobol85Parser$GoToDependingOnStatementContext
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: convertGoTo distingue la forma DEPENDING ON. Evidencia del mecanismo generico compartido; no
+      existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: target_paragraphs contiene la lista completa de destinos posibles. Evidencia del mecanismo
+      generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: La variable DEPENDING ON se registra en variables_read, pero no se distingue de un GO TO simple
+      a nivel de grafo.
+  - layer: CONTROL_FLOW
+    status: SUPPORTED
+    notes: Cada destino posible alimenta CONTROL_DEPENDS_ON igual que GO TO simple. Evidencia del mecanismo
+      generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_dependency_builder.py
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: GO_TO
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - Sin fixture Python-side dedicada; solo confirmado a nivel Java/canonico.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: GROUP_ITEMS
+  display_name: Items de grupo (nivel 01/05 sin PICTURE, con subordinados)
+  category: DATA_STRUCTURE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryGroup
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalDataItem.is_group + children. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Se modela como DataItem igual que un item elemental; CONTAINS enlaza subordinados. Evidencia
+      del mecanismo generico compartido; no existe test dedicado a este constructo especifico en esta
+      capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: MOVE de un grupo completo no se descompone campo a campo (ver MOVE_CORRESPONDING).
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: PARTIALLY_SUPPORTED
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  graph_nodes:
+  - DataItem
+  graph_relationships:
+  - CONTAINS
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: IF
+  display_name: IF (THEN/ELSE)
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.ifstmt.IfStatement
+      description: clase ASG real confirmada en el JAR resuelto (Cobol85Parser$IfStatementContext)
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::ifStatementHasThenAndElseBranches
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::nestedIfIsFlattenedWithCorrectParent
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Decision+LEADS_TO se construyen unicamente desde IF/EVALUATE.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: USES se agrega desde variables_read/variables_written de la condicion.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: El CPG reducido Paragraph->Paragraph (dependency_builder.py) solo genera CONTROL_DEPENDS_ON
+      desde GO_TO/PERFORM; el branching interno de un IF no produce una arista de control propia.
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+    notes: IF es intraprocedural por naturaleza.
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: Q0, V2_RETURN_CODE_PROPAGATION y V2_STATE_CHANGE consumen decisiones IF.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    notes: La Decision de un IF respalda claims via EvidenceCatalog. Evidencia del mecanismo generico
+      compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+  - layer: PROVENANCE
+    status: SUPPORTED
+    notes: source_file/line_start se preservan por statement. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    notes: Ground truth sintetico cubre decisiones return-code; no cubre todo patron IF posible.
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: IF
+  canonical_representation: CanonicalStatement(kind=IF), branch_kind=THEN/ELSE en statements hijos
+  graph_nodes:
+  - Decision
+  graph_relationships:
+  - HAS_DECISION
+  - LEADS_TO
+  - USES
+  detectors:
+  - detector_id: V2_RETURN_CODE_PROPAGATION
+    rule_families:
+    - RETURN_CODE
+    notes: Cubre decisiones cuyo efecto sobre un return_code se demuestra via SemanticPropagation cuando
+      Q0 no tiene LEADS_TO directo suficiente.
+  - detector_id: V2_STATE_CHANGE
+    rule_families:
+    - UNKNOWN
+    notes: 'V2RuleType.STATE_CHANGE_RULE nunca se mapea a STATE_TRANSITION: se conserva como UNKNOWN (ver
+      candidate_source_adapters.py). support=PARTIAL, relevancia funcional no garantizada.'
+  - detector_id: q0-return-code-decision
+    rule_families:
+    - RETURN_CODE
+  rule_families:
+  - rule_family: RETURN_CODE
+    status: SUPPORTED
+  - rule_family: UNKNOWN
+    status: PARTIALLY_SUPPORTED
+    notes: V2_STATE_CHANGE detecta cambios deterministicos sobre data items ordinarios (no return_code);
+      rule_family permanece UNKNOWN por diseno.
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: INITIALIZE
+  display_name: INITIALIZE identifier
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.initialize.InitializeStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: kind=OTHER; source_text preservado unicamente.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - INITIALIZE no tiene converter dedicado; su efecto de reinicializacion nunca se estructura.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: INLINE_PERFORM
+  display_name: PERFORM ... END-PERFORM (inline)
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.perform.PerformInlineStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: convertPerform recorre statements inline recursivamente. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: PARTIALLY_SUPPORTED
+    notes: Los statements internos se aplanan como hijos, sin un marcador de bloque inline distinto de
+      PERFORM simple.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: UNKNOWN
+    notes: No verificado si el PERFORM inline en si mismo participa del CPG reducido igual que PERFORM
+      a paragraph.
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: PERFORM
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - Sin fixture dedicada distinguiendo inline de PERFORM a paragraph.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: INSPECT
+  display_name: Inspect
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - INSPECT cae en kind=OTHER; ningun efecto estructurado se deriva.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: LEVEL_88_CONDITION
+  display_name: Condicion de nivel 88 (SET condition-name TO TRUE/FALSE)
+  category: CONDITIONAL_LOGIC
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryCondition
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/Level88ExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalConditionName/CanonicalConditionValue + condition_name_target/condition_set_value
+      en CanonicalStatement(kind=SET). Evidencia del mecanismo generico compartido; no existe test dedicado
+      a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: No existe NodeLabel para condition-name; el metamodelo no reserva un nodo propio.
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: PropagationFactKind.CONDITION_LITERAL resuelve el VALUE unico asociado.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_propagation_analyzer.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: V2_LEVEL_88_RETURN_CODE es el detector dedicado.
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_v2_detectors.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    notes: Ground truth sintetico dedicado a level 88 return-code.
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: SET
+  propagation_support: CONDITION_LITERAL cuando el condition-name resuelve a un VALUE unico; barrera MULTIPLE_CONDITION_VALUES/CONDITION_VALUE_RANGE
+    en otro caso.
+  detectors:
+  - detector_id: V2_LEVEL_88_RETURN_CODE
+    rule_families:
+    - LEVEL_88_RETURN_CODE
+  rule_families:
+  - rule_family: LEVEL_88_RETURN_CODE
+    status: SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/level-88.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: LINKAGE_SECTION
+  display_name: LINKAGE SECTION (parametros formales)
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.data.linkage.LinkageSection
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalLinkageDataItem, separado de data_items; nunca consumido por SemanticGraphBuilder.
+      Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: linkage_data_items nunca se convierte en nodos DataItem del grafo.
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: Los parametros formales se resuelven para binding actual-formal (Fase 6), pero no participan
+      de USES/LEADS_TO como un DataItem ordinario.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: SUPPORTED
+    notes: ArgumentBindingStatus resuelve el binding formal-actual via entry_parameters.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_call_linkage_analyzer.py
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-caller.cbl
+  limitations:
+  - LINKAGE SECTION nunca se representa en SemanticGraph; solo existe en el artefacto canonico.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: LITERALS
+  display_name: Literales numericos, alfanumericos y figurativos (ZEROS, SPACES, HIGH-VALUES...)
+  category: DATA_STRUCTURE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.valuestmt.literal.FigurativeConstant
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/FigurativeConstantsExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalLiteral con literal_kind (NUMERIC/ALPHANUMERIC/FIGURATIVE). Evidencia del mecanismo
+      generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_APPLICABLE
+    notes: Los literales no son entidades del metamodelo; solo aparecen como operandos/valores en Decision/DataItem.
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: PropagationFactKind.LITERAL_ASSIGNMENT. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: MERGE
+  display_name: Merge
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.merge.MergeStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - MERGE cae en kind=OTHER; ningun efecto estructurado se deriva.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: MOVE
+  display_name: MOVE identifier/literal TO target(s)
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.move.MoveToStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::moveSupportsMultipleTargets
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: MOVE no produce nodo/relacion propia; solo contribuye a USES via variables_read/written.
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: SemanticEffectKind.COPY_VALUE/ASSIGN_LITERAL; base de SemanticPropagation.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+    notes: La propagacion interprocedural via BY REFERENCE es un construct distinto.
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: V2_RETURN_CODE_PROPAGATION consume cadenas de MOVE.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_v2_shadow_detector_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: MOVE
+  propagation_support: 'SemanticPropagation: DIRECT_LITERAL/PROPAGATED_LITERAL via COPY_VALUE'
+  rule_families:
+  - rule_family: RETURN_CODE
+    status: SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: MOVE_CORRESPONDING
+  display_name: MOVE CORRESPONDING group TO group
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.move.impl.MoveCorrespondingToStatementImpl
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: convertMove no expande los pares de subcampos correspondientes; se preserva como MOVE con target/operandos
+      limitados.
+  - layer: CANONICAL_REPRESENTATION
+    status: PARTIALLY_SUPPORTED
+    notes: kind=MOVE, pero sin el desglose campo-a-campo real de la correspondencia.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: variables_read/written reflejan los grupos, no los subcampos individuales correspondientes.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: MOVE
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - No se expande el mapeo campo-a-campo de MOVE CORRESPONDING; efecto real no verificable por diseno
+    actual.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: MULTIPLY
+  display_name: Multiply (aritmetica sin COMPUTE)
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.multiply.MultiplyStatement
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
+      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
+      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: source_file/line se preservan aunque kind=OTHER.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - MULTIPLY no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: OCCURS
+  display_name: OCCURS (tablas COBOL, incluyendo OCCURS DEPENDING ON)
+  category: DATA_STRUCTURE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.data.datadescription.OccursClause
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalDataItem.occurs_min/occurs_max/occurs_depending_on. Evidencia del mecanismo generico
+      compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: PARTIALLY_SUPPORTED
+    notes: El DataItem se modela; la dimensionalidad OCCURS y el indice de acceso no se representan explicitamente.
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: SEARCH/indices de tabla no se resuelven a un elemento especifico; se trata la tabla como un
+      DataItem unico.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: PARTIALLY_SUPPORTED
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - El acceso indexado a una tabla OCCURS no se resuelve a un elemento individual; se modela como acceso
+    al DataItem tabla completo.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: OPEN
+  display_name: OPEN (INPUT/OUTPUT/I-O/EXTEND)
+  category: FILE_IO
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.open.impl.OpenStatementImpl
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf).
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en StatementExtractor.convertOne(); cae en convertOther() (kind=OTHER).
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+    notes: Aparece unicamente en unsupported_constructs, sin modelo estructurado propio.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: NOT_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures: []
+  limitations:
+  - FILE_IO no tiene converter dedicado; se reporta solo como StatementKind.OTHER, un bucket tecnico sin
+    significado funcional propio.
+  unknown_behavior: Los archivos secuenciales/indexados (FD, READ/WRITE/OPEN/CLOSE) no se modelan como
+    Table ni como ningun otro nodo; el efecto de I/O sobre archivos permanece invisible al grafo.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: OTHER_STATEMENT_BUCKET
+  display_name: StatementKind.OTHER (bucket tecnico residual)
+  category: RESIDUAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: No es un constructo propio; agrupa cualquier Statement de ProLeap sin case dedicado en StatementExtractor.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: 'convertOther() produce kind=OTHER de forma deliberada y documentada; es un bucket tecnico,
+      nunca una capacidad funcional (decision arquitectonica #3).'
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: 'Aparece en CanonicalProgram.unsupported_constructs; el texto crudo nunca debe copiarse a diagnosticos
+      sin sanitizar (decision arquitectonica #5). Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.'
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: Se preserva la ubicacion (paragraph/linea), no el texto de la sentencia.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures: []
+  limitations:
+  - 'Bucket tecnico deliberado; ver decision arquitectonica #3 -- nunca reportar como funcionalidad.'
+  unknown_behavior: StatementKind.OTHER agrupa cualquier sentencia COBOL sin converter dedicado; su identidad
+    real solo es inferible por parser_class, nunca debe presentarse como capacidad funcional soportada.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: PERFORM
+  display_name: PERFORM paragraph-name
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.perform.PerformProcedureStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::performSimpleAndThruAreCaptured
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: PERFORM no produce nodo/relacion propia en SemanticGraph.
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+    notes: PERFORM no lee/escribe DataItems por si mismo.
+  - layer: CONTROL_FLOW
+    status: SUPPORTED
+    notes: Alimenta CONTROL_DEPENDS_ON en el CPG reducido (dependency_builder.py).
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_dependency_builder.py
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+    notes: PERFORM es intraprograma; CALL es el mecanismo interprocedural.
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Ningun detector V1/V2/interprocedural consume PERFORM directamente.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: PERFORM
+  canonical_representation: CanonicalStatement(kind=PERFORM), target_paragraphs
+  graph_relationships:
+  - CONTROL_DEPENDS_ON
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: PERFORM_THRU
+  display_name: PERFORM paragraph-1 THRU paragraph-2
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.perform.PerformProcedureStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::performSimpleAndThruAreCaptured
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: target_paragraphs contiene ambos extremos del rango. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: SUPPORTED
+    notes: Igual que PERFORM simple. Evidencia del mecanismo generico compartido; no existe test dedicado
+      a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_dependency_builder.py
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: PERFORM
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: REDEFINES
+  display_name: REDEFINES (reinterpretacion de almacenamiento)
+  category: DATA_STRUCTURE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.data.datadescription.RedefinesClause
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: CanonicalDataItem.redefines_target. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: Ambos DataItem (el redefinido y el que redefine) se modelan como nodos independientes; la relacion
+      de aliasing de almacenamiento no se representa.
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Escribir el item base y leer el item REDEFINES (o viceversa) no se detecta como el mismo almacenamiento
+      fisico.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  unknown_behavior: El aliasing de almacenamiento fisico entre un item y su REDEFINES no se propaga en
+    el analisis de dependencias de datos.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: RETURNING
+  display_name: CALL ... RETURNING identifier
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.call.CallStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: call_returning_data_item estructurado.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: InterproceduralFactKind.RETURNING_FACT. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_propagation_analyzer.py
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: InterproceduralRuleType.RETURN_CODE_RULE. Evidencia del mecanismo generico compartido; no existe
+      test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: CALL
+  detectors:
+  - detector_id: interprocedural-return-code-rule
+    rule_families:
+    - RETURN_CODE
+  rule_families:
+  - rule_family: RETURN_CODE
+    status: SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-caller.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SEARCH
+  display_name: Search
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - SEARCH cae en kind=OTHER; ningun efecto estructurado se deriva.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SET
+  display_name: SET identifier TO literal/identifier
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.set.SetStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: Forma SET identifier TO value; SET UP/DOWN BY se reporta como unsupported (distinto de SET
+      TO condicion-88, ver LEVEL_88_CONDITION).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::setStatementCapturesTargetAndLiteral
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: SemanticEffectKind.ASSIGN_LITERAL/SET_VALUE. Evidencia del mecanismo generico compartido; no
+      existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: V2_RETURN_CODE_PROPAGATION consume SET sobre DataItems ordinarios. Evidencia del mecanismo
+      generico compartido; no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+  java_statement_kind: SET
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - SET ... UP/DOWN BY se reporta como unsupported_constructs, no como SET estructurado.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SORT
+  display_name: Sort
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - SORT cae en kind=OTHER; ningun efecto estructurado se deriva.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SQLCODE
+  display_name: Registro especial SQLCODE / DB2 return code
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: SQLCODE es un DataItem COBOL ordinario (no un constructo de gramatica); ProLeap lo reconoce
+      solo como identifier.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: SQLCODE se representa unicamente como DataItem + IF ordinario; no hay manejo especial de semantica
+      DB2.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/SqlcodeDecisionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: Se propaga como cualquier DataItem generico; sin semantica DB2 especifica (rangos de error,
+      warnings).
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    notes: Detectable solo como decision de return-code generica (misma familia RETURN_CODE), no como
+      SQLCODE especifico. Evidencia del mecanismo generico compartido; no existe test dedicado a este
+      constructo especifico en esta capa.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+  - layer: EVIDENCE
+    status: PARTIALLY_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/sqlcode-decision.cbl
+  limitations:
+  - SQLCODE nunca se identifica como tal; se trata igual que cualquier DataItem generico evaluado en un
+    IF.
+  unknown_behavior: No existe distincion estructural entre SQLCODE y cualquier otro campo numerico usado
+    en una decision.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SQL_CURSOR
+  display_name: DECLARE CURSOR / OPEN / FETCH / CLOSE cursor
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: Fuera de la gramatica COBOL de ProLeap; vive dentro del bloque EXEC SQL opaco.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: EmbeddedSqlExtractor solo cubre SELECT/INSERT/UPDATE/DELETE de sentencia unica; no reconoce
+      DECLARE CURSOR/FETCH.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/main/java/com/altamira/extractor/parser/sql/EmbeddedSqlExtractor.java
+  - layer: CANONICAL_REPRESENTATION
+    status: NOT_SUPPORTED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: NOT_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  fixtures: []
+  limitations:
+  - Sin soporte de cursores SQL embebidos en ninguna capa.
+  unknown_behavior: DECLARE CURSOR, FETCH y el ciclo OPEN/FETCH/CLOSE de un cursor SQL no son reconocidos
+    por EmbeddedSqlExtractor; su contenido cae fuera del subconjunto regex soportado.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SQL_DELETE
+  display_name: EXEC SQL DELETE ... END-EXEC (sentencia unica)
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: Dentro del bloque EXEC SQL opaco para ProLeap.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: EmbeddedSqlExtractor reconoce DELETE de sentencia unica via regex y extrae la tabla objetivo.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::execSqlSelectInsertUpdateDeleteAreClassified
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Se traduce directamente a Paragraph-[:WRITES]->Table. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: EXEC_SQL
+  graph_relationships:
+  - WRITES
+  fixtures:
+  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  limitations:
+  - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
+    de EmbeddedSqlExtractor.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SQL_INSERT
+  display_name: EXEC SQL INSERT ... END-EXEC (sentencia unica)
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: Dentro del bloque EXEC SQL opaco para ProLeap.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: EmbeddedSqlExtractor reconoce INSERT de sentencia unica via regex y extrae la tabla objetivo.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::execSqlSelectInsertUpdateDeleteAreClassified
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Se traduce directamente a Paragraph-[:INSERTS]->Table. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: EXEC_SQL
+  graph_relationships:
+  - INSERTS
+  fixtures:
+  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  limitations:
+  - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
+    de EmbeddedSqlExtractor.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SQL_SELECT
+  display_name: EXEC SQL SELECT ... END-EXEC (sentencia unica)
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: Dentro del bloque EXEC SQL opaco para ProLeap.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: EmbeddedSqlExtractor reconoce SELECT de sentencia unica via regex y extrae la tabla objetivo.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::execSqlSelectInsertUpdateDeleteAreClassified
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Se traduce directamente a Paragraph-[:READS]->Table. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: EXEC_SQL
+  graph_relationships:
+  - READS
+  fixtures:
+  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  limitations:
+  - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
+    de EmbeddedSqlExtractor.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SQL_UPDATE
+  display_name: EXEC SQL UPDATE ... END-EXEC (sentencia unica)
+  category: DATABASE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: Dentro del bloque EXEC SQL opaco para ProLeap.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: EmbeddedSqlExtractor reconoce UPDATE de sentencia unica via regex y extrae la tabla objetivo.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::execSqlSelectInsertUpdateDeleteAreClassified
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    notes: Se traduce directamente a Paragraph-[:UPDATES]->Table. Evidencia del mecanismo generico compartido;
+      no existe test dedicado a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: EXEC_SQL
+  graph_relationships:
+  - UPDATES
+  fixtures:
+  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  limitations:
+  - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
+    de EmbeddedSqlExtractor.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: STOP_RUN
+  display_name: STOP RUN
+  category: PROGRAM_TERMINATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.statement.GobackStatement/ExitStatement/StopStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: convertStop distingue STOP RUN de STOP <literal> EXCLUSIVAMENTE via StopStatementContext.RUN()
+      (API tipada, nunca sourceText); STOP RUN produce ProgramTerminationKind.STOP_RUN. STOP <literal>
+      produce el mismo kind=PROGRAM_TERMINATION pero ProgramTerminationKind.UNKNOWN mas una entrada en
+      unsupported_constructs (ver limitations).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ProgramTerminationClassificationTest.java::stopRunIsClassifiedAsProgramTerminationStopRun
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: PROGRAM_TERMINATION no se modela como nodo/relacion en SemanticGraph.
+  - layer: DATA_FLOW
+    status: NOT_APPLICABLE
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+    notes: STOP RUN termina el run-unit completo, no solo el programa activo.
+  - layer: INTERPROCEDURAL
+    status: NOT_SUPPORTED
+    notes: STOP_RUN no se distingue de GOBACK/EXIT PROGRAM a nivel interprocedural.
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Ningun detector usa la terminacion de programa como evidencia.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: PROGRAM_TERMINATION
+  fixtures:
+  - parser/src/test/resources/fixtures/program-termination.cbl
+  limitations:
+  - STOP <literal> (codigo de finalizacion, forma distinta de STOP RUN) produce kind=PROGRAM_TERMINATION
+    con program_termination_kind=UNKNOWN mas una entrada en unsupported_constructs; no se modela como
+    construct_id separado.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: STRING
+  display_name: String
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.string.StringStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - STRING cae en kind=OTHER; ningun efecto estructurado se deriva.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: SUBTRACT
+  display_name: Subtract (aritmetica sin COMPUTE)
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractStatement
+      description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
+      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
+      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+    notes: source_file/line se preservan aunque kind=OTHER.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - El JAR de ProLeap expone 4 clases ASG distintas para variantes de SUBTRACT (SubtractStatementImpl,
+    SubtractFromStatementImpl, SubtractFromGivingStatementImpl, SubtractCorrespondingStatementImpl, confirmadas
+    por inspeccion directa del JAR); las 4 colapsan al mismo construct_id=SUBTRACT.
+  - SUBTRACT no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: UNSTRING
+  display_name: Unstring
+  category: DATA_MANIPULATION
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.unstring.UnstringStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_SUPPORTED
+    notes: Sin case dedicado en convertOne(); cae a convertOther(), kind=OTHER.
+  - layer: CANONICAL_REPRESENTATION
+    status: RECOGNIZED_NOT_INTERPRETED
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: PARTIALLY_SUPPORTED
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: OTHER
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations:
+  - UNSTRING cae en kind=OTHER; ningun efecto estructurado se deriva.
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: USING_BY_CONTENT
+  display_name: CALL ... USING ... BY CONTENT
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.call.CallStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: CallPassingMode.CONTENT estructuralmente distinguido via la API tipada de ProLeap.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: BY REFERENCE es el unico modo cuyo valor de salida se propaga (Fase 7); BY CONTENT/VALUE nunca
+      modifican el actual del llamador.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_propagation_analyzer.py
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Solo BY REFERENCE alimenta InterproceduralRuleType.BY_REFERENCE_RULE/STATE_TRANSITION_RULE.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: CALL
+  rule_families:
+  - rule_family: BY_REFERENCE_OUTPUT
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-caller.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: USING_BY_REFERENCE
+  display_name: CALL ... USING ... BY REFERENCE
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.call.CallStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: CallPassingMode.REFERENCE estructuralmente distinguido via la API tipada de ProLeap.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    notes: BY REFERENCE es el unico modo cuyo valor de salida se propaga (Fase 7); BY CONTENT/VALUE nunca
+      modifican el actual del llamador. Evidencia del mecanismo generico compartido; no existe test dedicado
+      a este constructo especifico en esta capa.
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_propagation_analyzer.py
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  java_statement_kind: CALL
+  detectors:
+  - detector_id: interprocedural-by-reference-rule
+    rule_families:
+    - BY_REFERENCE_OUTPUT
+  - detector_id: interprocedural-state-transition-rule
+    rule_families:
+    - STATE_TRANSITION
+    notes: Solo cuando el actual BY REFERENCE esta clasificado semantic_tag=status/status_flag (SemanticEnrichment);
+      nunca por heuristica textual de nombres. Requisito adicional sobre el mismo argumento BY REFERENCE,
+      no una capacidad separada.
+  rule_families:
+  - rule_family: BY_REFERENCE_OUTPUT
+    status: SUPPORTED
+  - rule_family: STATE_TRANSITION
+    status: PARTIALLY_SUPPORTED
+    notes: Solo alcanzable cuando el argumento BY REFERENCE tiene entrada y salida deterministicas y distintas,
+      y esta clasificado semantic_tag=status/status_flag.
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-caller.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: USING_BY_VALUE
+  display_name: CALL ... USING ... BY VALUE
+  category: INTERPROCEDURAL
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.procedure.call.CallStatement
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    notes: CallPassingMode.VALUE estructuralmente distinguido via la API tipada de ProLeap.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/InterproceduralCallLinkageExtractionTest.java
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+  - layer: DATA_FLOW
+    status: PARTIALLY_SUPPORTED
+    notes: BY REFERENCE es el unico modo cuyo valor de salida se propaga (Fase 7); BY CONTENT/VALUE nunca
+      modifican el actual del llamador.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_interprocedural_propagation_analyzer.py
+  - layer: DETECTOR
+    status: NOT_SUPPORTED
+    notes: Solo BY REFERENCE alimenta InterproceduralRuleType.BY_REFERENCE_RULE/STATE_TRANSITION_RULE.
+  - layer: EVIDENCE
+    status: NOT_SUPPORTED
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: NOT_SUPPORTED
+  java_statement_kind: CALL
+  rule_families:
+  - rule_family: BY_REFERENCE_OUTPUT
+    status: NOT_SUPPORTED
+  fixtures:
+  - parser/src/test/resources/fixtures/interprocedural-callee.cbl
+  - parser/src/test/resources/fixtures/interprocedural-caller.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+- construct_id: WHEN
+  display_name: WHEN / WHEN OTHER
+  category: CONTROL_FLOW
+  layers:
+  - layer: PROLEAP_PARSER
+    status: NOT_APPLICABLE
+    notes: WHEN es parte de EvaluateStatementContext, no un StatementContext propio.
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::evaluateHasWhenAndWhenOtherBranches
+  - layer: CANONICAL_REPRESENTATION
+    status: SUPPORTED
+    notes: branch_kind=WHEN/WHEN_OTHER. Evidencia del mecanismo generico compartido; no existe test dedicado
+      a este constructo especifico en esta capa.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java
+  - layer: SEMANTIC_GRAPH
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: DATA_FLOW
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_semantic_graph_builder.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: CONTROL_FLOW
+    status: NOT_SUPPORTED
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: SUPPORTED
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: EVIDENCE
+    status: SUPPORTED
+    evidence:
+    - kind: CONTRACT_TEST
+      reference: tests/pipeline/test_evidence_catalog.py
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: PROVENANCE
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CopyLocationTest.java::programWithoutCopyStaysExact
+    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
+      en esta capa.
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+  java_statement_kind: EVALUATE
+  fixtures:
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  limitations: []
+  domain_reviewed: false
+  diagnostics: []
+issues: []
+summary:
+  construct_count: 57
+  domain_reviewed_count: 0
+  issue_count: 0
+  counts_by_layer_and_status:
+    PROLEAP_PARSER:
+      SUPPORTED: 46
+      NOT_APPLICABLE: 10
+      UNKNOWN: 1
+    JAVA_STATEMENT_EXTRACTION:
+      RECOGNIZED_NOT_INTERPRETED: 5
+      NOT_SUPPORTED: 16
+      NOT_APPLICABLE: 1
+      SUPPORTED: 34
+      PARTIALLY_SUPPORTED: 1
+    CANONICAL_REPRESENTATION:
+      RECOGNIZED_NOT_INTERPRETED: 11
+      NOT_SUPPORTED: 9
+      NOT_APPLICABLE: 1
+      SUPPORTED: 32
+      PARTIALLY_SUPPORTED: 4
+    SEMANTIC_GRAPH:
+      NOT_SUPPORTED: 45
+      NOT_APPLICABLE: 2
+      SUPPORTED: 9
+      PARTIALLY_SUPPORTED: 1
+    DATA_FLOW:
+      NOT_SUPPORTED: 21
+      NOT_APPLICABLE: 10
+      SUPPORTED: 17
+      PARTIALLY_SUPPORTED: 9
+    CONTROL_FLOW:
+      NOT_APPLICABLE: 43
+      NOT_SUPPORTED: 9
+      SUPPORTED: 4
+      UNKNOWN: 1
+    INTERPROCEDURAL:
+      NOT_APPLICABLE: 49
+      PARTIALLY_SUPPORTED: 1
+      SUPPORTED: 6
+      NOT_SUPPORTED: 1
+    DETECTOR:
+      NOT_SUPPORTED: 33
+      PARTIALLY_SUPPORTED: 5
+      SUPPORTED: 19
+    EVIDENCE:
+      NOT_SUPPORTED: 35
+      SUPPORTED: 20
+      PARTIALLY_SUPPORTED: 2
+    PROVENANCE:
+      PARTIALLY_SUPPORTED: 15
+      NOT_SUPPORTED: 6
+      SUPPORTED: 36
+    FUNCTIONAL_VALIDATION:
+      NOT_SUPPORTED: 42
+      PARTIALLY_SUPPORTED: 15

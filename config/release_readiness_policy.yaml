@@ -1,0 +1,36 @@
+# Politica de release readiness FUNCIONAL (Fase 15B2-A, Parte G).
+#
+# Alcance acotado a lo que Partes C/F de este mismo bloque ya producen --
+# ver docstring de contracts/release_readiness.py para el porque
+# deliberado de NO evaluar Docker/Helm/K3s/backup/version aqui.
+schema_version: "1.0"
+policy_edition: fase-15b2-a-2026.08.05
+criteria:
+- criterion_id: coverage-manifest-no-error-issues
+  kind: NO_ERROR_SEVERITY_COVERAGE_ISSUES
+  description: 'config/semantic_coverage.yaml debe reconciliar sin ningun SemanticCoverageIssue
+    de severidad ERROR contra los registries reales de detectores (pipeline/semantic_coverage_registry.py).
+    Un UNKNOWN_DETECTOR_ID o UNKNOWN_RULE_FAMILY indica que el manifiesto quedo desincronizado
+    del codigo real -- bloquea release hasta corregirse.'
+- criterion_id: functional-validation-minimum-precision
+  kind: MINIMUM_PRECISION
+  description: La precision (granularidad case-level para NEGATIVE, ver contracts/functional_validation.py)
+    del ultimo FunctionalValidationReport debe ser exactamente 1.0 -- con solo 1 caso NEGATIVE
+    en el catalogo actual, cualquier valor menor ya implica un falso positivo.
+  minimum_value: 1.0
+- criterion_id: functional-validation-minimum-recall
+  kind: MINIMUM_RECALL
+  description: El recall (granularidad expectation-level, ver contracts/functional_validation.py)
+    del ultimo FunctionalValidationReport debe ser exactamente 1.0 -- con solo 3 expectativas
+    POSITIVE en el catalogo actual, cualquier valor menor ya implica al menos una MISSING.
+  minimum_value: 1.0
+- criterion_id: functional-validation-no-missing-positive-cases
+  kind: NO_MISSING_POSITIVE_CASES
+  description: Ningun caso POSITIVE de config/ground_truth/synthetic_engineering.yaml puede
+    quedar en outcome=MISSING -- una regresion en un detector que deje de producir un candidato
+    ya demostrado deterministicamente bloquea release.
+- criterion_id: functional-validation-no-unexpected-negative-cases
+  kind: NO_UNEXPECTED_NEGATIVE_CASES
+  description: Ningun caso NEGATIVE puede quedar en outcome=UNEXPECTED_CANDIDATES -- un falso
+    positivo nuevo sobre una fixture disenada especificamente para probar su ausencia bloquea
+    release.

@@ -1,0 +1,9 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GTBRCLE1.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01 LK-STATUS                PIC X(4).
+       PROCEDURE DIVISION USING LK-STATUS.
+       MAIN-PARA.
+           MOVE 'OK00' TO LK-STATUS.
+           GOBACK.

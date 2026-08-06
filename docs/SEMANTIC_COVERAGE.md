@@ -193,3 +193,120 @@ lo originaron.
   `--json`, códigos de salida, saneamiento de errores, no regresión
   explícita sobre `06-candidates.json`/`07-context/`/`08-rule-drafts/`/
   `09-guardrails/`/`10-rules/`.
+
+## Manifiesto estático de cobertura semántica (Fase 15B2-A, Partes B/C/D)
+
+Todo lo anterior de este documento describe `SemanticCoverageReport`: qué
+pasó en **un run concreto**. Esta sección describe un concepto **distinto
+y complementario**, agregado en la Fase 15B2-A: qué construcciones COBOL
+declara soportar el **producto**, independientemente de cualquier run, y
+cómo se observa/reconcilia esa declaración contra la realidad.
+
+### `SemanticCoverageManifest` — `config/semantic_coverage.yaml`
+
+Manifiesto **versionado**, cargado como `SemanticCoverageManifest`
+(`contracts/semantic_coverage.py`). Para cada construcción COBOL conocida
+(`construct_id`, p. ej. `IF`, `ADD`, `LEVEL_88_CONDITION`,
+`CALL_DYNAMIC`), declara su estado en cada una de **once capas
+arquitectónicas** (`SemanticCoverageLayer`), separadas deliberadamente
+para nunca conflatar "ProLeap reconoce la construcción" con "el pipeline
+la interpreta":
+
+`PROLEAP_PARSER` → `JAVA_STATEMENT_EXTRACTION` → `CANONICAL_REPRESENTATION`
+→ `SEMANTIC_GRAPH` → `DATA_FLOW` → `CONTROL_FLOW` → `INTERPROCEDURAL` →
+`DETECTOR` → `EVIDENCE` → `PROVENANCE` → `FUNCTIONAL_VALIDATION`.
+
+Cada capa declara un `SemanticCoverageStatus` (`SUPPORTED`,
+`PARTIALLY_SUPPORTED`, `RECOGNIZED_NOT_INTERPRETED`, `NOT_SUPPORTED`,
+`NOT_APPLICABLE`, `UNKNOWN`) y, cuando afirma `SUPPORTED`, **exige** al
+menos una `SemanticCoverageEvidenceReference` verificable (un test real,
+una fixture, una revisión de dominio) — el contrato rechaza en
+`model_validate()` cualquier afirmación de soporte sin evidencia
+adjunta.
+
+`RECOGNIZED_NOT_INTERPRETED` es el estado más importante de distinguir:
+ProLeap reconoce genuinamente ADD/SUBTRACT/MULTIPLY/DIVIDE/STRING/
+UNSTRING/INSPECT/SEARCH/SORT/MERGE en su gramática (evidencia real,
+confirmada por inspección directa del JAR resuelto), pero
+`StatementExtractor.convertOne()` no tiene un `case` dedicado para
+ninguno de ellos: caen en `convertOther()` (`kind=OTHER`), un **bucket
+técnico**, nunca una capacidad funcional (ver "Motivo de diseño" abajo).
+
+El manifiesto se edita **a mano**, nunca se genera desde la salida de un
+run — su propósito es declarar lo que el código *puede* hacer, verificado
+línea por línea contra el código fuente real (Java y Python), no lo que
+hizo en un caso concreto.
+
+### Reconciliación ejecutable — `pipeline/semantic_coverage_registry.py`
+
+`SemanticDetectorCoverage.detector_id`/`SemanticRuleFamilyCoverage.
+rule_family` son campos `str` libres (no `Enum`): un id mal escrito o
+inventado solo se detecta ejecutando este módulo, nunca en
+`model_validate()`. `reconcile_manifest(manifest)` compara cada
+`detector_id`/`rule_family` citado contra los tres registries reales
+(`candidate_detector.DETECTOR_ID`, `V2_DETECTOR_REGISTRY`,
+`INTERPROCEDURAL_RULE_DETECTOR_REGISTRY`, `UnifiedRuleFamily`) y produce
+`SemanticCoverageIssue[]`:
+
+- `UNKNOWN_DETECTOR_ID`/`UNKNOWN_RULE_FAMILY` (severidad `ERROR`): el
+  manifiesto cita algo que no existe en el código real.
+- `UNDOCUMENTED_DETECTOR` (severidad `WARNING`): un detector real nunca
+  citado por ningún `construct_id` del manifiesto.
+
+Sin discovery dinámico, sin plugins — mismo patrón que
+`v2_detector_registry.py`/`interprocedural_rule_detector_registry.py`.
+`check_manifest_reconciled(manifest)` levanta `SemanticCoverageRegistryError`
+si el manifiesto quedó desincronizado del código instalado actualmente.
+
+### Observaciones por-run — `diagnostics/semantic-coverage-observations.json`
+
+Un **tercer** artefacto, distinto de `SemanticCoverageReport` (agrega por
+`StatementKind` genérico) y de `SemanticCoverageManifest` (declara
+capacidad, nunca depende de un run): ata cada `construct_id` del
+catálogo a lo que **realmente se observó** en `artifacts/02-canonical/`
+de un run concreto.
+
+Granularidad **honesta**, nunca inflada: varios `construct_id` comparten
+el mismo `java_statement_kind` (p. ej. `IF`/`ELSE`/`CONDITIONS_COMPOUND`
+comparten `kind=IF`) — reciben el mismo `occurrence_count`, y
+`shared_java_statement_kind_construct_ids` lo declara explícitamente en
+vez de fingir una precisión que `CanonicalStatement.kind` no ofrece. Para
+el bucket `OTHER`, `unsupported_identities` extrae un prefijo
+**sanitizado** de cada mensaje en `CanonicalProgram.unsupported_constructs`
+(nunca el mensaje completo) y lo asocia a un `construct_id` únicamente
+vía una tabla curada manualmente contra evidencia JAR real
+(`_PARSER_CLASS_TO_CONSTRUCT_ID`); una identidad no reconocida se
+persiste con `construct_id=null`, nunca con una asociación adivinada.
+
+Generar:
+
+```
+python -m altamira_extractor.cli semantic-coverage-report <run_id>
+python -m altamira_extractor.cli semantic-coverage-report <run_id> --json
+```
+
+Requiere que `<run_id>` haya alcanzado `PARSED` (`SUCCEEDED`) — solo
+necesita `artifacts/02-canonical/`, a diferencia de `semantic-coverage`
+(que también requiere `03-dependencies.json`/`04-semantic-graph.json`/
+`06-candidates.json`, disponibles recién en `CANDIDATES_DETECTED`). El
+comando imprime también, siempre, los `SemanticCoverageIssue` de la
+reconciliación estática (independiente de `<run_id>`).
+
+### Motivo de diseño: por qué `RECOGNIZED_NOT_INTERPRETED` importa
+
+Presentar ADD/SUBTRACT/STRING/etc. como "no soportado" a secas ocultaría
+que ProLeap sí los reconoce (el problema es específico de
+`StatementExtractor`, no de la gramática). Presentarlos como "soportado"
+a secas sería una afirmación falsa: ningún dato estructurado se extrae de
+ellos hoy. `RECOGNIZED_NOT_INTERPRETED` nombra exactamente el estado
+real, capa por capa, sin optimismo ni pesimismo — el mismo principio que
+gobierna `SemanticSupportStatus` arriba, aplicado ahora a nivel de
+producto en vez de nivel de run.
+
+### Uso previsto: `semantic-coverage-report` sobre datos reales
+
+Ejecutar `semantic-coverage-report` contra un run real ya reveló, en esta
+misma fase, dos construcciones ausentes del catálogo (`DISPLAY`,
+`EXEC CICS`): la herramienta está diseñada exactamente para esto —
+convertir "no sabemos qué falta" en una lista concreta y accionable,
+nunca para ocultar la ausencia.

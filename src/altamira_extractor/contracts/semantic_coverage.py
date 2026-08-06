@@ -23,13 +23,14 @@ identicos (determinismo, no observabilidad temporal)."""
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Final, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import AltamiraBaseModel, RelativePath, Sha256Hex
-from .enums import LocationKind, StatementKind
+from .enums import LocationKind, NodeLabel, RelationshipType, Severity, StatementKind
 
 # Limite de source_references persistidas por ConstructCoverage: el
 # occurrence_count total siempre se conserva completo, pero las
@@ -422,5 +423,354 @@ class SemanticCoverageReport(AltamiraBaseModel):
             raise ValueError(
                 "summary.statement_counts_by_kind no coincide con la suma de "
                 "programs[].statement_counts_by_kind"
+            )
+        return self
+
+
+# =============================================================================
+# Fase 15B2-A: manifiesto ESTATICO de cobertura semantica del PRODUCTO
+# (`config/semantic_coverage.yaml`, cargado como `SemanticCoverageManifest`).
+#
+# Deliberadamente en el MISMO modulo que el diagnostico por-run de arriba
+# (Fase 1 de la ampliacion semantica) porque el usuario asi lo pidio
+# explicitamente, pero son dos conceptos DISTINTOS que nunca se combinan:
+#
+# - `SemanticCoverageReport` (arriba): que aparecio en UN run concreto,
+#   contra `CanonicalProgram`/`SemanticGraph`/`CandidateArtifact` YA
+#   persistidos de ese run -- se recalcula por run, nunca se versiona.
+# - `SemanticCoverageManifest` (abajo): que el PRODUCTO declara soportar
+#   HOY, independientemente de cualquier run -- se versiona en
+#   `config/semantic_coverage.yaml`, se reconcilia contra los registries
+#   reales (`pipeline/semantic_coverage_registry.py`) pero nunca se deriva
+#   de la salida de un run.
+#
+# Unico choque de nombre real: el diagnostico por-run ya declara
+# `SemanticCoverageSummary` arriba. El resumen del manifiesto se llama
+# `SemanticCoverageManifestSummary` (en vez de `SemanticCoverageSummary`,
+# como pedia literalmente la Parte A) para no romper ese contrato
+# existente, ya consumido por `cli.py`/`pipeline/semantic_coverage_service.py`
+# y sus tests -- una desviacion minima, deliberada y documentada aqui.
+# =============================================================================
+
+_CONSTRUCT_ID_PATTERN: Final = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
+
+
+class SemanticCoverageStatus(StrEnum):
+    """Nivel de soporte de UNA construccion en UNA capa especifica del
+    manifiesto estatico -- nunca combinado con `SemanticSupportStatus`
+    (esa es la dimension por-run, de arriba)."""
+
+    SUPPORTED = "SUPPORTED"
+    PARTIALLY_SUPPORTED = "PARTIALLY_SUPPORTED"
+    RECOGNIZED_NOT_INTERPRETED = "RECOGNIZED_NOT_INTERPRETED"
+    NOT_SUPPORTED = "NOT_SUPPORTED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    UNKNOWN = "UNKNOWN"
+
+
+class SemanticCoverageLayer(StrEnum):
+    """Capa arquitectonica evaluada para una construccion. Deliberadamente
+    separa `PROLEAP_PARSER` (que la gramatica/ASG de ProLeap reconoce) de
+    `JAVA_STATEMENT_EXTRACTION` (que `StatementExtractor.java` convierte a
+    un `CanonicalStatement`) -- ProLeap puede reconocer una construccion
+    que el extractor todavia no convierte especificamente (cae en
+    `convertOther`, `kind=OTHER`), y eso NUNCA debe presentarse como
+    soporte semantico real."""
+
+    PROLEAP_PARSER = "PROLEAP_PARSER"
+    JAVA_STATEMENT_EXTRACTION = "JAVA_STATEMENT_EXTRACTION"
+    CANONICAL_REPRESENTATION = "CANONICAL_REPRESENTATION"
+    SEMANTIC_GRAPH = "SEMANTIC_GRAPH"
+    DATA_FLOW = "DATA_FLOW"
+    CONTROL_FLOW = "CONTROL_FLOW"
+    INTERPROCEDURAL = "INTERPROCEDURAL"
+    DETECTOR = "DETECTOR"
+    EVIDENCE = "EVIDENCE"
+    PROVENANCE = "PROVENANCE"
+    FUNCTIONAL_VALIDATION = "FUNCTIONAL_VALIDATION"
+
+
+class ValidationEvidenceKind(StrEnum):
+    """Tipo de evidencia que respalda el status declarado de una capa.
+    `DOMAIN_REVIEW` es la UNICA que puede respaldar `domain_reviewed=true`
+    -- ver `SemanticConstructCoverage._check_domain_reviewed_requires_
+    domain_review_evidence`."""
+
+    UNIT_TEST = "UNIT_TEST"
+    CONTRACT_TEST = "CONTRACT_TEST"
+    JAVA_TEST = "JAVA_TEST"
+    INTEGRATION_TEST = "INTEGRATION_TEST"
+    SYNTHETIC_FIXTURE = "SYNTHETIC_FIXTURE"
+    PACKAGE_FIXTURE = "PACKAGE_FIXTURE"
+    DOMAIN_REVIEW = "DOMAIN_REVIEW"
+
+
+class SemanticCoverageEvidenceReference(AltamiraBaseModel):
+    """Referencia sanitizada a UNA evidencia (test/fixture/revision) que
+    respalda el status declarado de una capa. `reference` es un
+    identificador relativo (path de test, nodeid de pytest, nombre de
+    fixture o una referencia de revision no personal) -- nunca contenido,
+    nunca codigo."""
+
+    kind: ValidationEvidenceKind
+    reference: RelativePath
+    description: str | None = Field(default=None, max_length=300)
+
+
+class SemanticLayerCoverage(AltamiraBaseModel):
+    """Status de UNA capa para UNA construccion -- una fila de la matriz
+    capa x construccion. `SUPPORTED` exige evidencia verificable
+    (`_check_supported_has_evidence`): un status que afirma soporte
+    completo sin ningun test/fixture/revision que lo demuestre es
+    exactamente la afirmacion sin evidencia que el principio de
+    honestidad funcional prohibe."""
+
+    layer: SemanticCoverageLayer
+    status: SemanticCoverageStatus
+    notes: str | None = Field(default=None, max_length=500)
+    evidence: list[SemanticCoverageEvidenceReference] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_supported_has_evidence(self) -> SemanticLayerCoverage:
+        if self.status == SemanticCoverageStatus.SUPPORTED and not self.evidence:
+            raise ValueError(
+                f"layer={self.layer.value}: status=SUPPORTED exige al menos una "
+                "evidencia verificable (SemanticCoverageEvidenceReference)"
+            )
+        return self
+
+
+class SemanticDetectorCoverage(AltamiraBaseModel):
+    """Detector asociado a una construccion -- `detector_id` debe
+    coincidir con un id real de V1/`V2_DETECTOR_REGISTRY`/
+    `INTERPROCEDURAL_RULE_DETECTOR_REGISTRY` (reconciliado por
+    `pipeline/semantic_coverage_registry.py`, nunca inventado aqui)."""
+
+    detector_id: str = Field(min_length=1, max_length=200)
+    rule_families: list[str] = Field(default_factory=list)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class SemanticRuleFamilyCoverage(AltamiraBaseModel):
+    """Familia de regla unificada asociada a una construccion --
+    `rule_family` debe coincidir con un valor real de `UnifiedRuleFamily`
+    (reconciliado por `pipeline/semantic_coverage_registry.py`)."""
+
+    rule_family: str = Field(min_length=1, max_length=100)
+    status: SemanticCoverageStatus
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class SemanticConstructCoverage(AltamiraBaseModel):
+    """Cobertura completa de UNA construccion COBOL a traves de todas las
+    capas arquitectonicas. `construct_id` es un slug estable en
+    MAYUSCULAS_CON_GUION_BAJO (nunca un timestamp, nunca derivado de un
+    run) -- p. ej. `IF`, `LEVEL_88_CONDITION`, `CALL_DYNAMIC`."""
+
+    construct_id: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    category: str = Field(min_length=1, max_length=100)
+    parser_representation: str | None = Field(default=None, max_length=300)
+    java_statement_kind: StatementKind | None = None
+    canonical_representation: str | None = Field(default=None, max_length=300)
+    graph_nodes: list[NodeLabel] = Field(default_factory=list)
+    graph_relationships: list[RelationshipType] = Field(default_factory=list)
+    propagation_support: str | None = Field(default=None, max_length=300)
+    detectors: list[SemanticDetectorCoverage] = Field(default_factory=list)
+    rule_families: list[SemanticRuleFamilyCoverage] = Field(default_factory=list)
+    evidence_support: str | None = Field(default=None, max_length=300)
+    provenance_support: str | None = Field(default=None, max_length=300)
+    layers: list[SemanticLayerCoverage] = Field(default_factory=list)
+    fixtures: list[RelativePath] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    unknown_behavior: str | None = Field(default=None, max_length=500)
+    domain_reviewed: bool = False
+    diagnostics: list[str] = Field(default_factory=list)
+
+    @field_validator("construct_id")
+    @classmethod
+    def _check_construct_id_pattern(cls, value: str) -> str:
+        if not _CONSTRUCT_ID_PATTERN.match(value):
+            raise ValueError(
+                f"construct_id invalido, se espera MAYUSCULAS_CON_GUION_BAJO: {value!r}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _check_layers_cover_required_set_without_duplicates(self) -> SemanticConstructCoverage:
+        declared = [entry.layer for entry in self.layers]
+        if len(declared) != len(set(declared)):
+            raise ValueError(f"construct_id={self.construct_id!r}: layers contiene duplicados")
+        missing = set(SemanticCoverageLayer) - set(declared)
+        if missing:
+            missing_sorted = sorted(layer.value for layer in missing)
+            raise ValueError(
+                f"construct_id={self.construct_id!r}: faltan capas obligatorias {missing_sorted}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_layers_ordering_deterministic(self) -> SemanticConstructCoverage:
+        order = list(SemanticCoverageLayer)
+        actual = [entry.layer for entry in self.layers]
+        expected = sorted(actual, key=order.index)
+        if actual != expected:
+            raise ValueError(
+                f"construct_id={self.construct_id!r}: layers no esta ordenado "
+                "deterministicamente (orden declarado de SemanticCoverageLayer)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_domain_reviewed_requires_domain_review_evidence(self) -> SemanticConstructCoverage:
+        if not self.domain_reviewed:
+            return self
+        has_domain_review = any(
+            ref.kind == ValidationEvidenceKind.DOMAIN_REVIEW
+            for layer in self.layers
+            for ref in layer.evidence
+        )
+        if not has_domain_review:
+            raise ValueError(
+                f"construct_id={self.construct_id!r}: domain_reviewed=true exige al menos "
+                "una SemanticCoverageEvidenceReference(kind=DOMAIN_REVIEW) en alguna capa"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_detectors_sorted_and_unique(self) -> SemanticConstructCoverage:
+        ids = [d.detector_id for d in self.detectors]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"construct_id={self.construct_id!r}: detectors duplicados")
+        if ids != sorted(ids):
+            raise ValueError(
+                f"construct_id={self.construct_id!r}: detectors no esta ordenado "
+                "deterministicamente"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_rule_families_sorted_and_unique(self) -> SemanticConstructCoverage:
+        names = [f.rule_family for f in self.rule_families]
+        if len(names) != len(set(names)):
+            raise ValueError(f"construct_id={self.construct_id!r}: rule_families duplicadas")
+        if names != sorted(names):
+            raise ValueError(
+                f"construct_id={self.construct_id!r}: rule_families no esta ordenado "
+                "deterministicamente"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_fixtures_sorted_and_unique(self) -> SemanticConstructCoverage:
+        if len(self.fixtures) != len(set(self.fixtures)):
+            raise ValueError(f"construct_id={self.construct_id!r}: fixtures duplicadas")
+        if self.fixtures != sorted(self.fixtures):
+            raise ValueError(
+                f"construct_id={self.construct_id!r}: fixtures no esta ordenado "
+                "deterministicamente"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_limitations_and_diagnostics_sorted_and_unique(self) -> SemanticConstructCoverage:
+        for field_name in ("limitations", "diagnostics"):
+            values: list[str] = getattr(self, field_name)
+            if len(values) != len(set(values)):
+                raise ValueError(
+                    f"construct_id={self.construct_id!r}: {field_name} contiene duplicados"
+                )
+            if values != sorted(values):
+                raise ValueError(
+                    f"construct_id={self.construct_id!r}: {field_name} no esta ordenado "
+                    "deterministicamente"
+                )
+        return self
+
+
+class SemanticCoverageIssue(AltamiraBaseModel):
+    """Problema detectado por la reconciliacion ejecutable
+    (`pipeline/semantic_coverage_registry.py`) -- p. ej. un StatementKind
+    real sin entrada en el manifiesto, o una referencia de test que no
+    existe. Nunca contiene codigo ni mensajes libres sin `reason_code`
+    cerrado."""
+
+    issue_id: str = Field(min_length=1, max_length=200)
+    construct_id: str | None = Field(default=None, max_length=100)
+    severity: Severity
+    reason_code: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class SemanticCoverageManifestSummary(AltamiraBaseModel):
+    """Agregacion verificable del manifiesto completo -- ver nota de
+    modulo sobre por que este modelo no se llama `SemanticCoverageSummary`
+    (ese nombre ya esta tomado por el diagnostico por-run, arriba)."""
+
+    construct_count: int = Field(ge=0)
+    domain_reviewed_count: int = Field(ge=0)
+    issue_count: int = Field(ge=0)
+    counts_by_layer_and_status: dict[SemanticCoverageLayer, dict[SemanticCoverageStatus, int]] = (
+        Field(default_factory=dict)
+    )
+
+
+class SemanticCoverageManifest(AltamiraBaseModel):
+    """Contenedor persistido en `config/semantic_coverage.yaml` --
+    declara la capacidad CONOCIDA del producto, independiente de
+    cualquier run. Deliberadamente sin ningun timestamp: dos cargas del
+    mismo YAML deben producir el mismo modelo validado."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    manifest_edition: str = Field(min_length=1, max_length=100)
+    constructs: list[SemanticConstructCoverage] = Field(default_factory=list)
+    issues: list[SemanticCoverageIssue] = Field(default_factory=list)
+    summary: SemanticCoverageManifestSummary
+
+    @model_validator(mode="after")
+    def _check_constructs_sorted_and_unique(self) -> SemanticCoverageManifest:
+        ids = [c.construct_id for c in self.constructs]
+        if len(ids) != len(set(ids)):
+            raise ValueError("constructs contiene construct_id duplicado")
+        if ids != sorted(ids):
+            raise ValueError("constructs no esta ordenado deterministicamente por construct_id")
+        return self
+
+    @model_validator(mode="after")
+    def _check_issues_sorted_and_unique(self) -> SemanticCoverageManifest:
+        ids = [i.issue_id for i in self.issues]
+        if len(ids) != len(set(ids)):
+            raise ValueError("issues contiene issue_id duplicado")
+        if ids != sorted(ids):
+            raise ValueError("issues no esta ordenado deterministicamente por issue_id")
+        return self
+
+    @model_validator(mode="after")
+    def _check_summary_matches_constructs_and_issues(self) -> SemanticCoverageManifest:
+        if self.summary.construct_count != len(self.constructs):
+            raise ValueError(
+                f"summary.construct_count ({self.summary.construct_count}) != cantidad de "
+                f"constructs ({len(self.constructs)})"
+            )
+        expected_domain_reviewed = sum(1 for c in self.constructs if c.domain_reviewed)
+        if self.summary.domain_reviewed_count != expected_domain_reviewed:
+            raise ValueError(
+                f"summary.domain_reviewed_count ({self.summary.domain_reviewed_count}) != "
+                f"cantidad real de constructs domain_reviewed=true ({expected_domain_reviewed})"
+            )
+        if self.summary.issue_count != len(self.issues):
+            raise ValueError(
+                f"summary.issue_count ({self.summary.issue_count}) != cantidad de issues "
+                f"({len(self.issues)})"
+            )
+        expected_counts: dict[SemanticCoverageLayer, dict[SemanticCoverageStatus, int]] = {}
+        for construct in self.constructs:
+            for layer_entry in construct.layers:
+                by_status = expected_counts.setdefault(layer_entry.layer, {})
+                by_status[layer_entry.status] = by_status.get(layer_entry.status, 0) + 1
+        if self.summary.counts_by_layer_and_status != expected_counts:
+            raise ValueError(
+                "summary.counts_by_layer_and_status no coincide con la suma real de "
+                "constructs[].layers[].status"
             )
         return self
