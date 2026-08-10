@@ -258,15 +258,17 @@ def _base_kwargs(tmp_path: Path, *, run_stages: list[StageExecution]) -> dict[st
         "invariants_path": invariants_path,
         "q0_cypher_path": q0_path,
         "candidates_path": tmp_path / "06-candidates.json",
+        "canonical_dir": tmp_path / "02-canonical",
         "settings": settings,
     }
 
 
 def _happy_kwargs(tmp_path: Path) -> tuple[dict[str, Any], SemanticGraph, str]:
     kwargs = _base_kwargs(tmp_path, run_stages=_succeeded_stages())
-    graph, semantic_graph_hash = _sample_graph(), hashlib.sha256(
-        kwargs["semantic_graph_path"].read_bytes()
-    ).hexdigest()
+    graph, semantic_graph_hash = (
+        _sample_graph(),
+        hashlib.sha256(kwargs["semantic_graph_path"].read_bytes()).hexdigest(),
+    )
     return kwargs, graph, semantic_graph_hash
 
 
@@ -570,9 +572,9 @@ def test_happy_path_persists_artifact_and_reports_warning(
     assert artifact.run_id == _RUN_ID
     assert artifact.source_package_hash == _HASH_A
     assert artifact.semantic_graph_hash == semantic_graph_hash
-    assert artifact.q0_query_hash == hashlib.sha256(
-        kwargs["q0_cypher_path"].read_bytes()
-    ).hexdigest()
+    assert (
+        artifact.q0_query_hash == hashlib.sha256(kwargs["q0_cypher_path"].read_bytes()).hexdigest()
+    )
     assert artifact.candidates == [candidate]
 
 
@@ -634,9 +636,7 @@ def test_never_invokes_graph_validated_stage_or_invariants(
     run_candidates_detected_stage(**kwargs)  # no debe lanzar
 
 
-def test_does_not_create_context_directory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_does_not_create_context_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
     active = _matching_active_graph_load(graph, semantic_graph_hash)
     stub = _StubRepository(active=active)
@@ -646,3 +646,146 @@ def test_does_not_create_context_directory(
     run_candidates_detected_stage(**kwargs)
 
     assert not (tmp_path / "07-context").exists()
+
+
+# --- Fase 15B3-B: enhanced_candidates_enabled (opt-in, orquestacion) ---
+
+
+def _v1_candidate(decision_id: str = "dec-1") -> RuleCandidate:
+    return RuleCandidate(
+        candidate_id="candidate::q0-return-code-decision::1.0::" + _HASH_A + f"::{decision_id}",
+        paragraph_id="program::AR::op::PROG::1::abc::paragraph::MAIN",
+        paragraph_name="MAIN",
+        decision_id=decision_id,
+        detector_id="q0-return-code-decision",
+        detector_version="1.0",
+        detector_score=1.0,
+        condition="WS-COD = 'R001'",
+        outcome_code="R001",
+        rule_type=None,
+        line_start=10,
+        source_file="01-codigo/cobol/PROG.cbl",
+        source_package_hash=_HASH_A,
+    )
+
+
+def _enhanced_candidate(decision_id: str = "dec-2") -> RuleCandidate:
+    from altamira_extractor.contracts.candidate_promotion_assessment import (
+        CandidateSource,
+        UnifiedRuleFamily,
+    )
+
+    return RuleCandidate(
+        candidate_id="candidate::v2::V2_LEVEL_88_RETURN_CODE::deadbeef::" + _HASH_A,
+        paragraph_id="program::AR::op::PROG::1::abc::paragraph::MAIN",
+        paragraph_name="MAIN",
+        decision_id=decision_id,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        detector_version="1.0",
+        detector_score=1.0,
+        condition="ERROR-DE-ENTRADA",
+        outcome_code="0005",
+        rule_type=None,
+        line_start=20,
+        source_file="01-codigo/cobol/PROG.cbl",
+        source_package_hash=_HASH_A,
+        candidate_source=CandidateSource.V2,
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        evidence_ids=["effect::1"],
+    )
+
+
+def _install_detect_enhanced_candidates(
+    monkeypatch: pytest.MonkeyPatch, *, candidates: list[RuleCandidate], warnings: list[str]
+) -> list[Any]:
+    calls: list[Any] = []
+
+    def _fake(**kwargs: Any) -> tuple[list[RuleCandidate], list[str]]:
+        calls.append(kwargs)
+        return candidates, warnings
+
+    monkeypatch.setattr(stage_module, "detect_enhanced_candidates", _fake)
+    monkeypatch.setattr(
+        stage_module, "_load_canonical_programs_for_enhanced_detection", lambda canonical_dir: []
+    )
+    return calls
+
+
+def test_enhanced_disabled_by_default_never_calls_enhanced_detection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
+    active = _matching_active_graph_load(graph, semantic_graph_hash)
+    stub = _StubRepository(active=active)
+    _install_stub(monkeypatch, stub)
+    _install_detect_candidates(monkeypatch, [_v1_candidate()])
+
+    def _explode(**kwargs: Any) -> Any:
+        raise AssertionError("detect_enhanced_candidates no deberia invocarse (flag=false)")
+
+    monkeypatch.setattr(stage_module, "detect_enhanced_candidates", _explode)
+
+    warnings = run_candidates_detected_stage(**kwargs)
+
+    assert warnings == ["detectados 1 candidato(s)"]
+    artifact = CandidateArtifact.model_validate_json(
+        kwargs["candidates_path"].read_text(encoding="utf-8")
+    )
+    assert artifact.candidates == [_v1_candidate()]
+    assert artifact.warnings == []
+
+
+def test_enhanced_enabled_adds_new_candidates_and_preserves_v1(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
+    kwargs["settings"] = Settings(
+        semantic_tags_path=kwargs["settings"].semantic_tags_path, enhanced_candidates_enabled=True
+    )
+    active = _matching_active_graph_load(graph, semantic_graph_hash)
+    stub = _StubRepository(active=active)
+    _install_stub(monkeypatch, stub)
+    v1 = _v1_candidate()
+    _install_detect_candidates(monkeypatch, [v1])
+    enhanced = _enhanced_candidate()
+    calls = _install_detect_enhanced_candidates(
+        monkeypatch, candidates=[enhanced], warnings=["nota de deteccion ampliada"]
+    )
+
+    warnings = run_candidates_detected_stage(**kwargs)
+
+    assert calls[0]["source_package_hash"] == _HASH_A
+    assert calls[0]["v1_candidates"].candidates == [v1]
+    assert warnings == ["detectados 2 candidato(s)"]
+
+    artifact = CandidateArtifact.model_validate_json(
+        kwargs["candidates_path"].read_text(encoding="utf-8")
+    )
+    assert artifact.candidates == sorted([v1, enhanced], key=lambda c: c.candidate_id)
+    assert v1 in artifact.candidates
+    assert artifact.warnings == ["nota de deteccion ampliada"]
+
+
+def test_enhanced_enabled_with_no_new_candidates_still_reports_dedup_warnings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
+    kwargs["settings"] = Settings(
+        semantic_tags_path=kwargs["settings"].semantic_tags_path, enhanced_candidates_enabled=True
+    )
+    active = _matching_active_graph_load(graph, semantic_graph_hash)
+    stub = _StubRepository(active=active)
+    _install_stub(monkeypatch, stub)
+    v1 = _v1_candidate()
+    _install_detect_candidates(monkeypatch, [v1])
+    _install_detect_enhanced_candidates(
+        monkeypatch, candidates=[], warnings=["candidato V2 deduplicado contra V1"]
+    )
+
+    run_candidates_detected_stage(**kwargs)
+
+    artifact = CandidateArtifact.model_validate_json(
+        kwargs["candidates_path"].read_text(encoding="utf-8")
+    )
+    assert artifact.candidates == [v1]
+    assert artifact.warnings == ["candidato V2 deduplicado contra V1"]

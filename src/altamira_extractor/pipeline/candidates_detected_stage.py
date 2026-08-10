@@ -14,6 +14,16 @@ Idempotencia: en cada corrida se reejecutan precondiciones y Q0 por
 completo (nunca se usa unicamente `q0_query_hash`/`RunState` para omitir
 la ejecucion contra Neo4j); el artefacto recomputado solo se reescribe
 si difiere del existente.
+
+`Settings.enhanced_candidates_enabled` (Fase 15B3-B, opt-in, `False` por
+defecto): cuando esta activo, ademas de Q0 se ejecutan en memoria los
+detectores V2 RETURN_CODE_RULE/LEVEL_88_RETURN_CODE_RULE (ver
+`enhanced_candidate_integration.py`) sobre los mismos artefactos que
+PARSED/SEMANTIC_GRAPH_BUILT ya persistieron -- nunca se agrega una
+consulta Neo4j adicional. Los candidatos V1 nunca se modifican; solo se
+agregan los candidatos V2 no cubiertos ya por un `decision_id` de V1.
+Con el default `False`, el artefacto producido es identico al de antes
+de esta fase.
 """
 
 from __future__ import annotations
@@ -23,12 +33,14 @@ from pathlib import Path
 
 from ..config import Settings
 from ..contracts.candidate import CandidateArtifact, RuleCandidate
+from ..contracts.canonical import CanonicalProgram
 from ..contracts.enums import PipelineStage, StageStatus
 from ..contracts.invariants import InvariantArtifact
 from ..contracts.run_state import StageExecution
 from ..contracts.semantic_enrichment import SemanticEnrichmentArtifact
 from .artifact_store import atomic_write_json
 from .candidate_detector import detect_candidates, load_q0_query
+from .enhanced_candidate_integration import detect_enhanced_candidates
 from .errors import CandidateDetectionError, GraphLoadError, Neo4jError, SemanticConfigError
 from .neo4j_repository import Neo4jRepository
 from .semantic_graph_load_stage import load_and_validate_semantic_graph
@@ -117,6 +129,36 @@ def _verify_semantic_tags_config(settings: Settings, expected_config_hash: str) 
         )
 
 
+def _load_canonical_programs_for_enhanced_detection(canonical_dir: Path) -> list[CanonicalProgram]:
+    """Carga `artifacts/02-canonical/*.json` unicamente para la deteccion
+    ampliada opt-in (Fase 15B3-B) -- V1/Q0 nunca depende de esto. Mismo
+    patron ya usado por `v2_shadow_candidates_service.py`/
+    `interprocedural_call_linkage_service.py` (glob ordenado +
+    `CanonicalProgram.model_validate_json`); CANDIDATES_DETECTED ya exige
+    GRAPH_VALIDATED (y por lo tanto PARSED) SUCCEEDED, asi que estos
+    artefactos estan garantizados presentes."""
+    json_paths = sorted(
+        path for path in canonical_dir.rglob("*.json") if path.is_file() and not path.is_symlink()
+    )
+    if not json_paths:
+        raise CandidateDetectionError(
+            "enhanced_candidates_enabled=true pero artifacts/02-canonical no contiene ningun "
+            "CanonicalProgram"
+        )
+    programs: list[CanonicalProgram] = []
+    for json_path in json_paths:
+        try:
+            programs.append(
+                CanonicalProgram.model_validate_json(json_path.read_text(encoding="utf-8"))
+            )
+        except ValueError as exc:
+            raise CandidateDetectionError(
+                f"artifacts/02-canonical/{json_path.name}: JSON invalido o incompatible con "
+                f"CanonicalProgram: {exc}"
+            ) from exc
+    return programs
+
+
 def _build_candidate_artifact(
     *,
     run_id: str,
@@ -126,6 +168,7 @@ def _build_candidate_artifact(
     semantic_enrichment_path: Path,
     invariants_path: Path,
     q0_cypher_path: Path,
+    canonical_dir: Path,
     settings: Settings,
 ) -> CandidateArtifact:
     _verify_graph_validated_precondition(run_stages)
@@ -192,6 +235,36 @@ def _build_candidate_artifact(
         if repository is not None:
             repository.close()
 
+    warnings: list[str] = []
+    if settings.enhanced_candidates_enabled:
+        v1_artifact = CandidateArtifact(
+            run_id=run_id,
+            source_package_hash=source_package_hash,
+            semantic_graph_hash=semantic_graph_hash,
+            invariants_query_hash=invariant_artifact.invariants_query_hash,
+            q0_query_hash=q0_query_hash,
+            candidates=candidates,
+            warnings=[],
+        )
+        canonical_programs = _load_canonical_programs_for_enhanced_detection(canonical_dir)
+        enhanced_candidates, enhanced_warnings = detect_enhanced_candidates(
+            canonical_programs=canonical_programs,
+            semantic_graph=graph,
+            v1_candidates=v1_artifact,
+            run_id=run_id,
+            source_package_hash=source_package_hash,
+        )
+        # enhanced_candidates puede contener reemplazos (mismo candidate_id
+        # que un V1 original, con evidence_ids fusionados -- regla D de
+        # enhanced_candidate_integration.py) o candidatos nuevos: indexar
+        # por candidate_id y sobrescribir, nunca concatenar (evita
+        # candidate_id duplicado en CandidateArtifact).
+        by_id = {candidate.candidate_id: candidate for candidate in candidates}
+        for candidate in enhanced_candidates:
+            by_id[candidate.candidate_id] = candidate
+        candidates = sorted(by_id.values(), key=lambda c: c.candidate_id)
+        warnings = enhanced_warnings
+
     return CandidateArtifact(
         run_id=run_id,
         source_package_hash=source_package_hash,
@@ -199,7 +272,7 @@ def _build_candidate_artifact(
         invariants_query_hash=invariant_artifact.invariants_query_hash,
         q0_query_hash=q0_query_hash,
         candidates=candidates,
-        warnings=[],
+        warnings=warnings,
     )
 
 
@@ -213,6 +286,7 @@ def run_candidates_detected_stage(
     invariants_path: Path,
     q0_cypher_path: Path,
     candidates_path: Path,
+    canonical_dir: Path,
     settings: Settings,
 ) -> list[str]:
     """Ejecuta CANDIDATES_DETECTED y devuelve los warnings (resumen para
@@ -225,6 +299,7 @@ def run_candidates_detected_stage(
         semantic_enrichment_path=semantic_enrichment_path,
         invariants_path=invariants_path,
         q0_cypher_path=q0_cypher_path,
+        canonical_dir=canonical_dir,
         settings=settings,
     )
 

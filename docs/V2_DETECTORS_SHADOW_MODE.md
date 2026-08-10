@@ -39,8 +39,16 @@ python -m altamira_extractor.cli v2-candidates-shadow <run_id> [--json]
 - No invoca un proveedor LLM.
 - Sus candidatos **nunca alimentan** `ContextPackage`, generación de
   `RuleDraft`, guardrails, Markdown, el ZIP final, `CandidateArtifact` V1
-  ni el grafo Neo4j. Un `V2ShadowCandidate` nunca se presenta como regla
-  aprobada (CLAUDE.md, sección "Candidato, fidelidad y aprobación").
+  ni el grafo Neo4j — este artefacto y este comando CLI en particular
+  siguen siendo puramente diagnósticos. Un `V2ShadowCandidate` nunca se
+  presenta como regla aprobada (CLAUDE.md, sección "Candidato, fidelidad
+  y aprobación"). Ver "Fase 15B3-B" más abajo: desde esa fase, un
+  camino **separado y opt-in** (`CANDIDATES_DETECTED`,
+  `enhanced_candidate_integration.py`) reutiliza las mismas funciones
+  puras `detect_return_code_propagation`/`detect_level_88_return_code`
+  de `v2_detectors.py` para producir `RuleCandidate` V1 reales — pero
+  nunca lee ni escribe `v2-candidates-shadow.json`, y nunca a través de
+  este comando CLI.
 - Q0 (`queries/v1/q0_candidates.cypher`, `pipeline/candidate_detector.py`)
   nunca se modifica ni se reejecuta: se consulta únicamente como
   baseline ya calculado (`ctx.v1_candidates`).
@@ -171,15 +179,18 @@ v2_shadow_detector.py::_build_comparisons`):
   Q0 (V1 vacío, pero entonces se exigen al menos dos
   `v2_candidate_ids`).
 
-## Ausencia de activación funcional
+## Ausencia de activación funcional (este artefacto/comando)
 
-Ningún `V2ShadowCandidate` incrementa `detector_score` de un candidato
-V1, modifica `CandidateArtifact`, altera `ContextPackage`, cambia el
-comportamiento del LLM/guardrails, ni se presenta en el Markdown o el
-ZIP final. `support=DETERMINISTIC` describe únicamente que el
-**detector V2** tiene evidencia autocontenida suficiente — nunca implica
-aprobación funcional (`FUNCTIONALLY_APPROVED` sigue fuera de alcance en
-V1, CLAUDE.md).
+Ningún `V2ShadowCandidate` persistido en `v2-candidates-shadow.json`
+incrementa `detector_score` de un candidato V1, modifica
+`CandidateArtifact`, altera `ContextPackage`, cambia el comportamiento
+del LLM/guardrails, ni se presenta en el Markdown o el ZIP final.
+`support=DETERMINISTIC` describe únicamente que el **detector V2** tiene
+evidencia autocontenida suficiente — nunca implica aprobación funcional
+(`FUNCTIONALLY_APPROVED` sigue fuera de alcance en V1, CLAUDE.md). Fase
+15B3-B (sección siguiente) integra en el pipeline productivo dos de los
+tres `V2RuleType` mediante un camino separado que nunca pasa por este
+artefacto ni por este comando.
 
 ## CLI
 
@@ -246,14 +257,71 @@ exactamente igual que antes de esta fase.
   produce un candidato `PARTIAL`, sin importar si ese data item es o no
   relevante para una regla de negocio real.
 
+## Fase 15B3-B: integración productiva opt-in de RETURN_CODE_RULE/LEVEL_88_RETURN_CODE_RULE
+
+"Realineación mínima del motor de extracción de reglas": con
+`Settings.enhanced_candidates_enabled=true` (`False` por defecto,
+`ALTAMIRA_ENHANCED_CANDIDATES_ENABLED`), la etapa `CANDIDATES_DETECTED`
+(`pipeline/candidates_detected_stage.py`) ejecuta, **después** de Q0 y
+en memoria (sin persistir ningún diagnóstico), exactamente
+`detect_return_code_propagation`/`detect_level_88_return_code` de este
+mismo módulo (`v2_detectors.py`, sin modificar) sobre
+`V2DetectorContext` recién construido — mismas funciones puras que usa
+`v2-candidates-shadow`, nunca una copia ni una reimplementación. Ver
+`pipeline/enhanced_candidate_integration.py`.
+
+Alcance deliberadamente parcial:
+
+- **Integrados**: `RETURN_CODE_RULE`, `LEVEL_88_RETURN_CODE_RULE` —
+  ambos anclados a una `Decision` real, compatibles sin cambios con las
+  queries Q4/Q5a de `context_package_builder.py` (que exigen un
+  `decision_id` correspondiente a un nodo `Decision` existente).
+- **Nunca integrado**: `STATE_CHANGE_RULE` — nunca `DETERMINISTIC`
+  (siempre `PARTIAL`), CLAUDE.md prohíbe que `PARTIAL` se convierta
+  automáticamente en aprobado.
+- **Nunca integrado en esta fase**: `InterproceduralRuleType.
+  BY_REFERENCE_RULE` (`docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md`)
+  — anclado a un `call_site_id`, no a una `Decision`; integrarlo
+  exigiría extender Q4/Q5a (o el metamodelo de evidencia D4/D5a), una
+  decisión de arquitectura fuera del alcance de una realineación
+  mínima. Sigue siendo shadow-only.
+
+Solo se convierten a `RuleCandidate` los `V2ShadowCandidate` con
+`support=DETERMINISTIC` **y** `decision_id` resuelto contra un nodo
+`Decision` real en `04-semantic-graph.json` — nunca se fabrica
+`decision_id`/`condition`/`source_file` sintéticos; si el grafo no
+expone lo mínimo necesario, el candidato se descarta con un warning
+trazable (nunca falla el run completo por un candidato aislado).
+
+**Deduplicación**: identidad = `decision_id` (ya determinístico,
+codifica programa/paragraph/línea/ordinal). Si V1 ya produjo un
+candidato para ese `decision_id`, el candidato V2 se descarta (V1
+**nunca** se modifica, ni siquiera para fusionarle `evidence_ids`) y se
+registra un warning en `CandidateArtifact.warnings`. Dos detectores V2
+distintos (p. ej. `V2_RETURN_CODE_PROPAGATION` y
+`V2_LEVEL_88_RETURN_CODE` sobre la misma decisión, ver "Solapamiento
+intencional" arriba) se conservan como `RuleCandidate` separados — igual
+que en el catálogo shadow, nunca se fusionan por compartir
+decisión/target/literal.
+
+**Procedencia**: `RuleCandidate` gana cuatro campos nuevos, retro-
+compatibles (`contracts/candidate.py`): `candidate_source` (V1 por
+defecto), `rule_family` (`RETURN_CODE` por defecto — garantía
+estructural de Q0), `support_level` (`Literal["DETERMINISTIC"]` — los
+únicos candidatos que llegan aquí), `evidence_ids` (vacío para V1).
+Runs históricos sin estos campos siguen siendo válidos.
+
+Con el flag en `False` (default), `CANDIDATES_DETECTED` es
+byte-compatible con el comportamiento anterior a esta fase.
+
 ## Procedimiento futuro de promoción
 
-Este documento describe exclusivamente el estado shadow-mode (Fase 5).
-Cualquier decisión de promover un detector V2 a un rol funcional
-(alimentar `CandidateArtifact`, `ContextPackage` o el grafo Neo4j)
-requiere una decisión de arquitectura documentada aparte — nunca ocurre
-implícitamente por ejecutar este comando ni por acumular evidencia
-`DETERMINISTIC`.
+Este documento describe exclusivamente el estado shadow-mode (Fase 5)
+de `V2ShadowCandidatesArtifact`/`v2-candidates-shadow` en sí. Cualquier
+decisión de promover `V2_STATE_CHANGE` o el resto del catálogo shadow a
+un rol funcional requiere una decisión de arquitectura documentada
+aparte — nunca ocurre implícitamente por ejecutar este comando ni por
+acumular evidencia `DETERMINISTIC`.
 
 Fase 9 (`docs/CANDIDATE_PROMOTION_ASSESSMENT.md`) agrega una capa
 diagnóstica **posterior**, puramente de solo lectura, que cataloga cada

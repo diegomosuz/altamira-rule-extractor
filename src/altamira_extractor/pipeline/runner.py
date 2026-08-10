@@ -795,6 +795,7 @@ def _run_candidates_detected(
     semantic_enrichment_path: Path,
     invariants_path: Path,
     candidates_path: Path,
+    canonical_dir: Path,
     settings: Settings,
     run_json_path: Path,
 ) -> RunState:
@@ -813,6 +814,7 @@ def _run_candidates_detected(
             invariants_path=invariants_path,
             q0_cypher_path=settings.q0_candidates_cypher_path,
             candidates_path=candidates_path,
+            canonical_dir=canonical_dir,
             settings=settings,
         )
     except CandidateDetectionError as exc:
@@ -1054,6 +1056,7 @@ def run_ingestion(source_zip: Path, settings: Settings, run_id: str | None = Non
         semantic_enrichment_path,
         invariants_path,
         candidates_path,
+        canonical_dir,
         settings,
         run_json_path,
     )

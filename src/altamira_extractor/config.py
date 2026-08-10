@@ -358,6 +358,17 @@ class Settings(BaseSettings):
     trusted_hosts: list[str] = Field(default_factory=lambda: ["*"])
     hsts_enabled: bool = False
 
+    # Realineacion minima del motor de reglas (Fase 15B3-B). Con el
+    # default `False`, CANDIDATES_DETECTED es byte-compatible con V1: solo
+    # ejecuta Q0. Con `True`, ademas ejecuta en memoria los detectores V2
+    # RETURN_CODE_RULE/LEVEL_88_RETURN_CODE_RULE (nunca STATE_CHANGE_RULE,
+    # que nunca es DETERMINISTIC) sobre los mismos artefactos ya
+    # persistidos por PARSED/SEMANTIC_GRAPH_BUILT, y agrega unicamente los
+    # candidatos no cubiertos ya por V1 a `artifacts/06-candidates.json`
+    # (ver pipeline/enhanced_candidate_integration.py). V1 nunca se
+    # modifica ni se reordena.
+    enhanced_candidates_enabled: bool = False
+
     # Localizacion estable de config/semantic_coverage.yaml (Fase 15B2-A
     # Parte B/C/D: manifiesto estatico de cobertura semantica y
     # reconciliacion/observaciones ejecutadas sobre el). Mismo patron que

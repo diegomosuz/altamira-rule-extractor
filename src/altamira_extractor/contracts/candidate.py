@@ -23,7 +23,33 @@ confirmado — ninguno de esos conceptos se deriva ni se combina aqui
 (en particular, nunca se mezcla con `DataItem.semantic_confidence`, que
 proviene de una fuente distinta, `SemanticTagger`). Si la semantica de
 Q0 cambia en el futuro, `detector_version` debe incrementarse.
-"""
+
+`candidate_source`/`rule_family`/`evidence_ids` (Fase 15B3-B/15B3-B1,
+`pipeline/enhanced_candidate_integration.py`): campos de procedencia,
+opcionales por default y retrocompatibles -- un `RuleCandidate` V1 (Q0)
+tiene siempre `candidate_source=V1`, `rule_family=RETURN_CODE`
+(garantia estructural de Q0, ver `pipeline/
+candidate_source_adapters.py::_V1_RULE_FAMILY`) y `evidence_ids=[]`
+salvo que la deteccion ampliada haya fusionado evidencia V2 en el (regla
+D: `evidence_ids` se enriquece via `model_copy`, nunca se muta el
+candidato V1 original en su lugar). Un `RuleCandidate` agregado por la
+deteccion ampliada (V2, opt-in via `Settings.enhanced_candidates_enabled`)
+declara su propio `candidate_source`/`rule_family`/`evidence_ids`. Estos
+campos nunca implican aprobacion funcional ni cambian el significado de
+`status` (`DETECTED_CANDIDATE` sigue siendo el unico status valido
+aqui).
+
+`support_level` (auditado y eliminado en Fase 15B3-B1): existio
+brevemente en la primera version de esta fase como
+`Literal["DETERMINISTIC"]`. Se elimino porque tenia un unico valor
+posible (todo candidato que llega a este contrato ya es DETERMINISTIC
+por construccion -- `PARTIAL`/`BLOCKED` se descartan antes en
+`enhanced_candidate_integration.py`), ningun consumidor tomaba
+decisiones con el, y solo anticipaba niveles de soporte hipoteticos
+futuros -- exactamente el patron que CLAUDE.md pide evitar ("No
+implementar un half-finished... No disenar para requisitos futuros
+hipoteticos"). No se reemplazo por otro enum ni por una jerarquia
+nueva."""
 
 from __future__ import annotations
 
@@ -32,6 +58,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from .base import AltamiraBaseModel, RelativePath, Sha256Hex
+from .candidate_promotion_assessment import CandidateSource, UnifiedRuleFamily
 from .enums import CandidateStatus
 
 
@@ -51,6 +78,18 @@ class RuleCandidate(AltamiraBaseModel):
     line_start: int = Field(ge=1)
     source_file: RelativePath
     source_package_hash: Sha256Hex
+    candidate_source: CandidateSource = CandidateSource.V1
+    rule_family: UnifiedRuleFamily = UnifiedRuleFamily.RETURN_CODE
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_evidence_ids_sorted_and_unique(self) -> RuleCandidate:
+        if self.evidence_ids != sorted(set(self.evidence_ids)):
+            raise ValueError(
+                f"RuleCandidate {self.candidate_id!r}: evidence_ids debe estar ordenado y sin "
+                "duplicados"
+            )
+        return self
 
 
 class CandidateArtifact(AltamiraBaseModel):
@@ -94,8 +133,7 @@ class CandidateArtifact(AltamiraBaseModel):
         for candidate in self.candidates:
             if candidate.status != CandidateStatus.DETECTED_CANDIDATE:
                 raise ValueError(
-                    f"RuleCandidate {candidate.candidate_id!r} debe tener "
-                    "status=DETECTED_CANDIDATE"
+                    f"RuleCandidate {candidate.candidate_id!r} debe tener status=DETECTED_CANDIDATE"
                 )
         return self
 

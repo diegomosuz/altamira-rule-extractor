@@ -11,6 +11,10 @@ import pytest
 from pydantic import ValidationError
 
 from altamira_extractor.contracts import CandidateArtifact, RuleCandidate
+from altamira_extractor.contracts.candidate_promotion_assessment import (
+    CandidateSource,
+    UnifiedRuleFamily,
+)
 
 _VALID_HASH = "a" * 64
 _OTHER_HASH = "b" * 64
@@ -132,3 +136,66 @@ def test_candidate_artifact_rejects_duplicate_warnings() -> None:
 def test_candidate_artifact_rejects_unsorted_warnings() -> None:
     with pytest.raises(ValidationError):
         _artifact(warnings=["z", "a"])
+
+
+# --- Fase 15B3-B/15B3-B1: candidate_source/rule_family/evidence_ids ---
+
+
+def test_rule_candidate_defaults_are_v1_and_backward_compatible() -> None:
+    """Un RuleCandidate construido sin los campos nuevos (como todo el
+    historial de runs de V1) sigue siendo valido y describe exactamente
+    la semantica V1: fuente V1, familia RETURN_CODE (garantia
+    estructural de Q0), sin evidencia adicional."""
+    candidate = _candidate()
+    assert candidate.candidate_source == CandidateSource.V1
+    assert candidate.rule_family == UnifiedRuleFamily.RETURN_CODE
+    assert candidate.evidence_ids == []
+
+
+def test_rule_candidate_accepts_explicit_v2_provenance() -> None:
+    candidate = _candidate(
+        candidate_source=CandidateSource.V2,
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        evidence_ids=["effect::1", "fact::1"],
+    )
+    assert candidate.candidate_source == CandidateSource.V2
+    assert candidate.rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
+    assert candidate.evidence_ids == ["effect::1", "fact::1"]
+
+
+def test_rule_candidate_rejects_unsorted_evidence_ids() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(evidence_ids=["z", "a"])
+
+
+def test_rule_candidate_rejects_duplicate_evidence_ids() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(evidence_ids=["a", "a"])
+
+
+def test_rule_candidate_rejects_unknown_field_support_level() -> None:
+    """Fase 15B3-B1: `support_level` fue auditado y eliminado (unico
+    valor posible, ningun consumidor productivo) -- el contrato es
+    cerrado (`extra=forbid`), asi que reintroducirlo debe fallar."""
+    with pytest.raises(ValidationError):
+        _candidate(support_level="DETERMINISTIC")
+
+
+def test_pre_existing_run_json_without_new_fields_still_parses() -> None:
+    """Runs historicos (`06-candidates.json` persistido antes de la Fase
+    15B3-B) nunca tuvieron `candidate_source`/`rule_family`/
+    `evidence_ids` -- deben seguir siendo legibles."""
+    legacy_json = (
+        '{"schema_version":"1.0","candidate_id":"candidate::det::1.0::' + _VALID_HASH + '::dec-1",'
+        '"paragraph_id":"program::AR::op::PROG::1::abc123::paragraph::MAIN",'
+        '"paragraph_name":"MAIN",'
+        '"decision_id":"program::AR::op::PROG::1::abc123::paragraph::MAIN::decision::10::1",'
+        '"detector_id":"return-code-decision","detector_version":"1.0","detector_score":1.0,'
+        '"status":"DETECTED_CANDIDATE","condition":"WS-COD-RESULT = \'R001\'",'
+        '"outcome_code":"R001","rule_type":null,"line_start":10,'
+        '"source_file":"01-codigo/cobol/PROG.cbl","source_package_hash":"' + _VALID_HASH + '"}'
+    )
+    restored = RuleCandidate.model_validate_json(legacy_json)
+    assert restored.candidate_source == CandidateSource.V1
+    assert restored.rule_family == UnifiedRuleFamily.RETURN_CODE
+    assert restored.evidence_ids == []
