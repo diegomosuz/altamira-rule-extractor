@@ -1,7 +1,9 @@
 """E2E hermetico productivo de la deteccion ampliada (Fase 15B3-B1,
 seccion 5; extendido en Fase 15B3-C1 con STATE_TRANSITION; extendido en
 Fase 15B3-C2-B1 con CALCULATION condicionada -- COMPUTE y un verbo
-aritmetico): "package sintetico versionado -> parser Java real ->
+aritmetico; extendido en Fase 15B3-C2-B2 con CALCULATION incondicional --
+mismos dos verbos, ahora tambien productivos SIN Decision envolvente):
+"package sintetico versionado -> parser Java real ->
 canonical -> semantic graph en Neo4j real efimero -> V1 + V2 ->
 06-candidates.json -> ContextPackage -> RuleDraft -> guardrail",
 ejercitando exclusivamente `run_ingestion` y los stages productivos
@@ -68,7 +70,7 @@ _MANIFEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 </altamira-package>
 """
 
-# Ocho paragraphs:
+# Nueve paragraphs:
 # - CHECK-SALDO-PARA: RETURN_CODE directo (Q0/V1 lo detecta, MOVE literal
 #   directo a WS-COD-RETORNO -- baseline V1 para probar preservacion).
 # - CHECK-PROPAGACION-PARA: RETURN_CODE via propagacion V2 (MOVE literal
@@ -89,12 +91,14 @@ _MANIFEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 # - CHECK-CALCULO-MULTIPLY-PARA (Fase 15B3-C2-B1): CALCULATION condicionado
 #   via un verbo aritmetico (MULTIPLY...GIVING, no solo COMPUTE) dentro de
 #   un IF -- ejemplo recomendado por el enunciado de la fase.
-# - CHECK-CALCULO-INCONDICIONAL-PARA (Fase 15B3-C2-B1): COMPUTE SIN IF/
-#   EVALUATE envolvente -- nunca debe llegar a 06-candidates.json (fuera
-#   de alcance de esta fase), pero deja un warning PERSISTIDO en
-#   06-candidates.json.warnings (correccion pre-commit, seccion 1: "no
-#   silent loss" via una ejecucion normal, sin invocar nada manualmente
-#   despues del run).
+# - CHECK-CALCULO-INCONDICIONAL-PARA: COMPUTE SIN IF/EVALUATE envolvente --
+#   desde Fase 15B3-C2-B2 SI llega a 06-candidates.json (decision_id=None/
+#   condition=None, nunca fabricados), sin el warning "no productivizado"
+#   de 15B3-C2-B1 (que ahora seria falso).
+# - CHECK-CALCULO-INCONDICIONAL-ADD-PARA (Fase 15B3-C2-B2): verbo
+#   aritmetico (ADD...TO, no solo COMPUTE) SIN IF/EVALUATE envolvente --
+#   tambien productivo, prueba que el camino incondicional cubre
+#   cualquier StatementKind aritmetico, no solo COMPUTE.
 _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        PROGRAM-ID. ENHRULE1.
        DATA DIVISION.
@@ -110,6 +114,7 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        01 WS-COMISION-COMPUTE PIC 9(7)V99 VALUE 0.
        01 WS-COMISION-MULTIPLY PIC 9(7)V99 VALUE 0.
        01 WS-COMISION-INCONDICIONAL PIC 9(7)V99 VALUE 0.
+       01 WS-COMISION-INCONDICIONAL-ADD PIC 9(7)V99 VALUE 0.
        PROCEDURE DIVISION.
        MAIN-PARA.
            PERFORM CHECK-SALDO-PARA.
@@ -120,6 +125,7 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
            PERFORM CHECK-CALCULO-COMPUTE-PARA.
            PERFORM CHECK-CALCULO-MULTIPLY-PARA.
            PERFORM CHECK-CALCULO-INCONDICIONAL-PARA.
+           PERFORM CHECK-CALCULO-INCONDICIONAL-ADD-PARA.
            GOBACK.
        CHECK-SALDO-PARA.
            IF WS-SALDO < 0
@@ -154,6 +160,8 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        CHECK-CALCULO-INCONDICIONAL-PARA.
            COMPUTE WS-COMISION-INCONDICIONAL =
                WS-MONTO-CALC + WS-TASA-CALC.
+       CHECK-CALCULO-INCONDICIONAL-ADD-PARA.
+           ADD WS-MONTO-CALC TO WS-COMISION-INCONDICIONAL-ADD.
 """
 
 _PARAM_DEMO_DDL = b"CREATE TABLE PARAM_DEMO (ID INT);\n"
@@ -317,31 +325,28 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     assert multiply_calc.evidence_ids != []
     assert multiply_calc.decision_id
 
-    # --- Caso 15B3-C2-B1: calculo incondicional NUNCA llega a
-    # 06-candidates.json -- pero deja una senal PERSISTIDA por la
-    # ejecucion NORMAL (correccion pre-commit, seccion 1: "no silent
-    # loss" exige que una corrida normal, sin invocar nada manualmente
-    # despues, deje rastro). La senal primaria es EL PROPIO
-    # `artifact.warnings` de 06-candidates.json (ya cargado arriba desde
-    # el archivo real escrito por la etapa CANDIDATES_DETECTED de ESTA
-    # ejecucion) -- nunca un artifact/comando nuevo.
-    assert _by_paragraph("CHECK-CALCULO-INCONDICIONAL-PARA") == []
-    incondicional_warnings = [
-        w for w in artifact.warnings
-        if "WS-COMISION-INCONDICIONAL" in w and "CHECK-CALCULO-INCONDICIONAL-PARA" in w
-    ]
-    assert len(incondicional_warnings) == 1, artifact.warnings
-    assert "SemanticEffect" in incondicional_warnings[0]
-    assert "COMPUTE_VALUE" in incondicional_warnings[0]
-    assert "effect::" in incondicional_warnings[0], (
-        "el warning debe citar el effect_id real, no solo describir el caso"
-    )
+    # --- Caso 15B3-C2-B2: calculo incondicional (COMPUTE) SI llega a
+    # 06-candidates.json -- decision_id=None/condition=None NUNCA
+    # fabricados, y el warning "no productivizado" de 15B3-C2-B1 ya NO
+    # existe (seria falso: el candidato ahora es productivo). ------------
+    incondicional_compute_candidates = _by_paragraph("CHECK-CALCULO-INCONDICIONAL-PARA")
+    assert len(incondicional_compute_candidates) == 1, artifact.candidates
+    incondicional_compute = incondicional_compute_candidates[0]
+    assert incondicional_compute.rule_family == UnifiedRuleFamily.CALCULATION
+    assert incondicional_compute.candidate_source == CandidateSource.V2
+    assert incondicional_compute.decision_id is None
+    assert incondicional_compute.condition is None
+    assert incondicional_compute.outcome_code is None
+    assert incondicional_compute.evidence_ids != []
+    assert not any(
+        "WS-COMISION-INCONDICIONAL" in w and "CHECK-CALCULO-INCONDICIONAL-PARA" in w
+        for w in artifact.warnings
+    ), artifact.warnings
 
-    # Verificacion suplementaria (no la unica prueba, ver seccion 1 del
-    # informe corrective): el SemanticEffect citado en el warning es
-    # ademas independientemente reconstruible via el mismo analizador
-    # puro que detect_calculation ya consulto en memoria durante ESTA
-    # misma ejecucion.
+    # Verificacion suplementaria: el SemanticEffect citado en
+    # evidence_ids es ademas independientemente reconstruible via el
+    # mismo analizador puro que detect_calculation ya consulto en
+    # memoria durante ESTA misma ejecucion.
     from altamira_extractor.contracts.semantic_effects import SemanticEffectKind
     from altamira_extractor.pipeline.semantic_effects_service import (
         compute_semantic_effects_artifact,
@@ -357,13 +362,29 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     assert len(incondicional_effects) == 1, incondicional_effects
     assert incondicional_effects[0].kind == SemanticEffectKind.COMPUTE_VALUE
     assert incondicional_effects[0].target_data_items == ["WS-COMISION-INCONDICIONAL"]
-    assert incondicional_effects[0].effect_id in incondicional_warnings[0]
+    assert incondicional_effects[0].effect_id in incondicional_compute.evidence_ids
+
+    # --- Caso 15B3-C2-B2: calculo incondicional via verbo aritmetico
+    # (ADD...TO, no solo COMPUTE) -- tambien productivo. ------------------
+    incondicional_add_candidates = _by_paragraph("CHECK-CALCULO-INCONDICIONAL-ADD-PARA")
+    assert len(incondicional_add_candidates) == 1, artifact.candidates
+    incondicional_add = incondicional_add_candidates[0]
+    assert incondicional_add.rule_family == UnifiedRuleFamily.CALCULATION
+    assert incondicional_add.candidate_source == CandidateSource.V2
+    assert incondicional_add.decision_id is None
+    assert incondicional_add.condition is None
+    assert incondicional_add.outcome_code is None
+    assert incondicional_add.evidence_ids != []
+    assert not any(
+        "WS-COMISION-INCONDICIONAL-ADD" in w and "CHECK-CALCULO-INCONDICIONAL-ADD-PARA" in w
+        for w in artifact.warnings
+    ), artifact.warnings
 
     # --- Caso 4: candidatos ampliados con evidence/provenance -------------
     enhanced_candidates = [
         c for c in artifact.candidates if c.candidate_source == CandidateSource.V2
     ]
-    assert len(enhanced_candidates) == 6, artifact.candidates
+    assert len(enhanced_candidates) == 8, artifact.candidates
     for enhanced_candidate in enhanced_candidates:
         assert enhanced_candidate.evidence_ids != []
         assert enhanced_candidate.source_file == "01-codigo/cobol/ENHRULE1.cbl"
@@ -390,12 +411,25 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
 
     # --- Caso 5/6/7: ContextPackage/RuleDraft/guardrail -- tanto para el
     # candidato RETURN_CODE ampliado (propagacion V2) como para el
-    # candidato STATE_TRANSITION (Fase 15B3-C1) y CALCULATION (Fase
-    # 15B3-C2-B1, COMPUTE y verbo aritmetico), no solo para V1 -----------
+    # candidato STATE_TRANSITION (Fase 15B3-C1), CALCULATION condicionado
+    # (Fase 15B3-C2-B1, COMPUTE y verbo aritmetico) y CALCULATION
+    # incondicional (Fase 15B3-C2-B2, COMPUTE y verbo aritmetico) -- no
+    # solo para V1. Para los incondicionales, ademas se verifica
+    # explicitamente que ContextPackage.decision es None (sin Decision
+    # fabricada) y que el RuleDraft/Guardrail son validos igual. ----------
     _assert_full_downstream(run_dir, propagated.candidate_id)
     _assert_full_downstream(run_dir, transicion.candidate_id)
     _assert_full_downstream(run_dir, compute_calc.candidate_id)
     _assert_full_downstream(run_dir, multiply_calc.candidate_id)
+    _assert_full_downstream(run_dir, incondicional_compute.candidate_id)
+    _assert_full_downstream(run_dir, incondicional_add.candidate_id)
+
+    for unconditional_id in (incondicional_compute.candidate_id, incondicional_add.candidate_id):
+        artifact_filename = _artifact_filename(unconditional_id)
+        context_path = run_dir / "artifacts" / "07-context" / artifact_filename
+        package = ContextPackage.model_validate_json(context_path.read_text(encoding="utf-8"))
+        assert package.decision is None
+        assert package.candidate.decision_id is None
 
     rules_dir = run_dir / "artifacts" / "10-rules"
     assert len(list(rules_dir.glob("*.md"))) >= 1
@@ -428,7 +462,7 @@ def test_enhanced_pipeline_repeated_run_produces_same_candidate_ids_and_order(
     ids_2 = [c.candidate_id for c in artifact_2.candidates]
     assert ids_1 == ids_2
     assert ids_1 == sorted(ids_1)
-    assert len(ids_1) >= 6
+    assert len(ids_1) >= 8
 
 
 def test_enhanced_flag_disabled_produces_only_v1_candidate(tmp_path: Path) -> None:

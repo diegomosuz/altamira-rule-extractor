@@ -10,7 +10,22 @@ Paragraph.
 
 Nada aqui reejecuta Q0/CandidateDetector ni `invariants.cypher`: este
 modulo es de solo lectura sobre un grafo ya cargado y validado.
-"""
+
+CALCULATION incondicional (Fase 15B3-C2-B2, `candidate.rule_family ==
+CALCULATION and candidate.decision_id is None`): Q1/Q2/Q3a/Q3b/Q5b/Q6/Q7
+reciben UNICAMENTE `paragraph_id` (nunca `decision_id`) y por lo tanto
+son validos sin cambios para un calculo sin Decision envolvente -- el
+Paragraph existe en el grafo independientemente de que una sentencia
+puntual tenga o no una Decision que la envuelva, y el metamodelo
+deliberadamente no tiene un nodo Statement individual (CLAUDE.md) del
+que depender. Solo Q4 (`_build_decision`) y la porcion return_codes de
+Q5a (`_build_return_codes`) exigen un `decision_id` real: ambos se
+OMITEN (nunca se ejecutan con un valor fabricado) para este caso,
+produciendo `decision=None`/`effects.return_codes=[]` -- un
+`RETURN_CODE effect` nunca tiene sentido sin la Decision que lo
+origina. `effects.table_effects` (Q5b) se conserva sin cambios: esta
+scopeado por `paragraph_id`, igual que para cualquier otro candidato de
+ese Paragraph."""
 
 from __future__ import annotations
 
@@ -25,6 +40,7 @@ from pydantic import ValidationError
 
 from ..config import Settings
 from ..contracts.candidate import RuleCandidate
+from ..contracts.candidate_promotion_assessment import UnifiedRuleFamily
 from ..contracts.context_package import (
     ApplicableParameterRow,
     BatchContext,
@@ -114,6 +130,16 @@ def build_context_packages(
     ]
 
 
+def _is_unconditional_calculation(candidate: RuleCandidate) -> bool:
+    """Unico predicado que decide el atajo de Fase 15B3-C2-B2: un
+    CALCULATION sin Decision envolvente (`decision_id is None`, campo ya
+    opcional por diseno -- ver `contracts/candidate.py`). Nunca inventa
+    un `decision_id` sintetico; para cualquier otra familia
+    `decision_id` sigue siendo obligatorio por el propio contrato de
+    `RuleCandidate`."""
+    return candidate.rule_family == UnifiedRuleFamily.CALCULATION and candidate.decision_id is None
+
+
 def _build_one_context_package(
     tx: neo4j.ManagedTransaction,
     candidate: RuleCandidate,
@@ -122,6 +148,7 @@ def _build_one_context_package(
     settings: Settings,
 ) -> ContextPackage:
     evidence_entries: list[EvidenceEntry] = []
+    unconditional_calculation = _is_unconditional_calculation(candidate)
 
     scope = _build_scope(tx, candidate, queries.q1)
     code_slice, code_slice_evidence = _build_code_slice(tx, candidate, queries.q2, settings)
@@ -132,10 +159,19 @@ def _build_one_context_package(
     )
     evidence_entries.extend(d3_evidence)
 
-    decision, d4_evidence = _build_decision(tx, candidate, queries.q4)
+    decision: ContextPackageDecision | None
+    d4_evidence: list[EvidenceEntry]
+    if unconditional_calculation:
+        # Q4 exige un decision_id real (MATCH ... WHERE dec.id =
+        # $decision_id) -- nunca se invoca con un valor fabricado.
+        decision, d4_evidence = None, []
+    else:
+        decision, d4_evidence = _build_decision(tx, candidate, queries.q4)
     evidence_entries.extend(d4_evidence)
 
-    effects, d5_evidence = _build_effects(tx, candidate, queries.q5a, queries.q5b)
+    effects, d5_evidence = _build_effects(
+        tx, candidate, queries.q5a, queries.q5b, skip_return_codes=unconditional_calculation
+    )
     evidence_entries.extend(d5_evidence)
 
     batch_context = _build_batch_context(tx, candidate, queries.q6)
@@ -154,7 +190,11 @@ def _build_one_context_package(
         D1=CompletenessStatus.COMPLETE,
         D2=CompletenessStatus.COMPLETE,
         D3=d3_status,
-        D4=CompletenessStatus.COMPLETE,
+        D4=(
+            CompletenessStatus.NOT_AVAILABLE
+            if unconditional_calculation
+            else CompletenessStatus.COMPLETE
+        ),
         D5=d5_status,
         D6=CompletenessStatus(batch_context.status.value),
         D7=(
@@ -621,10 +661,20 @@ def _build_effects(
     candidate: RuleCandidate,
     q5a: LoadedContextQuery,
     q5b: LoadedContextQuery,
+    *,
+    skip_return_codes: bool = False,
 ) -> tuple[Effects, list[EvidenceEntry]]:
     evidence: list[EvidenceEntry] = []
 
-    return_codes, return_code_evidence = _build_return_codes(tx, candidate, q5a)
+    if skip_return_codes:
+        # Q5a exige un decision_id real (MATCH ... WHERE dec.id =
+        # $decision_id) -- nunca se invoca con un valor fabricado; un
+        # CALCULATION incondicional tampoco tiene un return_code effect
+        # que afirmar (nace de la Decision que le falta).
+        return_codes: list[ReturnCodeEffect] = []
+        return_code_evidence: list[EvidenceEntry] = []
+    else:
+        return_codes, return_code_evidence = _build_return_codes(tx, candidate, q5a)
     evidence.extend(return_code_evidence)
 
     table_effects, table_effect_evidence = _build_table_effects(tx, candidate, q5b)

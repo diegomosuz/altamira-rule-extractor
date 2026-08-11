@@ -40,13 +40,13 @@
   </thead>
   <tbody>
     {% for candidate in candidates %}
-    <tr data-search-text="{{ candidate.source_file | program_name }} {{ candidate.paragraph_name }} {{ candidate.outcome_code or '' }} {{ candidate.condition }} {{ candidate.candidate_id }}">
+    <tr data-search-text="{{ candidate.source_file | program_name }} {{ candidate.paragraph_name }} {{ candidate.outcome_code or '' }} {{ candidate.condition or '' }} {{ candidate.candidate_id }}">
       <td>
         {{ candidate.source_file | program_name }}
         <div class="small text-muted cell-mono">{{ candidate.candidate_id }}</div>
       </td>
       <td>{{ candidate.paragraph_name }}</td>
-      <td><code>{{ candidate.condition }}</code></td>
+      <td>{% if candidate.condition %}<code>{{ candidate.condition }}</code>{% else %}Sin condicion (calculo incondicional){% endif %}</td>
       <td>{{ candidate.outcome_code or "No informado" }}</td>
       <td>{{ candidate.rule_type or "No informado" }}</td>
       <td>{{ status_badge(candidate.status.value) }}</td>

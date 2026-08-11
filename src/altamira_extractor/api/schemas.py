@@ -125,13 +125,18 @@ class CandidateSummary(BaseModel):
     del detector (`detector_id`/`detector_version`/`detector_score`) y de
     ubicacion fisica (`line_start`/`source_file`/`source_package_hash`,
     disponibles via `context`/`rule` si hicieran falta). Ningun campo
-    aqui es inventado -- todos existen en `RuleCandidate`."""
+    aqui es inventado -- todos existen en `RuleCandidate`.
+
+    `decision_id`/`condition` son `str | None` (Fase 15B3-C2-B2): None
+    unicamente para un CALCULATION incondicional (calculo aritmetico sin
+    Decision envolvente), reflejando el mismo campo opcional de
+    `RuleCandidate`."""
 
     candidate_id: str
     paragraph_id: str
     paragraph_name: str
-    decision_id: str
-    condition: str
+    decision_id: str | None
+    condition: str | None
     outcome_code: str | None
     rule_type: str | None
     status: CandidateStatus

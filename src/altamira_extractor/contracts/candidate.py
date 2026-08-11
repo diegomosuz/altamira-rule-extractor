@@ -49,7 +49,19 @@ decisiones con el, y solo anticipaba niveles de soporte hipoteticos
 futuros -- exactamente el patron que CLAUDE.md pide evitar ("No
 implementar un half-finished... No disenar para requisitos futuros
 hipoteticos"). No se reemplazo por otro enum ni por una jerarquia
-nueva."""
+nueva.
+
+`decision_id`/`condition` (Fase 15B3-C2-B2): `str | None`, no
+opcionales para todas las familias por igual. Todo `rule_family`
+salvo `CALCULATION` sigue exigiendo ambos no-None (RETURN_CODE/
+LEVEL_88_RETURN_CODE/STATE_TRANSITION nacen anclados a una `Decision`
+real, sin excepcion). `CALCULATION` es la UNICA familia que puede
+representar un calculo aritmetico (COMPUTE/ADD/SUBTRACT/MULTIPLY/
+DIVIDE) SIN `Decision` envolvente -- nunca con un `decision_id`/
+`condition` sintetico (`"<statement-id>"`, `"TRUE"`, `"UNCONDITIONAL"`
+estan prohibidos por diseno): "ser incondicional" se deriva
+EXCLUSIVAMENTE de `decision_id is None`/`condition is None`, nunca de
+un valor textual fabricado. Ver `_check_decision_anchor_by_family`."""
 
 from __future__ import annotations
 
@@ -67,12 +79,12 @@ class RuleCandidate(AltamiraBaseModel):
     candidate_id: str = Field(min_length=1)
     paragraph_id: str = Field(min_length=1)
     paragraph_name: str = Field(min_length=1)
-    decision_id: str = Field(min_length=1)
+    decision_id: str | None = Field(default=None, min_length=1)
     detector_id: str = Field(min_length=1)
     detector_version: str = Field(min_length=1)
     detector_score: float = Field(ge=0, le=1)
     status: CandidateStatus = CandidateStatus.DETECTED_CANDIDATE
-    condition: str = Field(min_length=1)
+    condition: str | None = Field(default=None, min_length=1)
     outcome_code: str | None = None
     rule_type: str | None = None
     line_start: int = Field(ge=1)
@@ -88,6 +100,32 @@ class RuleCandidate(AltamiraBaseModel):
             raise ValueError(
                 f"RuleCandidate {self.candidate_id!r}: evidence_ids debe estar ordenado y sin "
                 "duplicados"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_decision_anchor_by_family(self) -> RuleCandidate:
+        """Fase 15B3-C2-B2: unico punto que decide cuando `decision_id`/
+        `condition` pueden faltar. Toda familia salvo CALCULATION sigue
+        exigiendo ambos (comportamiento V1/STATE_TRANSITION/LEVEL_88
+        sin cambios, verificado bit a bit por los tests historicos).
+        CALCULATION admite dos formas validas -- condicionada (ambos
+        no-None, sin cambios desde 15B3-C2-B1) o incondicional (ambos
+        None) -- pero nunca un estado mixto (uno presente y el otro no),
+        que indicaria una construccion parcial/inconsistente."""
+        if self.rule_family != UnifiedRuleFamily.CALCULATION:
+            if self.decision_id is None or self.condition is None:
+                raise ValueError(
+                    f"RuleCandidate {self.candidate_id!r}: rule_family "
+                    f"{self.rule_family.value} exige decision_id y condition no nulos "
+                    "(unicamente CALCULATION puede representar un calculo aritmetico "
+                    "incondicional, sin Decision envolvente)"
+                )
+        elif (self.decision_id is None) != (self.condition is None):
+            raise ValueError(
+                f"RuleCandidate {self.candidate_id!r}: decision_id y condition deben ser "
+                "ambos None (calculo incondicional) o ambos no-None (calculo "
+                "condicionado) -- nunca uno solo"
             )
         return self
 

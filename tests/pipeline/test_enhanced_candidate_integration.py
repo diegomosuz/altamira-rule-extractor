@@ -1399,7 +1399,9 @@ def test_ambiguous_named_target_never_becomes_state_transition() -> None:
 
 # ---------------------------------------------------------------------------
 # Fase 15B3-C2-B1: CALCULATION (COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE
-# condicionados) -- productizacion hasta RuleCandidate.
+# condicionados) -- productizacion hasta RuleCandidate. Fase 15B3-C2-B2:
+# extiende el mismo camino al caso incondicional (sin Decision
+# envolvente), tambien productivo desde esta fase.
 # ---------------------------------------------------------------------------
 
 
@@ -1481,13 +1483,14 @@ def test_conditioned_arithmetic_verb_also_produces_a_calculation_rule_candidate(
     assert new_candidates[0].rule_family == UnifiedRuleFamily.CALCULATION
 
 
-def test_unconditional_calculation_never_produces_a_candidate_but_leaves_a_warning() -> None:
-    """Correccion pre-commit 15B3-C2-B1, seccion 1: sin Decision
-    envolvente, CERO candidatos en 06-candidates.json (sin cambios) --
-    pero SI un warning persistido en CandidateArtifact.warnings, citando
-    el target y el SemanticEffect real, para que una ejecucion NORMAL
-    (sin invocar nada manualmente despues del run) deje una senal de que
-    el calculo fue reconocido y no productivizado. No silent loss."""
+def test_unconditional_calculation_produces_a_calculation_rule_candidate_with_no_decision() -> (
+    None
+):
+    """Fase 15B3-C2-B2: sin Decision envolvente, el calculo SI se
+    productiviza -- un unico RuleCandidate(rule_family=CALCULATION,
+    decision_id=None, condition=None), sin ningun warning de descarte
+    (la senal "no productivizado" de 15B3-C2-B1 queda obsoleta: el
+    candidato ahora si llega a 06-candidates.json)."""
     compute_stmt = make_stmt(
         statement_id="P1::A::1::COMPUTE",
         kind=StatementKind.COMPUTE,
@@ -1509,12 +1512,275 @@ def test_unconditional_calculation_never_produces_a_candidate_but_leaves_a_warni
 
     new_candidates, warnings = _run_detection(program, [], tags={})
 
-    assert new_candidates == []
-    assert len(warnings) == 1, warnings
-    assert "WS-COMISION" in warnings[0]
-    assert "SemanticEffect" in warnings[0]
-    assert "COMPUTE_VALUE" in warnings[0]
-    assert "no Decision" in warnings[0] or "SIN Decision" in warnings[0]
+    assert warnings == []
+    assert len(new_candidates) == 1
+    candidate = new_candidates[0]
+    assert candidate.rule_family == UnifiedRuleFamily.CALCULATION
+    assert candidate.candidate_source == CandidateSource.V2
+    assert candidate.decision_id is None
+    assert candidate.condition is None
+    assert candidate.outcome_code is None
+    assert candidate.evidence_ids == ["effect::PROG1::A::P1::A::1::COMPUTE::COMPUTE_VALUE::0"]
+
+
+def test_unconditional_calculation_cross_program_never_collides() -> None:
+    """Correccion pre-commit 15B3-C2-B2, seccion 1 (test obligatorio):
+    DOS programas distintos (PROGRAM-A/PROGRAM-B) con paragraph_id local
+    ("A"), statement_id local ("P1::A::1::COMPUTE"), target y formula
+    TEXTUALMENTE identicos -- nunca deben colisionar en un unico
+    candidato ni compartir candidate_id. `program_id` (parametro
+    explicito de `functional_identity_key_for_unconditional_calculation`,
+    nunca una inferencia implicita) es el campo que lo garantiza."""
+
+    def _make_program_and_graph(program_name: str) -> tuple[CanonicalProgram, SemanticGraph]:
+        compute_stmt = make_stmt(
+            statement_id="P1::A::1::COMPUTE",
+            kind=StatementKind.COMPUTE,
+            target_data_items=["WS-COMISION"],
+            variables_written=["WS-COMISION"],
+            variables_read=["WS-MONTO", "WS-TASA"],
+            expression="WS-MONTO * WS-TASA",
+        )
+        paragraph = CanonicalParagraph(
+            name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+            statements=[compute_stmt],
+            variables_read=["WS-MONTO", "WS-TASA"], variables_written=["WS-COMISION"],
+        )
+        program = _program(
+            program_name=program_name,
+            data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+            paragraphs=[paragraph],
+        )
+        graph = _build_graph_with_source_file(program=program, decisions=[], data_item_tags={})
+        return program, graph
+
+    program_a, graph_a = _make_program_and_graph("PROGRAM-A")
+    program_b, graph_b = _make_program_and_graph("PROGRAM-B")
+    merged_graph = SemanticGraph(
+        source_package_hash=HASH,
+        nodes=sorted([*graph_a.nodes, *graph_b.nodes], key=lambda n: n.id),
+        relationships=sorted(
+            [*graph_a.relationships, *graph_b.relationships],
+            key=lambda r: (r.type.value, r.from_id, r.to_id),
+        ),
+    )
+
+    new_candidates, warnings = detect_enhanced_candidates(
+        canonical_programs=[program_a, program_b],
+        semantic_graph=merged_graph,
+        v1_candidates=_empty_v1_candidates(),
+        run_id=_RUN_ID,
+        source_package_hash=HASH,
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2, new_candidates
+    candidate_ids = {candidate.candidate_id for candidate in new_candidates}
+    assert len(candidate_ids) == 2, (
+        "dos programas distintos con la misma forma local (paragraph/statement/target/"
+        "formula) nunca deben colisionar en un unico candidato"
+    )
+    for candidate in new_candidates:
+        assert candidate.rule_family == UnifiedRuleFamily.CALCULATION
+        assert candidate.decision_id is None
+        assert candidate.condition is None
+
+
+def test_unconditional_calculation_identity_independent_of_evidence_ids_order() -> None:
+    """Correccion pre-commit 15B3-C2-B2, seccion 2: `source_statement_id`
+    se obtiene DIRECTAMENTE de `V2ShadowCandidate.anchor_statement_id`
+    (`CanonicalStatement.statement_id` real, ver `v2_detectors.
+    detect_calculation`) -- nunca parseado de `evidence_ids`/
+    `effect_id`. Prueba la consecuencia directa: la identidad
+    (`_ConvertedCandidate.key`) de un CALCULATION incondicional NUNCA
+    depende del contenido u orden de `semantic_effect_ids`/
+    `evidence_ids` -- construye dos V2ShadowCandidate identicos salvo
+    por `semantic_effect_ids` y verifica que ambos producen el MISMO
+    `key` (mientras que `evidence_ids` en el `_ConvertedCandidate`
+    resultante SI difiere, confirmando que evidence y key son
+    independientes, no que el test este comparando dos copias
+    identicas)."""
+    from altamira_extractor.pipeline.enhanced_candidate_integration import (
+        _convert_unconditional_calculation,
+    )
+    from altamira_extractor.pipeline.semantic_effects_analyzer import analyze_semantic_effects
+    from altamira_extractor.pipeline.semantic_propagation_analyzer import (
+        analyze_semantic_propagation,
+    )
+    from altamira_extractor.pipeline.v2_detector_context import build_v2_detector_context
+    from altamira_extractor.pipeline.v2_detectors import detect_calculation
+
+    compute_stmt = make_stmt(
+        statement_id="P1::A::1::COMPUTE",
+        kind=StatementKind.COMPUTE,
+        target_data_items=["WS-COMISION"],
+        variables_written=["WS-COMISION"],
+        variables_read=["WS-MONTO", "WS-TASA"],
+        expression="WS-MONTO * WS-TASA",
+    )
+    paragraph = CanonicalParagraph(
+        name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+        statements=[compute_stmt],
+        variables_read=["WS-MONTO", "WS-TASA"], variables_written=["WS-COMISION"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+        paragraphs=[paragraph],
+    )
+    graph = _build_graph_with_source_file(program=program, decisions=[], data_item_tags={})
+    effects = analyze_semantic_effects(
+        canonical_programs=[program], run_id=_RUN_ID, source_package_hash=HASH,
+        source_artifact_hashes={"artifacts/02-canonical": HASH},
+    )
+    propagation = analyze_semantic_propagation(
+        canonical_programs=[program], semantic_effects=effects, run_id=_RUN_ID,
+        source_package_hash=HASH, source_artifact_hashes={"artifacts/02-canonical": HASH},
+    )
+    ctx = build_v2_detector_context(
+        canonical_programs=[program], semantic_graph=graph, v1_candidates=_empty_v1_candidates(),
+        semantic_effects=effects, semantic_propagation=propagation,
+    )
+
+    candidates = detect_calculation(ctx)
+    assert len(candidates) == 1
+    base_candidate = candidates[0]
+    assert base_candidate.decision_id is None
+
+    # Copia deliberadamente con evidencia DISTINTA (nunca un reordenamiento
+    # trivial del mismo contenido: un id sintetico completamente ajeno) --
+    # si la identidad dependiera de evidence_ids, esto produciria un `key`
+    # distinto.
+    variant_candidate = base_candidate.model_copy(
+        update={"semantic_effect_ids": ["effect::zzz-unrelated-fake-id"]}
+    )
+
+    base_converted, base_reason = _convert_unconditional_calculation(base_candidate, ctx)
+    variant_converted, variant_reason = _convert_unconditional_calculation(variant_candidate, ctx)
+
+    assert base_reason is None
+    assert variant_reason is None
+    assert base_converted is not None
+    assert variant_converted is not None
+    assert base_converted.key == variant_converted.key, (
+        "la identidad de un CALCULATION incondicional nunca debe depender de "
+        "semantic_effect_ids/evidence_ids"
+    )
+    assert base_converted.evidence_ids != variant_converted.evidence_ids
+
+
+def test_unconditional_calculation_two_targets_produce_two_distinct_candidates() -> None:
+    """Analogo incondicional de
+    `test_single_decision_two_calculation_targets_produce_two_distinct_candidates_never_merged`:
+    `functional_identity_key_for_unconditional_calculation` incluye el
+    target explicitamente, asi que un COMPUTE con dos destinos nunca
+    colisiona en un unico candidato."""
+    compute_stmt = make_stmt(
+        statement_id="P1::A::1::COMPUTE",
+        kind=StatementKind.COMPUTE,
+        target_data_items=["WS-A-TARGET", "WS-B-TARGET"],
+        variables_written=["WS-A-TARGET", "WS-B-TARGET"],
+        variables_read=["WS-X", "WS-Y"],
+        expression="WS-X + WS-Y",
+    )
+    paragraph = CanonicalParagraph(
+        name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+        statements=[compute_stmt],
+        variables_read=["WS-X", "WS-Y"], variables_written=["WS-A-TARGET", "WS-B-TARGET"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[
+            _data_item("WS-A-TARGET"), _data_item("WS-B-TARGET"),
+            _data_item("WS-X"), _data_item("WS-Y"),
+        ],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(program, [], tags={})
+
+    assert warnings == []
+    assert len(new_candidates) == 2
+    candidate_ids = {candidate.candidate_id for candidate in new_candidates}
+    assert len(candidate_ids) == 2
+    for candidate in new_candidates:
+        assert candidate.rule_family == UnifiedRuleFamily.CALCULATION
+        assert candidate.decision_id is None
+        assert candidate.condition is None
+
+
+def test_unconditional_calculation_identity_key_properties() -> None:
+    """Propiedades (A)-(E) exigidas por la correccion pre-commit
+    15B3-C2-B2 (seccion 1) para
+    `functional_identity_key_for_unconditional_calculation`."""
+    from altamira_extractor.pipeline.enhanced_candidate_integration import (
+        functional_identity_key_for_unconditional_calculation as key_fn,
+    )
+
+    # (A) mismo program+statement+target+formula -> mismo id.
+    key_a1 = key_fn(
+        program_id="program::AR::op::PROG1::1::abc123",
+        paragraph_id="program::AR::op::PROG1::1::abc123::paragraph::A",
+        source_statement_id="P::A::1::COMPUTE",
+        target="WS-COMISION", formula="WS-MONTO * WS-TASA",
+    )
+    key_a2 = key_fn(
+        program_id="program::AR::op::PROG1::1::abc123",
+        paragraph_id="program::AR::op::PROG1::1::abc123::paragraph::A",
+        source_statement_id="P::A::1::COMPUTE",
+        target="WS-COMISION", formula="WS-MONTO * WS-TASA",
+    )
+    assert key_a1 == key_a2
+
+    # (B) statements distintos, misma formula -> ids distintos.
+    key_b = key_fn(
+        program_id="program::AR::op::PROG1::1::abc123",
+        paragraph_id="program::AR::op::PROG1::1::abc123::paragraph::A",
+        source_statement_id="P::A::2::COMPUTE",
+        target="WS-COMISION", formula="WS-MONTO * WS-TASA",
+    )
+    assert key_a1 != key_b
+
+    # (C) multi-target -> id distinto por target.
+    key_c = key_fn(
+        program_id="program::AR::op::PROG1::1::abc123",
+        paragraph_id="program::AR::op::PROG1::1::abc123::paragraph::A",
+        source_statement_id="P::A::1::COMPUTE",
+        target="WS-OTRO-TARGET", formula="WS-MONTO * WS-TASA",
+    )
+    assert key_a1 != key_c
+
+    # (D) dos corridas identicas -> mismo id (ya cubierto por (A), reafirmado
+    # explicitamente aqui como propiedad independiente del enunciado).
+    assert key_fn(
+        program_id="program::AR::op::PROG1::1::abc123",
+        paragraph_id="program::AR::op::PROG1::1::abc123::paragraph::A",
+        source_statement_id="P::A::1::COMPUTE",
+        target="WS-COMISION", formula="WS-MONTO * WS-TASA",
+    ) == key_a1
+
+    # (E) correccion pre-commit 15B3-C2-B2, seccion 1: dos PROGRAMAS
+    # distintos con paragraph_id/source_statement_id/target/formula
+    # LOCALMENTE identicos (mismo texto, ignorando el prefijo de
+    # programa) -> ids distintos. program_id es el campo que lo
+    # garantiza EXPLICITAMENTE, nunca una inferencia sobre el formato
+    # interno de paragraph_id.
+    key_program_a = key_fn(
+        program_id="program::AR::op::PROGRAM-A::1::aaa111",
+        paragraph_id="paragraph::P-CALC",
+        source_statement_id="stmt::same-local-shape",
+        target="WS-TOTAL", formula="WS-X + WS-Y",
+    )
+    key_program_b = key_fn(
+        program_id="program::AR::op::PROGRAM-B::1::bbb222",
+        paragraph_id="paragraph::P-CALC",
+        source_statement_id="stmt::same-local-shape",
+        target="WS-TOTAL", formula="WS-X + WS-Y",
+    )
+    assert key_program_a != key_program_b, (
+        "dos programas distintos con la misma forma local (paragraph_id/"
+        "source_statement_id/target/formula) nunca deben colisionar"
+    )
 
 
 def test_single_decision_two_calculation_targets_produce_two_distinct_candidates_never_merged() -> (

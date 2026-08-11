@@ -543,16 +543,15 @@ def test_conditioned_multiply_arithmetic_verb_also_detects_calculation_candidate
 
 
 def test_unconditional_compute_produces_a_candidate_with_no_decision_anchor() -> None:
-    """Correccion pre-commit 15B3-C2-B1, seccion 1: un calculo SIN
-    decision envolvente SI produce un `V2ShadowCandidate` -- con
-    `decision_id=None` (campo ya opcional en este contrato, NUNCA
-    fabricado con un valor sintetico) y `diagnostic_codes=
-    ['V2_CALCULATION_NO_DECISION_ANCHOR']`. Este candidato nunca llega a
-    `06-candidates.json` (enhanced_candidate_integration exige
-    decision_id no-None para productizar, sin cambios), pero ya no es
-    invisible: su `reason` (citando el SemanticEffect.effect_id real)
-    se convierte en warning persistido -- ver
-    test_enhanced_candidate_integration.py."""
+    """Un calculo SIN decision envolvente SI produce un
+    `V2ShadowCandidate` -- con `decision_id=None` (campo ya opcional en
+    este contrato, NUNCA fabricado con un valor sintetico) y
+    `diagnostic_codes=['V2_CALCULATION_NO_DECISION_ANCHOR']` (diagnostico
+    estructural, no una senal de "no soportado"). Este detector en si
+    mismo no decide productivizacion -- desde Fase 15B3-C2-B2,
+    `enhanced_candidate_integration.py` SI productiviza este candidato
+    (via `_convert_unconditional_calculation`, camino dedicado) hasta
+    `06-candidates.json` -- ver test_enhanced_candidate_integration.py."""
     compute_stmt = make_stmt(
         statement_id="P1::A::1::COMPUTE", kind=StatementKind.COMPUTE,
         target_data_items=["WS-COMISION"], variables_written=["WS-COMISION"],

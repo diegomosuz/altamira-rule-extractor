@@ -97,7 +97,27 @@ E. El orden de entrada (orden de ejecucion de detectores, orden de
    candidatos V1) nunca afecta `candidate_id`, el orden final, la
    evidencia unida ni los warnings: toda estructura intermedia se
    normaliza via `sorted()`/`set()` antes de construir el resultado
-   (ver `_merge_candidates`)."""
+   (ver `_merge_candidates`).
+
+## CALCULATION incondicional (Fase 15B3-C2-B2)
+
+`V2RuleType.CALCULATION_RULE` con `decision_id=None` (calculo aritmetico
+SIN `IF`/`EVALUATE` envolvente, ver `v2_detectors.detect_calculation`)
+se productiviza via `_convert_unconditional_calculation`, un camino
+DELIBERADAMENTE separado de `_convert_v2_candidate`: nunca consulta un
+nodo Decision (no existe), nunca fabrica un `decision_id`/`condition`
+sintetico -- el `RuleCandidate` resultante tiene ambos en `None`
+("ser incondicional" se deriva EXCLUSIVAMENTE de esa ausencia, nunca de
+un texto como `"TRUE"`/`"UNCONDITIONAL"`). Su identidad funcional usa
+`functional_identity_key_for_unconditional_calculation` (NO
+`functional_identity_key`, que exige `decision_id`/`condition` no
+vacios): `program_id`/`paragraph_id`/`source_statement_id`/`target`/
+`formula`, sin `rule_family` variable (siempre CALCULATION aqui).
+`program_id` se recibe EXPLICITO (correccion pre-commit 15B3-C2-B2,
+seccion 1) -- garantiza unicidad cross-program de forma auditable,
+nunca implicita en el formato de `paragraph_id`. Nunca se fusiona con
+un candidato V1 (V1 jamas produce `rule_family=CALCULATION`, ver
+`candidate_source_adapters._V1_RULE_FAMILY`)."""
 
 from __future__ import annotations
 
@@ -179,7 +199,56 @@ def functional_identity_key(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
 
+def functional_identity_key_for_unconditional_calculation(
+    *, program_id: str, paragraph_id: str, source_statement_id: str, target: str, formula: str
+) -> str:
+    """Identidad funcional de un CALCULATION incondicional (Fase
+    15B3-C2-B2) -- NUNCA una extension de `functional_identity_key`
+    (esa firma permanece intacta para el camino condicionado, sin
+    `decision_id`/`condition` que aportar aqui, ambos None por diseno).
+
+    `program_id` se recibe EXPLICITO (correccion pre-commit 15B3-C2-B2:
+    antes se derivaba implicitamente de `paragraph_id` dentro de esta
+    funcion via `_program_id_from_paragraph_id` -- funcionalmente
+    equivalente, dado que `paragraph_id = {program_id}::paragraph::
+    {name}` ya lo embebe como prefijo, pero la garantia de unicidad
+    cross-program quedaba implicita en el FORMATO de un solo string en
+    vez de ser un campo propio, auditable y testeado de forma
+    independiente). `source_statement_id` reemplaza a `decision_id` como
+    ancla de identidad, tomado DIRECTAMENTE del campo real
+    `V2ShadowCandidate.anchor_statement_id` (a su vez
+    `CanonicalStatement.statement_id`) -- nunca derivado/parseado de un
+    `effect_id` ni de `evidence_ids`.
+
+    Propiedades probadas en `test_enhanced_candidate_integration.py`:
+    (A) mismo program+statement+target+formula -> mismo id (funcion
+    pura); (B) dos statements distintos con la misma formula -> ids
+    distintos; (C) sentencia multi-target -> un id por target; (D) dos
+    corridas identicas -> mismo id; (E) DOS PROGRAMAS distintos con
+    paragraph/statement/target/formula localmente identicos -> ids
+    distintos (`program_id` es el campo que lo garantiza explicitamente,
+    nunca una inferencia sobre el formato de `paragraph_id`)."""
+    canonical = "\x1f".join(
+        [
+            program_id,
+            paragraph_id,
+            source_statement_id,
+            target,
+            formula,
+            UnifiedRuleFamily.CALCULATION.value,
+        ]
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+
+
 def _v1_functional_key(candidate: RuleCandidate) -> str:
+    # V1 (Q0) es siempre RETURN_CODE: decision_id/condition nunca son
+    # None para estos candidatos (RuleCandidate._check_decision_anchor_
+    # by_family lo exige) -- CALCULATION incondicional (Fase 15B3-C2-B2,
+    # unica familia que admite ambos en None) nunca llega aqui, esta
+    # funcion solo se llama sobre v1_candidates.candidates (Q0).
+    assert candidate.decision_id is not None  # noqa: S101 - invariante del contrato V1
+    assert candidate.condition is not None  # noqa: S101 - invariante del contrato V1
     return functional_identity_key(
         paragraph_id=candidate.paragraph_id,
         decision_id=candidate.decision_id,
@@ -198,8 +267,11 @@ class _ConvertedCandidate:
     key: str
     paragraph_id: str
     paragraph_name: str
-    decision_id: str
-    condition: str
+    # str | None (Fase 15B3-C2-B2): None unicamente para CALCULATION
+    # incondicional (ver `_convert_unconditional_calculation`) -- para
+    # cualquier otra familia siguen siendo no-None, sin cambios.
+    decision_id: str | None
+    condition: str | None
     outcome_code: str | None
     rule_family: UnifiedRuleFamily
     detector_id: str
@@ -285,13 +357,7 @@ def _convert_v2_candidate(
         # statement.source_text -- ADD/SUBTRACT/MULTIPLY/DIVIDE, sin nodo
         # de expresion dedicado) se incluye para que la MISMA Decision +
         # MISMO target + MISMA formula si deduplique correctamente.
-        origin_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
-        formula_text = ""
-        if origin_statement is not None:
-            formula_text = (
-                origin_statement.expression or origin_statement.source_text or ""
-            ).strip()
-        target_key = v2_candidate.target_qualified_name or v2_candidate.target_variable
+        target_key, formula_text = _calculation_target_and_formula(v2_candidate, ctx)
         effect = f"target={target_key}\x1fformula={formula_text}"
     else:
         effect = v2_candidate.resolved_literal or ""
@@ -311,6 +377,95 @@ def _convert_v2_candidate(
             condition=condition,
             outcome_code=v2_candidate.resolved_literal,
             rule_family=rule_family,
+            detector_id=v2_candidate.detector_id,
+            detector_version=v2_candidate.detector_version,
+            detector_score=v2_candidate.detector_score,
+            line_start=line_start,
+            source_file=source_file,
+            evidence_ids=evidence_ids,
+            source_v2_candidate_id=v2_candidate.candidate_id,
+        ),
+        None,
+    )
+
+
+def _calculation_target_and_formula(
+    v2_candidate: V2ShadowCandidate, ctx: V2DetectorContext
+) -> tuple[str, str]:
+    """Target/formula reales de un CALCULATION (compartido entre el
+    camino condicionado y el incondicional -- unica fuente para no
+    duplicar la logica de fallback `expression`/`source_text`, ver
+    docstring de `_convert_v2_candidate`)."""
+    origin_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
+    formula_text = ""
+    if origin_statement is not None:
+        formula_text = (origin_statement.expression or origin_statement.source_text or "").strip()
+    target_key = v2_candidate.target_qualified_name or v2_candidate.target_variable
+    return target_key, formula_text
+
+
+def _convert_unconditional_calculation(
+    v2_candidate: V2ShadowCandidate,
+    ctx: V2DetectorContext,
+) -> tuple[_ConvertedCandidate | None, str | None]:
+    """Analogo a `_convert_v2_candidate`, pero para un CALCULATION_RULE
+    SIN Decision envolvente (Fase 15B3-C2-B2, `decision_id=None`).
+    DELIBERADAMENTE separado en vez de ramificar dentro de
+    `_convert_v2_candidate`: nunca consulta `ctx.decision_node_by_id`
+    (no hay Decision que buscar), nunca produce una `condition` (queda
+    `None`) -- la unica evidencia estructural que necesita es el nodo
+    Paragraph real (line_start/source_file, identico al camino
+    condicionado) y la formula/target ya demostrados por el propio
+    `V2ShadowCandidate` (SemanticEffect COMPUTE_VALUE real, construido
+    por `v2_detectors.detect_calculation`). Nunca fabrica un
+    `decision_id`/`condition` sintetico: ambos permanecen `None` en el
+    `_ConvertedCandidate` resultante."""
+    assert v2_candidate.decision_id is None  # noqa: S101 - invariante del llamador
+    assert v2_candidate.rule_type == V2RuleType.CALCULATION_RULE  # noqa: S101 - idem
+
+    paragraph_node = ctx.paragraph_node_by_key.get((v2_candidate.program, v2_candidate.paragraph))
+    if paragraph_node is None:
+        return None, (
+            f"candidato V2 {v2_candidate.candidate_id!r} descartado: no se encontro el nodo "
+            "Paragraph correspondiente en el grafo"
+        )
+
+    line_start = paragraph_node.properties.get("line_start")
+    source_file = paragraph_node.properties.get("source_file")
+    if not isinstance(line_start, int) or not isinstance(source_file, str) or not source_file:
+        return None, (
+            f"candidato V2 {v2_candidate.candidate_id!r} descartado: el nodo Paragraph "
+            f"{paragraph_node.id!r} no expone line_start/source_file validos"
+        )
+
+    target_key, formula_text = _calculation_target_and_formula(v2_candidate, ctx)
+    # source_statement_id: tomado DIRECTAMENTE del campo real
+    # V2ShadowCandidate.anchor_statement_id (CanonicalStatement.
+    # statement_id via detect_calculation) -- nunca parseado de un
+    # effect_id ni de evidence_ids (ver correccion pre-commit
+    # 15B3-C2-B2, seccion 2). evidence_ids se construye DESPUES,
+    # independientemente de `key`: reordenarlo nunca afecta la
+    # identidad (ver test_unconditional_calculation_identity_
+    # independent_of_evidence_ids_order).
+    key = functional_identity_key_for_unconditional_calculation(
+        program_id=_program_id_from_paragraph_id(paragraph_node.id),
+        paragraph_id=paragraph_node.id,
+        source_statement_id=v2_candidate.anchor_statement_id,
+        target=target_key,
+        formula=formula_text,
+    )
+    evidence_ids = tuple(
+        sorted({*v2_candidate.semantic_effect_ids, *v2_candidate.propagation_fact_ids})
+    )
+    return (
+        _ConvertedCandidate(
+            key=key,
+            paragraph_id=paragraph_node.id,
+            paragraph_name=v2_candidate.paragraph,
+            decision_id=None,
+            condition=None,
+            outcome_code=None,
+            rule_family=UnifiedRuleFamily.CALCULATION,
             detector_id=v2_candidate.detector_id,
             detector_version=v2_candidate.detector_version,
             detector_score=v2_candidate.detector_score,
@@ -509,21 +664,24 @@ def detect_enhanced_candidates(
             continue
         if v2_candidate.decision_id is None:
             if v2_candidate.rule_type == V2RuleType.CALCULATION_RULE:
-                # Correccion pre-commit 15B3-C2-B1, seccion 1: un calculo
-                # incondicional (sin Decision envolvente) NUNCA se
-                # productiviza, pero tampoco se descarta en silencio --
-                # detect_calculation ya construyo este candidato
-                # (decision_id=None, NUNCA fabricado) precisamente para
-                # que su `reason` (formula + SemanticEffect.effect_id
-                # real) quede aqui, en `discard_warnings`, que termina
-                # persistido en CandidateArtifact.warnings
-                # (06-candidates.json) por CADA ejecucion normal con
-                # enhanced_candidates_enabled=true -- ningun artifact ni
-                # comando nuevo.
-                discard_warnings.append(
-                    f"candidato V2 {v2_candidate.candidate_id!r} descartado: "
-                    f"{v2_candidate.reason}"
-                )
+                # Fase 15B3-C2-B2: un calculo incondicional (sin Decision
+                # envolvente) SI se productiviza -- camino DEDICADO
+                # (`_convert_unconditional_calculation`, nunca
+                # `_convert_v2_candidate`, que exige un nodo Decision
+                # real). Ya no hay warning de descarte para este caso: la
+                # senal "no silent loss" de 15B3-C2-B1 (correccion
+                # pre-commit) queda obsoleta porque el candidato ahora
+                # SI llega a 06-candidates.json.
+                item, discard_reason = _convert_unconditional_calculation(v2_candidate, ctx)
+                if item is None:
+                    if discard_reason is not None:
+                        discard_warnings.append(discard_reason)
+                    continue
+                converted.append(item)
+            # Cualquier otro rule_type con decision_id=None (p. ej.
+            # STATE_CHANGE_RULE fuera de alcance) permanece invisible,
+            # sin warning -- comportamiento anterior a esta fase, sin
+            # cambios.
             continue
         item, discard_reason = _convert_v2_candidate(v2_candidate, ctx)
         if item is None:

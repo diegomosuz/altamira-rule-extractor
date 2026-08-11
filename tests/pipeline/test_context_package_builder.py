@@ -15,6 +15,7 @@ import pytest
 
 from altamira_extractor.config import Settings
 from altamira_extractor.contracts.candidate import RuleCandidate
+from altamira_extractor.contracts.candidate_promotion_assessment import UnifiedRuleFamily
 from altamira_extractor.contracts.enums import (
     ApplicabilityStatus,
     AttributionScope,
@@ -201,6 +202,79 @@ def test_q4_and_q5a_receive_decision_id() -> None:
     assert q4_call[1] == {"paragraph_id": "para-1", "decision_id": "dec-1"}
     q5a_call = next(call for call in tx.calls if call[0] == "Q5A_MARKER")
     assert q5a_call[1] == {"paragraph_id": "para-1", "decision_id": "dec-1"}
+
+
+# --- Fase 15B3-C2-B2: CALCULATION incondicional (decision_id=None) ---
+
+
+def test_unconditional_calculation_skips_q4_and_q5a() -> None:
+    """Q4/Q5a NUNCA se invocan con un decision_id fabricado -- para un
+    CALCULATION incondicional simplemente no se ejecutan. Q1/Q2/Q3a/Q3b/
+    Q5b/Q6/Q7 (scopeadas unicamente por paragraph_id) siguen ejecutandose
+    sin cambios."""
+    candidate = _candidate(
+        rule_family=UnifiedRuleFamily.CALCULATION,
+        decision_id=None,
+        condition=None,
+        outcome_code=None,
+        evidence_ids=["effect::PROG1::A::stmt::COMPUTE_VALUE::0"],
+    )
+    rows = _happy_rows()
+    del rows["Q4_MARKER"]
+    del rows["Q5A_MARKER"]
+    tx = _FakeTx(rows)
+    packages = build_context_packages(tx, [candidate], queries=_query_set(), settings=_settings())
+
+    assert len(packages) == 1
+    package = packages[0]
+    assert package.decision is None
+    assert package.candidate.decision_id is None
+    assert package.effects.return_codes == []
+    assert package.completeness.D4 == CompletenessStatus.NOT_AVAILABLE
+
+    called_markers = {call[0] for call in tx.calls}
+    assert "Q4_MARKER" not in called_markers
+    assert "Q5A_MARKER" not in called_markers
+    assert "Q1_MARKER" in called_markers
+    assert "Q2_MARKER" in called_markers
+    assert "Q5B_MARKER" in called_markers
+
+
+def test_unconditional_calculation_still_gets_table_effects_via_q5b() -> None:
+    """Q5b (table_effects) esta scopeada solo por paragraph_id -- se
+    conserva sin cambios para un CALCULATION incondicional, igual que
+    para cualquier otro candidato de ese Paragraph."""
+    candidate = _candidate(
+        rule_family=UnifiedRuleFamily.CALCULATION,
+        decision_id=None,
+        condition=None,
+        outcome_code=None,
+        evidence_ids=["effect::PROG1::A::stmt::COMPUTE_VALUE::0"],
+    )
+    rows = _happy_rows()
+    del rows["Q4_MARKER"]
+    del rows["Q5A_MARKER"]
+    rows["Q5B_MARKER"] = [
+        {
+            "attributed": [
+                {
+                    "table_id": "table-1",
+                    "table_name": "CUENTAS",
+                    "operation": "UPDATES",
+                    "attribution_scope": "DIRECT",
+                    "source_file": "01-codigo/cobol/PROG.cbl",
+                    "line_start": 10,
+                    "line_end": 10,
+                }
+            ],
+            "program_context": [],
+        }
+    ]
+    tx = _FakeTx(rows)
+    packages = build_context_packages(tx, [candidate], queries=_query_set(), settings=_settings())
+
+    assert len(packages[0].effects.table_effects) == 1
+    assert packages[0].effects.table_effects[0].table == "CUENTAS"
 
 
 # --- Q1: cardinalidad ---

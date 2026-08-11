@@ -87,6 +87,55 @@ cases:
       enhanced_candidate_integration.py promueve a RuleCandidate(rule_family=CALCULATION) SIN
       gate de semantic_tag. Confirmado con el JAR real: target_data_items=[WS-COMISION],
       parent_statement_id apunta al IF, unsupported_constructs=[].'
+- case_id: gt-positive-calculation-unconditional-compute-multiplication
+  kind: POSITIVE
+  program: GTCALC002
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_calculation_unconditional_001.cbl
+    sha256: 55eb5b549e8acbc0480967fdc44ada58787639e47271b42d841c5b73c70fea86
+  description: 'COMPUTE WS-COMISION = WS-MONTO * WS-TASA, unico statement de MAIN-PARA,
+    SIN IF/EVALUATE envolvente: calculo incondicional (Fase 15B3-C2-B2) produce un
+    CALCULATION_RULE con decision_id=None/condition=None.'
+  expected_rules:
+  - expectation_id: gt-positive-calculation-unconditional-compute-multiplication::v2-calculation
+    rule_family: CALCULATION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'pipeline/v2_detectors.py::detect_calculation itera SemanticEffects
+      de kind=COMPUTE_VALUE (mismo normalizador que el caso condicionado) --
+      _nearest_enclosing_decision(...) devuelve None (COMPUTE es el unico statement de
+      MAIN-PARA, sin IF/EVALUATE ancestro), asi que decision_id=None en el
+      V2ShadowCandidate. Desde 15B3-C2-B2, enhanced_candidate_integration.py ya NO
+      descarta este caso: _convert_unconditional_calculation (camino dedicado, nunca
+      _convert_v2_candidate) lo productiviza a RuleCandidate(rule_family=CALCULATION,
+      decision_id=None, condition=None) usando unicamente el nodo Paragraph real
+      (line_start/source_file) mas la formula/target ya demostrados por el
+      SemanticEffect COMPUTE_VALUE -- nunca fabrica una Decision ni una condition
+      sintetica. Confirmado con el JAR real: target_data_items=[WS-COMISION],
+      parent_statement_id=None, unsupported_constructs=[].'
+- case_id: gt-positive-calculation-unconditional-multiply-giving
+  kind: POSITIVE
+  program: GTCALC003
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_calculation_unconditional_002.cbl
+    sha256: 3252482edeb1dd0c0ae61b20decb169703a139fa03a09e3cbf1cc6f5d0fa5f9c
+  description: 'MULTIPLY WS-MONTO BY WS-TASA GIVING WS-COMISION, unico statement de
+    MAIN-PARA, SIN IF/EVALUATE envolvente: verbo aritmetico (no solo COMPUTE) incondicional
+    tambien produce un CALCULATION_RULE productivo (Fase 15B3-C2-B2).'
+  expected_rules:
+  - expectation_id: gt-positive-calculation-unconditional-multiply-giving::v2-calculation
+    rule_family: CALCULATION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'MULTIPLY...GIVING normaliza via
+      semantic_effects_analyzer._normalize_calculation (mismo normalizador unico para
+      COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE) a un SemanticEffect COMPUTE_VALUE con
+      target_data_items=[WS-COMISION] y expression=None (sin nodo de expresion dedicado
+      para MULTIPLY, expression del SemanticEffect cae a source_text). Sin IF/EVALUATE
+      ancestro, _nearest_enclosing_decision(...) devuelve None -- igual que el caso
+      COMPUTE incondicional, _convert_unconditional_calculation productiviza el
+      candidato con decision_id=None/condition=None. Confirmado con el JAR real:
+      target_data_items=[WS-COMISION], parent_statement_id=None, unsupported_constructs=[].'
 - case_id: gt-positive-level88-return-code-nested-set
   kind: POSITIVE
   program: GTL88001
@@ -166,7 +215,7 @@ cases:
       ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
       heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 7
-  positive_case_count: 5
+  case_count: 9
+  positive_case_count: 7
   negative_case_count: 2
-  expected_rule_count: 5
+  expected_rule_count: 7

@@ -224,6 +224,29 @@ class _ReadinessComputation:
         self.summary = summary
 
 
+def _format_pending_case_ids(pending_case_ids: Sequence[str]) -> str:
+    """El catalogo de ground truth crece con el tiempo (Fase 15B3-C2-B2
+    agrego 2 casos mas) -- el listado de `case_id` pendientes debe caber
+    en `ReleaseReadinessCriterionResult.message` (max_length=500) sin
+    importar cuantos queden. Trunca el LISTADO (nunca un `case_id`
+    individual) y deja explicito cuantos mas quedan fuera, en vez de
+    fallar con un `ValidationError` opaco cuando el catalogo crece."""
+    ids = sorted(pending_case_ids)
+    truncated: list[str] = []
+    length = 0
+    budget = 160
+    for case_id in ids:
+        addition = len(case_id) + (2 if truncated else 0)
+        if length + addition > budget:
+            break
+        truncated.append(case_id)
+        length += addition
+    remaining = len(ids) - len(truncated)
+    if remaining <= 0:
+        return ", ".join(truncated)
+    return f"{', '.join(truncated)} (+{remaining} mas)"
+
+
 def _compute_readiness(
     policy: ReleaseReadinessPolicy,
     coverage_issues: Sequence[SemanticCoverageIssue],
@@ -245,10 +268,11 @@ def _compute_readiness(
             "en los run(s) evaluados) -- criterio no evaluado, nunca FAILED por falta de senal."
         )
     else:
+        pending_summary = _format_pending_case_ids(pending_case_ids)
         not_evaluated_reason = (
             "Dataset coverage_status=PARTIALLY_EVALUATED -- case_id(s) REQUIRED/FORBIDDEN "
-            f"todavia pendientes en otro run/paquete: {', '.join(pending_case_ids)}. Un "
-            "reporte parcial nunca puede afirmar PASS_ENGINEERING del dataset completo."
+            f"todavia pendientes en otro run/paquete: {pending_summary}. Un reporte parcial "
+            "nunca puede afirmar PASS_ENGINEERING del dataset completo."
         )
 
     results: list[ReleaseReadinessCriterionResult] = []
@@ -332,9 +356,9 @@ def _compute_readiness(
                 code=ReleaseReadinessWarningCode.REQUIRED_GROUND_TRUTH_CASES_NOT_EXECUTED,
                 message=(
                     "case_id(s) pendientes (nunca aplicables en ningun run considerado): "
-                    f"{', '.join(pending_case_ids)} -- readiness funcional de ingenieria y de "
-                    "dominio quedan NOT_EVALUATED hasta cubrir el dataset completo (ver "
-                    "functional-validate-dataset)."
+                    f"{_format_pending_case_ids(pending_case_ids)} -- readiness funcional de "
+                    "ingenieria y de dominio quedan NOT_EVALUATED hasta cubrir el dataset "
+                    "completo (ver functional-validate-dataset)."
                 ),
             )
         )

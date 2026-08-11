@@ -298,7 +298,12 @@ def build_v2_detector_context(
 
     v1_candidates_by_decision_id: dict[str, list[RuleCandidate]] = defaultdict(list)
     for candidate in v1_candidates.candidates:
-        v1_candidates_by_decision_id[candidate.decision_id].append(candidate)
+        # V1 (Q0) es siempre RETURN_CODE: decision_id nunca es None para
+        # estos candidatos (RuleCandidate._check_decision_anchor_by_family
+        # lo exige) -- CALCULATION incondicional (Fase 15B3-C2-B2) nunca
+        # llega aqui, v1_candidates.candidates es exclusivamente Q0.
+        if candidate.decision_id is not None:
+            v1_candidates_by_decision_id[candidate.decision_id].append(candidate)
 
     return V2DetectorContext(
         canonical_programs=tuple(canonical_programs),

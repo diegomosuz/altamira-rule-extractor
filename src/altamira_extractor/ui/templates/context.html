@@ -138,6 +138,7 @@
 
 <details class="collapsible" open>
 <summary><h2 class="collapsible-title">Decision (D4)</h2></summary>
+{% if ctx.decision %}
 <dl class="meta-grid">
   <dt>Expresion</dt><dd><code>{{ ctx.decision.expression }}</code></dd>
   <dt>Expresion normalizada</dt><dd><code>{{ ctx.decision.normalized_expression }}</code></dd>
@@ -145,6 +146,9 @@
   <dt>Codigo de retorno</dt><dd>{{ ctx.decision.outcome_code or "No informado" }}</dd>
 </dl>
 <details class="json-panel"><summary>Ver JSON tecnico de esta seccion</summary><pre class="source-block">{{ ctx.decision.model_dump(mode="json") | tojson(indent=2) }}</pre></details>
+{% else %}
+<p class="mb-0">Sin Decision envolvente (calculo aritmetico incondicional).</p>
+{% endif %}
 </details>
 
 <details class="collapsible" open>

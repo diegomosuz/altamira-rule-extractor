@@ -283,3 +283,55 @@ def test_full_payload_with_new_fields_matches_schema(
     assert applicable_row["parameter_entry_id"]
     glossary_entry = dumped["domain_glossary"][0]
     assert glossary_entry["data_item_id"]
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B3-C2-B2: decision/candidate.decision_id opcionales, UNICAMENTE
+# ambos presentes o ambos ausentes (CALCULATION incondicional) -- nunca un
+# estado mixto.
+# ---------------------------------------------------------------------------
+
+
+def test_historical_context_package_with_decision_present_matches_schema_unchanged(
+    valid_context_package: ContextPackage, context_package_schema: dict[str, Any]
+) -> None:
+    """El formato historico (decision/candidate.decision_id siempre
+    presentes) sigue parseando y validando contra el schema exactamente
+    igual -- el contrato no se relaja para el caso comun."""
+    assert valid_context_package.decision is not None
+    assert valid_context_package.candidate.decision_id is not None
+    assert_matches_schema(valid_context_package.model_dump(mode="json"), context_package_schema)
+    restored = ContextPackage.model_validate_json(valid_context_package.to_stable_json())
+    assert restored == valid_context_package
+
+
+def test_context_package_decision_id_present_without_decision_is_invalid(
+    valid_context_package: ContextPackage,
+) -> None:
+    payload = valid_context_package.model_dump(mode="json")
+    payload["decision"] = None
+    with pytest.raises(ValidationError):
+        ContextPackage(**payload)
+
+
+def test_context_package_decision_present_without_decision_id_is_invalid(
+    valid_context_package: ContextPackage,
+) -> None:
+    payload = valid_context_package.model_dump(mode="json")
+    payload["candidate"]["decision_id"] = None
+    with pytest.raises(ValidationError):
+        ContextPackage(**payload)
+
+
+def test_context_package_unconditional_calculation_both_absent_is_valid_and_matches_schema(
+    valid_context_package: ContextPackage, context_package_schema: dict[str, Any]
+) -> None:
+    payload = valid_context_package.model_dump(mode="json")
+    payload["decision"] = None
+    payload["candidate"]["decision_id"] = None
+    package = ContextPackage(**payload)
+    assert package.decision is None
+    assert package.candidate.decision_id is None
+    assert_matches_schema(package.model_dump(mode="json"), context_package_schema)
+    restored = ContextPackage.model_validate_json(package.to_stable_json())
+    assert restored == package

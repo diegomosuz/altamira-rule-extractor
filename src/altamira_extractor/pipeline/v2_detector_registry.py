@@ -84,7 +84,7 @@ V2_DETECTOR_REGISTRY: dict[str, V2DetectorDefinition] = {
             "estructuralmente demostrada via SemanticEffect COMPUTE_VALUE. "
             "support=PARTIAL: formula probada, valor numerico runtime no evaluado. "
             "decision_id=None cuando no hay IF/EVALUATE envolvente (calculo "
-            "incondicional, no productivizado en 15B3-C2-B1)."
+            "incondicional, productivizado desde 15B3-C2-B2)."
         ),
     ),
 }

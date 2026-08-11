@@ -199,3 +199,94 @@ def test_pre_existing_run_json_without_new_fields_still_parses() -> None:
     assert restored.candidate_source == CandidateSource.V1
     assert restored.rule_family == UnifiedRuleFamily.RETURN_CODE
     assert restored.evidence_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B3-C2-B2: decision_id/condition opcionales UNICAMENTE para
+# CALCULATION incondicional -- RETURN_CODE/LEVEL_88_RETURN_CODE/
+# STATE_TRANSITION siguen exigiendo ambos, sin cambios.
+# ---------------------------------------------------------------------------
+
+
+def test_historical_json_with_decision_id_and_condition_present_parses_identically() -> None:
+    """JSON historico con decision_id/condition/decision siempre
+    presentes (formato anterior a 15B3-C2-B2) debe seguir parseando
+    exactamente igual -- el contrato no se relaja para el caso comun."""
+    legacy_json = (
+        '{"schema_version":"1.0","candidate_id":"candidate::det::1.0::' + _VALID_HASH + '::dec-1",'
+        '"paragraph_id":"program::AR::op::PROG::1::abc123::paragraph::MAIN",'
+        '"paragraph_name":"MAIN",'
+        '"decision_id":"program::AR::op::PROG::1::abc123::paragraph::MAIN::decision::10::1",'
+        '"detector_id":"return-code-decision","detector_version":"1.0","detector_score":1.0,'
+        '"status":"DETECTED_CANDIDATE","condition":"WS-COD-RESULT = \'R001\'",'
+        '"outcome_code":"R001","rule_type":null,"line_start":10,'
+        '"source_file":"01-codigo/cobol/PROG.cbl","source_package_hash":"' + _VALID_HASH + '"}'
+    )
+    restored = RuleCandidate.model_validate_json(legacy_json)
+    expected_decision_id = "program::AR::op::PROG::1::abc123::paragraph::MAIN::decision::10::1"
+    assert restored.decision_id == expected_decision_id
+    assert restored.condition == "WS-COD-RESULT = 'R001'"
+    assert restored.outcome_code == "R001"
+    assert restored.rule_family == UnifiedRuleFamily.RETURN_CODE
+
+
+def test_return_code_candidate_without_decision_id_is_invalid() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(decision_id=None, rule_family=UnifiedRuleFamily.RETURN_CODE)
+
+
+def test_return_code_candidate_without_condition_is_invalid() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(condition=None, rule_family=UnifiedRuleFamily.RETURN_CODE)
+
+
+def test_level_88_return_code_candidate_without_decision_id_is_invalid() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(decision_id=None, rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE)
+
+
+def test_state_transition_candidate_without_decision_id_is_invalid() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(decision_id=None, rule_family=UnifiedRuleFamily.STATE_TRANSITION)
+
+
+def test_unconditional_calculation_candidate_with_both_none_is_valid() -> None:
+    candidate = _candidate(
+        decision_id=None,
+        condition=None,
+        outcome_code=None,
+        rule_family=UnifiedRuleFamily.CALCULATION,
+    )
+    assert candidate.decision_id is None
+    assert candidate.condition is None
+
+
+def test_conditioned_calculation_candidate_with_both_present_is_valid() -> None:
+    candidate = _candidate(rule_family=UnifiedRuleFamily.CALCULATION)
+    assert candidate.decision_id is not None
+    assert candidate.condition is not None
+
+
+def test_calculation_candidate_with_only_decision_id_present_is_invalid() -> None:
+    """Nunca un estado mixto: decision_id presente sin condition (o
+    viceversa) indicaria una construccion parcial/inconsistente."""
+    with pytest.raises(ValidationError):
+        _candidate(condition=None, rule_family=UnifiedRuleFamily.CALCULATION)
+
+
+def test_calculation_candidate_with_only_condition_present_is_invalid() -> None:
+    with pytest.raises(ValidationError):
+        _candidate(decision_id=None, rule_family=UnifiedRuleFamily.CALCULATION)
+
+
+def test_unconditional_calculation_candidate_round_trips() -> None:
+    candidate = _candidate(
+        decision_id=None,
+        condition=None,
+        outcome_code=None,
+        rule_family=UnifiedRuleFamily.CALCULATION,
+    )
+    restored = RuleCandidate.model_validate_json(candidate.to_stable_json())
+    assert restored == candidate
+    assert restored.decision_id is None
+    assert restored.condition is None

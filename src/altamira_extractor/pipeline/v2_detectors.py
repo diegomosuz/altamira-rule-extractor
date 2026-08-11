@@ -646,27 +646,24 @@ def detect_calculation(ctx: V2DetectorContext) -> list[V2ShadowCandidate]:
     funcional que motiva el score reducido de `V2_STATE_CHANGE`.
 
     Calculos CONDICIONADOS e INCONDICIONALES ambos producen un
-    `V2ShadowCandidate` (correccion pre-commit 15B3-C2-B1, seccion 1): a
-    diferencia de la version anterior de este detector -- que hacia
-    `continue` puro para el caso incondicional, dejandolo invisible en
-    `diagnostics/v2-candidates-shadow.json` y solo reconstruible llamando
-    `compute_semantic_effects_artifact(...)` manualmente despues del run,
-    lo cual NUNCA ocurre en una ejecucion normal de `run_ingestion` -- un
-    calculo SIN `Decision` envolvente ahora produce un candidato con
+    `V2ShadowCandidate` (correccion pre-commit 15B3-C2-B1, seccion 1): un
+    calculo SIN `Decision` envolvente produce un candidato con
     `decision_id=None` (campo YA opcional en este contrato, `str | None =
     None`, reutilizado tal cual, NUNCA fabricado con un valor sintetico) y
-    `diagnostic_codes=["V2_CALCULATION_NO_DECISION_ANCHOR"]`. Ese
-    candidato SIGUE sin llegar nunca a `06-candidates.json`
-    (`enhanced_candidate_integration.detect_enhanced_candidates` exige
-    `decision_id is not None` antes de convertir/productivizar, sin
-    cambios en ese requisito) -- pero, en vez de descartarse en silencio,
-    su `reason` (citando el `SemanticEffect.effect_id` real) se convierte
-    en un warning persistido en `CandidateArtifact.warnings`
-    (`06-candidates.json`, escrito por la etapa CANDIDATES_DETECTED en
-    CADA ejecucion normal con `enhanced_candidates_enabled=true` -- nunca
-    un artefacto/comando nuevo). Ver `enhanced_candidate_integration.
-    detect_enhanced_candidates` para el punto exacto donde ese warning se
-    genera."""
+    `diagnostic_codes=["V2_CALCULATION_NO_DECISION_ANCHOR"]` (diagnostico
+    estructural real -- "no tiene Decision anclada" -- que se mantiene
+    aunque el candidato SI se productivice: describe procedencia, nunca
+    "no soportado").
+
+    Desde Fase 15B3-C2-B2, `enhanced_candidate_integration.
+    detect_enhanced_candidates` productiviza AMBOS casos hasta
+    `06-candidates.json`: con `decision_id` real via `_convert_v2_candidate`
+    (sin cambios, camino condicionado), sin el via
+    `_convert_unconditional_calculation` (`decision_id=None`/
+    `condition=None` en el `RuleCandidate` resultante, nunca un valor
+    sintetico). Este detector en si mismo NO distingue entre "productivo"
+    y "no productivo": esa decision vive integramente en
+    `enhanced_candidate_integration.py`, nunca aqui."""
     candidates_by_id: dict[str, V2ShadowCandidate] = {}
 
     for program in ctx.canonical_programs:
@@ -711,8 +708,8 @@ def detect_calculation(ctx: V2DetectorContext) -> list[V2ShadowCandidate]:
                             f"Calculo ({statement.kind.value}) reconocido en "
                             f"{paragraph.name!r} SIN Decision envolvente: target {target!r} "
                             f"via {formula_text!r}. SemanticEffect {effect.effect_id!r} "
-                            "(COMPUTE_VALUE) demostrado; no productivizado en 15B3-C2-B1 "
-                            "(calculo incondicional, fuera de alcance -- ver 15B3-C2-B2)."
+                            "(COMPUTE_VALUE) demostrado; productivizado como CALCULATION "
+                            "incondicional (15B3-C2-B2, decision_id=None/condition=None)."
                         )
                     candidate = V2ShadowCandidate(
                         candidate_id=candidate_id,

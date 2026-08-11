@@ -65,6 +65,8 @@ _ALL_GROUND_TRUTH_FIXTURES = (
     "gt_state_transition_001.cbl",
     "gt_state_transition_negative_001.cbl",
     "gt_calculation_001.cbl",
+    "gt_calculation_unconditional_001.cbl",
+    "gt_calculation_unconditional_002.cbl",
 )
 
 

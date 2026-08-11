@@ -4,6 +4,13 @@ schemas/context-package.schema.json (schema_version 2.0).
 Refleja las siete dimensiones D1-D7 (docs/CONTEXT_PACKAGE_CONTRACT.md).
 Donde el JSON Schema deja un hueco pero CLAUDE.md exige una regla de
 negocio explicita, se agrega un validador puntual (documentado inline).
+
+`ContextPackageCandidate.decision_id`/`ContextPackage.decision` (Fase
+15B3-C2-B2): ambos `| None`, exclusivamente para representar un
+CALCULATION incondicional (calculo aritmetico sin Decision envolvente
+-- ver `contracts/candidate.py`). Nunca independientes entre si (ver
+`_check_decision_presence_matches_candidate`); nunca se fabrica una
+Decision sintetica para rellenar el campo cuando falta.
 """
 
 from __future__ import annotations
@@ -27,7 +34,12 @@ from .enums import (
 
 class ContextPackageCandidate(AltamiraBaseModel):
     candidate_id: str = Field(min_length=1)
-    decision_id: str = Field(min_length=1)
+    # str | None (Fase 15B3-C2-B2): None unicamente para un CALCULATION
+    # incondicional (sin Decision envolvente) -- ver
+    # `ContextPackage._check_decision_presence_matches_candidate`, que
+    # exige que este campo y `ContextPackage.decision` esten ambos
+    # presentes o ambos ausentes.
+    decision_id: str | None = Field(default=None, min_length=1)
     detector_id: str = Field(min_length=1)
     detector_version: str = Field(min_length=1)
     detector_score: float = Field(ge=0, le=1)
@@ -236,7 +248,11 @@ class ContextPackage(AltamiraBaseModel):
     scope: ContextPackageScope
     code_slice: list[CodeSliceEntry] = Field(min_length=1)
     data_context: DataContext
-    decision: ContextPackageDecision
+    # ContextPackageDecision | None (Fase 15B3-C2-B2): None unicamente
+    # cuando `candidate.decision_id` tambien es None (CALCULATION
+    # incondicional) -- ver `_check_decision_presence_matches_candidate`.
+    # Nunca se fabrica una Decision sintetica para rellenar este campo.
+    decision: ContextPackageDecision | None = None
     effects: Effects
     batch_context: BatchContext
     domain_glossary: list[DomainGlossaryEntry] = Field(default_factory=list)
@@ -252,3 +268,13 @@ class ContextPackage(AltamiraBaseModel):
         if not evidence:
             raise ValueError("un ContextPackage debe tener al menos una entrada de evidencia")
         return evidence
+
+    @model_validator(mode="after")
+    def _check_decision_presence_matches_candidate(self) -> ContextPackage:
+        if (self.candidate.decision_id is None) != (self.decision is None):
+            raise ValueError(
+                "ContextPackage: 'decision' debe estar presente si y solo si "
+                "candidate.decision_id esta presente -- un CALCULATION incondicional "
+                "es el unico caso legitimo con ambos ausentes, nunca un estado mixto"
+            )
+        return self

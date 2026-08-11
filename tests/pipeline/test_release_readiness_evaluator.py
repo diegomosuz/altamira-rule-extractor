@@ -46,6 +46,7 @@ from altamira_extractor.pipeline.functional_validation_aggregator import (
 )
 from altamira_extractor.pipeline.functional_validation_matcher import validate_ground_truth
 from altamira_extractor.pipeline.release_readiness_evaluator import (
+    _format_pending_case_ids,
     evaluate_release_readiness,
     evaluate_release_readiness_for_dataset,
 )
@@ -602,3 +603,64 @@ def test_dataset_readiness_domain_review_never_inferred_beyond_pending() -> None
         DomainFunctionalReadinessStatus.NOT_EVALUATED,
         DomainFunctionalReadinessStatus.PENDING_DOMAIN_REVIEW,
     }
+
+
+# ---------------------------------------------------------------------------
+# Correccion pre-commit 15B3-C2-B2, seccion 4: _format_pending_case_ids
+# ---------------------------------------------------------------------------
+
+
+def test_format_pending_case_ids_short_list_is_unmodified() -> None:
+    """Una lista corta (caso comun) se conserva integra, sin marcador de
+    truncamiento."""
+    result = _format_pending_case_ids(["pos-2", "neg-1"])
+    assert result == "neg-1, pos-2"
+    assert "mas" not in result
+
+
+def test_format_pending_case_ids_empty_list_is_empty_string() -> None:
+    assert _format_pending_case_ids([]) == ""
+
+
+def test_format_pending_case_ids_long_list_stays_within_contractual_limit() -> None:
+    """El limite contractual real es `ReleaseReadinessCriterionResult.
+    message`/`ReleaseReadinessWarning.message` (max_length=500, ver
+    contracts/release_readiness.py); el texto fijo alrededor del listado
+    (en ambos call sites de release_readiness_evaluator.py) mide bien
+    menos de 300 caracteres, asi que el listado en si debe quedar
+    comodamente por debajo de 200 para que la suma nunca exceda 500."""
+    many_case_ids = [f"gt-positive-calculation-case-{i:04d}" for i in range(200)]
+    result = _format_pending_case_ids(many_case_ids)
+    assert len(result) <= 200, f"listado demasiado largo ({len(result)} chars): {result!r}"
+
+
+def test_format_pending_case_ids_is_deterministic() -> None:
+    case_ids = [f"case-{i}" for i in range(50)]
+    assert _format_pending_case_ids(case_ids) == _format_pending_case_ids(case_ids)
+    # Orden de entrada nunca importa: internamente siempre ordena antes de truncar.
+    assert _format_pending_case_ids(case_ids) == _format_pending_case_ids(list(reversed(case_ids)))
+
+
+def test_format_pending_case_ids_never_splits_an_individual_case_id() -> None:
+    """Ningun `case_id` incluido en el resultado puede quedar cortado a
+    la mitad -- cada token separado por ', ' (ignorando el sufijo
+    `(+N mas)`) debe ser EXACTAMENTE uno de los case_id originales."""
+    many_case_ids = [f"gt-positive-calculation-case-{i:04d}" for i in range(200)]
+    result = _format_pending_case_ids(many_case_ids)
+    body = result.split(" (+")[0]
+    included = body.split(", ") if body else []
+    for case_id in included:
+        assert case_id in many_case_ids, f"token {case_id!r} no es un case_id real completo"
+
+
+def test_format_pending_case_ids_truncated_list_signals_remaining_count() -> None:
+    """El resultado truncado debe permitir entender que existen casos
+    adicionales no listados, con el conteo exacto de cuantos quedan
+    fuera."""
+    many_case_ids = [f"gt-positive-calculation-case-{i:04d}" for i in range(200)]
+    result = _format_pending_case_ids(many_case_ids)
+    assert "(+" in result and " mas)" in result
+    included_count = len(result.split(" (+")[0].split(", "))
+    remaining = len(many_case_ids) - included_count
+    assert f"(+{remaining} mas)" in result
+    assert remaining > 0

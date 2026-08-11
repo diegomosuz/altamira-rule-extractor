@@ -43,7 +43,10 @@ class QueryRecord(AltamiraBaseModel):
 class ContextRecord(AltamiraBaseModel):
     candidate_id: str = Field(min_length=1)
     paragraph_id: str = Field(min_length=1)
-    decision_id: str = Field(min_length=1)
+    # str | None (Fase 15B3-C2-B2): None unicamente cuando el
+    # ContextPackage correspondiente es un CALCULATION incondicional
+    # (candidate.decision_id tambien None, ver contracts/candidate.py).
+    decision_id: str | None = Field(default=None, min_length=1)
     relative_filename: RelativePath
     context_hash: Sha256Hex
 

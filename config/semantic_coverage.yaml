@@ -1,13 +1,15 @@
 # generado por gen_semantic_coverage_yaml.py -- ver docs/SEMANTIC_COVERAGE.md
 # NO editar a mano; regenerar via el script y validar con SemanticCoverageManifest.model_validate().
-# NOTA (Fase 15B3-C2-B1, correccion pre-commit): gen_semantic_coverage_yaml.py no
+# NOTA (Fase 15B3-C2-B1/B2, correccion pre-commit): gen_semantic_coverage_yaml.py no
 # existe en este checkout (busqueda exhaustiva confirmada, ver informe de fase) --
 # los constructs ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE de este archivo se
-# actualizaron a mano para esta fase, validados contra SemanticCoverageManifest
+# actualizaron a mano para estas fases, validados contra SemanticCoverageManifest
 # y reconciliados contra V2_DETECTOR_REGISTRY (tests/pipeline/
 # test_semantic_coverage_registry.py::test_real_semantic_coverage_yaml_is_fully_reconciled).
+# Fase 15B3-C2-B2: CALCULATION incondicional (ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE
+# sin Decision envolvente) es ahora productiva, igual que el caso condicionado.
 schema_version: '1.0'
-manifest_edition: fase-15b3-c2-b1-2026.08.11
+manifest_edition: fase-15b3-c2-b2-2026.08.11
 constructs:
 - construct_id: ADD
   display_name: Add (aritmetica sin COMPUTE)
@@ -55,19 +57,26 @@ constructs:
     status: NOT_APPLICABLE
   - layer: DETECTOR
     status: PARTIALLY_SUPPORTED
-    notes: 'V2_CALCULATION (detect_calculation) productiviza ADD SOLO cuando esta bajo
-      Decision (IF/EVALUATE); un ADD incondicional queda reconocido (SemanticEffect
-      COMPUTE_VALUE) pero no productivizado, con warning persistido en
-      CandidateArtifact.warnings (nunca silencioso). detect_calculation no distingue
-      StatementKind de origen (validado explicitamente con MULTIPLY; el mismo
-      detector cubre ADD por construccion).'
+    notes: 'Correccion pre-commit 15B3-C2-B2, seccion 3: ningun test ejercita
+      ADD especificamente a traves de detect_calculation (condicionado ni
+      incondicional) -- el soporte se infiere de que detect_calculation es
+      agnostico a StatementKind por construccion (filtra unicamente
+      SemanticEffectKind.COMPUTE_VALUE), demostrado directamente solo para
+      COMPUTE y MULTIPLY. Nunca NOT_SUPPORTED (mecanismo compartido real) ni
+      SUPPORTED (sin evidencia productiva directa de ESTE verbo).'
     evidence:
     - kind: UNIT_TEST
-      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_arithmetic_verb_also_detects_calculation_candidate
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_multiply_arithmetic_verb_also_detects_calculation_candidate
+      description: evidencia INDIRECTA -- demuestra que detect_calculation es
+        agnostico a StatementKind (mismo mecanismo), NUNCA ejercita ADD en si.
   - layer: EVIDENCE
     status: PARTIALLY_SUPPORTED
-    notes: Citable (evidence_ids no vacios) unicamente cuando el candidato
-      CALCULATION correspondiente se productiviza (condicionado).
+    notes: 'Correccion pre-commit 15B3-C2-B2, seccion 3: mismo motivo que
+      DETECTOR -- ningun test construye/valida un RuleCandidate/ContextPackage
+      de un ADD real (condicionado ni incondicional), solo se demuestra para
+      COMPUTE y MULTIPLY. Citable en teoria (mismo evidence_ids no vacios que
+      cualquier CALCULATION), pero sin confirmacion productiva directa de este
+      verbo.'
   - layer: PROVENANCE
     status: SUPPORTED
     notes: source_file/line_start/line_end preservados (kind=ADD, ya no OTHER).
@@ -85,20 +94,21 @@ constructs:
   - detector_id: V2_CALCULATION
     rule_families:
     - CALCULATION
-    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
-      decision_id=None y warning persistido, nunca 06-candidates.json.
+    notes: 'detect_calculation es agnostico a StatementKind por construccion
+      (mecanismo compartido, demostrado directamente para COMPUTE/MULTIPLY);
+      ADD nunca fue ejercitado por un test dedicado, condicionado ni
+      incondicional (correccion pre-commit 15B3-C2-B2, seccion 3).'
   rule_families:
   - rule_family: CALCULATION
     status: PARTIALLY_SUPPORTED
-    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
-      pero no productivizado en 15B3-C2-B1 (diferido a 15B3-C2-B2).
+    notes: Mecanismo compartido con COMPUTE/MULTIPLY (demostrado para esos
+      verbos), pero sin evidencia productiva directa de ADD en si -- nunca se
+      infiere SUPPORTED solo porque el detector es generico.
   fixtures:
   - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
   - ADD CORRESPONDING no se expande (RECOGNIZED_NOT_INTERPRETED); target_data_items
     queda vacio, con diagnostico explicito via unsupported_constructs.
-  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
-    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - El JAR de ProLeap expone 4 clases ASG distintas para variantes de ADD (AddStatementImpl, AddToStatementImpl,
     AddToGivingStatementImpl, AddCorrespondingStatementImpl, confirmadas por inspeccion directa del JAR);
     las 4 colapsan al mismo construct_id=ADD.
@@ -409,12 +419,12 @@ constructs:
   - layer: INTERPROCEDURAL
     status: NOT_APPLICABLE
   - layer: DETECTOR
-    status: PARTIALLY_SUPPORTED
-    notes: 'Fase 15B3-C2-B1: V2_CALCULATION productiviza COMPUTE SOLO bajo Decision;
-      incondicional queda reconocido (SemanticEffect COMPUTE_VALUE) pero no
-      productivizado, con warning persistido en CandidateArtifact.warnings.
-      Correccion: V2_STATE_CHANGE NUNCA captura el efecto de un COMPUTE
-      (_handle_compute_value siempre invalida, nunca produce un literal).'
+    status: SUPPORTED
+    notes: 'V2_CALCULATION productiviza COMPUTE tanto condicionado como
+      incondicional (Fase 15B3-C2-B2, via _convert_unconditional_calculation):
+      decision_id=None/condition=None nunca fabricado. V2_STATE_CHANGE NUNCA
+      captura el efecto de un COMPUTE (_handle_compute_value siempre invalida,
+      nunca produce un literal).'
     evidence:
     - kind: UNIT_TEST
       reference: tests/pipeline/test_v2_detectors.py::test_conditioned_compute_detects_one_deterministic_calculation_candidate
@@ -429,7 +439,7 @@ constructs:
       reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
     notes: Evidencia del mecanismo generico compartido, mas confirmacion end-to-end
       (evidence_ids no vacios, ContextPackage/RuleDraft/Guardrail reales) para
-      CALCULATION condicionado especificamente.
+      CALCULATION condicionado e incondicional (Fase 15B3-C2-B2).
   - layer: PROVENANCE
     status: SUPPORTED
     evidence:
@@ -439,12 +449,16 @@ constructs:
       en esta capa.
   - layer: FUNCTIONAL_VALIDATION
     status: SUPPORTED
-    notes: 'Fase 15B3-C2-B1: gt-positive-calculation-if-compute-multiplication
-      (ground truth sintetico, GTCALC001) mas confirmacion end-to-end hermetica
-      (JAR/Neo4j real) via CHECK-CALCULO-COMPUTE-PARA.'
+    notes: 'gt-positive-calculation-if-compute-multiplication (ground truth
+      sintetico, GTCALC001, condicionado) mas confirmacion end-to-end hermetica
+      (JAR/Neo4j real) via CHECK-CALCULO-COMPUTE-PARA. Incondicional cubierto
+      desde Fase 15B3-C2-B2 por gt-positive-calculation-unconditional-compute-multiplication
+      (GTCALC002) mas CHECK-CALCULO-INCONDICIONAL-PARA end-to-end.'
     evidence:
     - kind: SYNTHETIC_FIXTURE
       reference: config/ground_truth/fixtures/gt_calculation_001.cbl
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/fixtures/gt_calculation_unconditional_001.cbl
     - kind: INTEGRATION_TEST
       reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
   java_statement_kind: COMPUTE
@@ -453,21 +467,20 @@ constructs:
   - detector_id: V2_CALCULATION
     rule_families:
     - CALCULATION
-    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
-      decision_id=None y warning persistido, nunca 06-candidates.json.
+    notes: Condicionado y incondicional ambos productivos (Fase 15B3-C2-B2);
+      incondicional nunca fabrica decision_id/condition.
   rule_families:
   - rule_family: CALCULATION
-    status: PARTIALLY_SUPPORTED
-    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
-      pero no productivizado en 15B3-C2-B1 (diferido a 15B3-C2-B2).
+    status: SUPPORTED
+    notes: Productiva condicionado (bajo Decision) e incondicional (Fase
+      15B3-C2-B2, decision_id=None/condition=None).
   fixtures:
   - config/ground_truth/fixtures/gt_calculation_001.cbl
+  - config/ground_truth/fixtures/gt_calculation_unconditional_001.cbl
   - parser/src/test/resources/fixtures/arithmetic.cbl
   - parser/src/test/resources/fixtures/comprehensive.cbl
   - parser/src/test/resources/fixtures/normalized_expression.cbl
   limitations:
-  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
-    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control.
   - ROUNDED (Store.isRounded()) no se captura ni ajusta el valor numerico (gap
     preexistente a 15B3-C2-B1, no corregido en esta fase -- a diferencia de
@@ -692,18 +705,18 @@ constructs:
     status: NOT_APPLICABLE
   - layer: DETECTOR
     status: PARTIALLY_SUPPORTED
-    notes: 'V2_CALCULATION (detect_calculation) productiviza DIVIDE (cociente) SOLO
-      cuando esta bajo Decision; un DIVIDE incondicional queda reconocido
-      (SemanticEffect COMPUTE_VALUE) pero no productivizado, con warning
-      persistido en CandidateArtifact.warnings. El resto de REMAINDER nunca se
-      productiviza (no es target).'
+    notes: 'V2_CALCULATION (detect_calculation) productiviza el cociente de DIVIDE
+      tanto condicionado como incondicional (Fase 15B3-C2-B2, via
+      _convert_unconditional_calculation, decision_id=None/condition=None nunca
+      fabricado). El resto de REMAINDER nunca se productiviza (no es target) --
+      gap sin cambios en esta fase.'
     evidence:
     - kind: UNIT_TEST
       reference: tests/pipeline/test_v2_detectors.py::test_conditioned_compute_detects_one_deterministic_calculation_candidate
   - layer: EVIDENCE
     status: PARTIALLY_SUPPORTED
-    notes: Citable (evidence_ids no vacios) unicamente cuando el candidato
-      CALCULATION correspondiente se productiviza (condicionado, cociente).
+    notes: Citable (evidence_ids no vacios) para el cociente, condicionado o
+      incondicional (Fase 15B3-C2-B2); REMAINDER nunca es citable (no es target).
   - layer: PROVENANCE
     status: SUPPORTED
     notes: source_file/line_start/line_end preservados (kind=DIVIDE, ya no OTHER).
@@ -720,18 +733,16 @@ constructs:
   - detector_id: V2_CALCULATION
     rule_families:
     - CALCULATION
-    notes: Condicionado -> CALCULATION productiva (cociente); incondicional ->
-      shadow con decision_id=None y warning persistido.
+    notes: Condicionado e incondicional (Fase 15B3-C2-B2) ambos productivos para
+      el cociente; REMAINDER nunca es target.
   rule_families:
   - rule_family: CALCULATION
     status: PARTIALLY_SUPPORTED
-    notes: Productiva solo condicionado (bajo Decision, cociente unicamente);
-      incondicional reconocido pero no productivizado en 15B3-C2-B1.
+    notes: Productiva para el cociente, condicionado e incondicional (Fase
+      15B3-C2-B2, decision_id=None/condition=None); REMAINDER nunca es target.
   fixtures:
   - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
-  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
-    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - 'DIVIDE REMAINDER: el resto (Remainder.getRemainderCall()) NUNCA se agrega a
     target_data_items (evita writes=[cociente,resto] ambiguo); se registra via
     unsupported_constructs, PARTIALLY_INTERPRETED -- productizacion diferida.'
@@ -2017,12 +2028,12 @@ constructs:
   - layer: INTERPROCEDURAL
     status: NOT_APPLICABLE
   - layer: DETECTOR
-    status: PARTIALLY_SUPPORTED
-    notes: 'V2_CALCULATION (detect_calculation) productiviza MULTIPLY SOLO cuando
-      esta bajo Decision; un MULTIPLY incondicional queda reconocido (SemanticEffect
-      COMPUTE_VALUE) pero no productivizado, con warning persistido en
-      CandidateArtifact.warnings. Verbo usado explicitamente para demostrar que
-      detect_calculation no distingue StatementKind (no solo COMPUTE).'
+    status: SUPPORTED
+    notes: 'V2_CALCULATION (detect_calculation) productiviza MULTIPLY tanto
+      condicionado como incondicional (Fase 15B3-C2-B2, via
+      _convert_unconditional_calculation): decision_id=None/condition=None nunca
+      fabricado. Verbo usado explicitamente para demostrar que detect_calculation
+      no distingue StatementKind (no solo COMPUTE).'
     evidence:
     - kind: UNIT_TEST
       reference: tests/pipeline/test_v2_detectors.py::test_conditioned_multiply_arithmetic_verb_also_detects_calculation_candidate
@@ -2031,8 +2042,9 @@ constructs:
   - layer: EVIDENCE
     status: SUPPORTED
     notes: Citable (evidence_ids no vacios) cuando el candidato CALCULATION se
-      productiviza -- confirmado end-to-end (ContextPackage/RuleDraft/Guardrail
-      reales) con el JAR/Neo4j real, no solo tests unitarios.
+      productiviza, condicionado o incondicional (Fase 15B3-C2-B2) -- confirmado
+      end-to-end (ContextPackage/RuleDraft/Guardrail reales) con el JAR/Neo4j
+      real, no solo tests unitarios.
     evidence:
     - kind: INTEGRATION_TEST
       reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
@@ -2045,29 +2057,32 @@ constructs:
   - layer: FUNCTIONAL_VALIDATION
     status: SUPPORTED
     notes: Confirmado end-to-end (JAR/Neo4j real, hermetico) via
-      CHECK-CALCULO-MULTIPLY-PARA -- unico de los 4 verbos nuevos con un caso E2E
-      productivo dedicado (los demas comparten el mismo detector, validado a
-      nivel unitario).
+      CHECK-CALCULO-MULTIPLY-PARA (condicionado); incondicional cubierto ademas
+      por ground truth sintetico dedicado desde Fase 15B3-C2-B2
+      (gt-positive-calculation-unconditional-multiply-giving) -- unico de los 4
+      verbos nuevos con casos E2E y de ground truth dedicados (los demas
+      comparten el mismo detector, validado a nivel unitario).
     evidence:
     - kind: INTEGRATION_TEST
       reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/fixtures/gt_calculation_unconditional_002.cbl
   java_statement_kind: MULTIPLY
   detectors:
   - detector_id: V2_CALCULATION
     rule_families:
     - CALCULATION
-    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
-      decision_id=None y warning persistido.
+    notes: Condicionado y incondicional ambos productivos (Fase 15B3-C2-B2);
+      incondicional nunca fabrica decision_id/condition.
   rule_families:
   - rule_family: CALCULATION
-    status: PARTIALLY_SUPPORTED
-    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
-      pero no productivizado en 15B3-C2-B1.
+    status: SUPPORTED
+    notes: Productiva condicionado (bajo Decision) e incondicional (Fase
+      15B3-C2-B2, decision_id=None/condition=None).
   fixtures:
+  - config/ground_truth/fixtures/gt_calculation_unconditional_002.cbl
   - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
-  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
-    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control (el
     camino feliz aritmetico si se interpreta).
   - ROUNDED no ajusta el valor numerico (solo presencia registrada via
@@ -3133,19 +3148,26 @@ constructs:
     status: NOT_APPLICABLE
   - layer: DETECTOR
     status: PARTIALLY_SUPPORTED
-    notes: 'V2_CALCULATION (detect_calculation) productiviza SUBTRACT SOLO cuando
-      esta bajo Decision; un SUBTRACT incondicional queda reconocido (SemanticEffect
-      COMPUTE_VALUE) pero no productivizado, con warning persistido en
-      CandidateArtifact.warnings. detect_calculation no distingue StatementKind
-      de origen (validado explicitamente con MULTIPLY; el mismo detector cubre
-      SUBTRACT por construccion).'
+    notes: 'Correccion pre-commit 15B3-C2-B2, seccion 3: ningun test ejercita
+      SUBTRACT especificamente a traves de detect_calculation (condicionado ni
+      incondicional) -- el soporte se infiere de que detect_calculation es
+      agnostico a StatementKind por construccion (filtra unicamente
+      SemanticEffectKind.COMPUTE_VALUE), demostrado directamente solo para
+      COMPUTE y MULTIPLY. Nunca NOT_SUPPORTED (mecanismo compartido real) ni
+      SUPPORTED (sin evidencia productiva directa de ESTE verbo).'
     evidence:
     - kind: UNIT_TEST
-      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_arithmetic_verb_also_detects_calculation_candidate
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_multiply_arithmetic_verb_also_detects_calculation_candidate
+      description: evidencia INDIRECTA -- demuestra que detect_calculation es
+        agnostico a StatementKind (mismo mecanismo), NUNCA ejercita SUBTRACT en si.
   - layer: EVIDENCE
     status: PARTIALLY_SUPPORTED
-    notes: Citable (evidence_ids no vacios) unicamente cuando el candidato
-      CALCULATION correspondiente se productiviza (condicionado).
+    notes: 'Correccion pre-commit 15B3-C2-B2, seccion 3: mismo motivo que
+      DETECTOR -- ningun test construye/valida un RuleCandidate/ContextPackage
+      de un SUBTRACT real (condicionado ni incondicional), solo se demuestra
+      para COMPUTE y MULTIPLY. Citable en teoria (mismo evidence_ids no vacios
+      que cualquier CALCULATION), pero sin confirmacion productiva directa de
+      este verbo.'
   - layer: PROVENANCE
     status: SUPPORTED
     notes: source_file/line_start/line_end preservados (kind=SUBTRACT, ya no OTHER).
@@ -3162,18 +3184,19 @@ constructs:
   - detector_id: V2_CALCULATION
     rule_families:
     - CALCULATION
-    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
-      decision_id=None y warning persistido.
+    notes: 'detect_calculation es agnostico a StatementKind por construccion
+      (mecanismo compartido, demostrado directamente para COMPUTE/MULTIPLY);
+      SUBTRACT nunca fue ejercitado por un test dedicado, condicionado ni
+      incondicional (correccion pre-commit 15B3-C2-B2, seccion 3).'
   rule_families:
   - rule_family: CALCULATION
     status: PARTIALLY_SUPPORTED
-    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
-      pero no productivizado en 15B3-C2-B1.
+    notes: Mecanismo compartido con COMPUTE/MULTIPLY (demostrado para esos
+      verbos), pero sin evidencia productiva directa de SUBTRACT en si -- nunca
+      se infiere SUPPORTED solo porque el detector es generico.
   fixtures:
   - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
-  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
-    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - El JAR de ProLeap expone 4 clases ASG distintas para variantes de SUBTRACT (SubtractStatementImpl,
     SubtractFromStatementImpl, SubtractFromGivingStatementImpl, SubtractCorrespondingStatementImpl, confirmadas
     por inspeccion directa del JAR); las 4 colapsan al mismo construct_id=SUBTRACT.
@@ -3539,9 +3562,9 @@ summary:
       SUPPORTED: 6
       NOT_SUPPORTED: 1
     DETECTOR:
-      PARTIALLY_SUPPORTED: 9
+      PARTIALLY_SUPPORTED: 7
       NOT_SUPPORTED: 29
-      SUPPORTED: 19
+      SUPPORTED: 21
     EVIDENCE:
       PARTIALLY_SUPPORTED: 5
       NOT_SUPPORTED: 31
