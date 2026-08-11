@@ -187,6 +187,35 @@ cases:
       altamira-cobol-parser.jar parse): ambos MOVE (branch=THEN/ELSE) declaran
       target_data_items=[WS-COD-RETORNO] con parent_statement_id apuntando al mismo IF, y
       unsupported_constructs=[] (sin degradacion de extraccion).'
+- case_id: gt-positive-sql-select-into-state-transition
+  kind: POSITIVE
+  program: GTSQLST1
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_sql_select_into_state_transition_001.cbl
+    sha256: 4f6d52363a1ae821aef75708cd52b982e71b295460dbe543f5d4a252d82ee23c
+  description: 'EXEC SQL SELECT ESTADO INTO :WS-ESTADO-DB FROM CUENTAS WHERE CUENTA
+    = :WS-CUENTA END-EXEC seguido de IF WS-ESTADO-DB = ''B'' MOVE ''R'' TO WS-ESTADO-OPERACION
+    END-IF, mismo MAIN-PARA: prueba que un valor cargado por SQL (Fase 15B3-C3-B, direccion
+    demostrada input/output_host_variables) no rompe ni desvia la deteccion existente
+    de STATE_TRANSITION -- la familia sigue siendo la misma que gt-positive-state-transition-if-status-target,
+    nunca una familia SQL nueva.'
+  expected_rules:
+  - expectation_id: gt-positive-sql-select-into-state-transition::v2-state-change
+    rule_family: STATE_TRANSITION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'Identico mecanismo que gt-positive-state-transition-if-status-target:
+      pipeline/v2_detectors.py::detect_state_change detecta la escritura deterministica
+      (MOVE literal, DIRECT_LITERAL) de WS-ESTADO-OPERACION dentro del IF -- support=PARTIAL.
+      enhanced_candidate_integration.py promueve a RuleCandidate(rule_family=STATE_TRANSITION)
+      porque WS-ESTADO-OPERACION matchea status-name de config/semantic-tags.yml. Unica
+      diferencia: el operando de la condicion (WS-ESTADO-DB) viene de EXEC SQL SELECT...INTO,
+      cuya direccion output ahora se demuestra (EmbeddedSqlExtractor.selectAccess, Fase
+      15B3-C3-B) y se propaga a CanonicalStatement.variables_written ->
+      SemanticEffect.EXECUTE_SQL.writes -> DATA_DEPENDS_ON (ver
+      test_dependency_builder.py::test_data_dependency_through_exec_sql_select_into).
+      El detector no inspecciona el origen del operando: esta expectativa demuestra que
+      SQL no interfiere con la deteccion existente, no que la agregue.'
 - case_id: gt-positive-state-transition-if-status-target
   kind: POSITIVE
   program: GTST001
@@ -215,7 +244,7 @@ cases:
       ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
       heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 9
-  positive_case_count: 7
+  case_count: 10
+  positive_case_count: 8
   negative_case_count: 2
-  expected_rule_count: 7
+  expected_rule_count: 8

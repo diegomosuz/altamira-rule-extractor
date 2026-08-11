@@ -1,0 +1,30 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SQLFLOW1.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-CUENTA PIC X(10).
+       01 WS-SALDO PIC 9(9)V99.
+       01 WS-LIMITE PIC 9(9)V99 VALUE 100.
+       01 WS-COD-RETORNO PIC X(4) VALUE SPACES.
+       01 WS-FACTOR PIC 9(3)V99 VALUE 1.
+       01 WS-RESULTADO PIC 9(9)V99.
+       01 WS-ID PIC X(10).
+       PROCEDURE DIVISION.
+       CONSULTAR-SALDO-PARA.
+           EXEC SQL
+               SELECT SALDO
+               INTO :WS-SALDO
+               FROM CUENTAS
+               WHERE CUENTA = :WS-CUENTA
+           END-EXEC.
+       EVALUAR-SALDO-PARA.
+           IF WS-SALDO < WS-LIMITE
+               MOVE 'R001' TO WS-COD-RETORNO
+           END-IF.
+       CONSULTAR-FACTOR-PARA.
+           EXEC SQL
+               SELECT :WS-FACTOR * SALDO
+               INTO :WS-RESULTADO
+               FROM CUENTAS
+               WHERE ID = :WS-ID
+           END-EXEC.

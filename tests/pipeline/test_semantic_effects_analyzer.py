@@ -466,7 +466,11 @@ def test_exec_sql_produces_one_execute_sql_effect_per_sql_access() -> None:
     assert "SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED" in effect.diagnostic_codes
 
 
-def test_exec_sql_predicate_text_is_never_copied_into_effect() -> None:
+def test_exec_sql_predicate_text_is_propagated_to_sql_predicate_text_field() -> None:
+    """Fase 15B3-C3-B, seccion 9: CanonicalSqlAccess.predicate_text ahora
+    SI se propaga -- pero UNICAMENTE al campo dedicado
+    sql_predicate_text, verbatim, nunca reinterpretado ni copiado a otro
+    campo semanticamente distinto (p. ej. expression)."""
     sql_access = CanonicalSqlAccess(
         table="CUSTOMER",
         operation=TableAccessOperation.WRITES,
@@ -480,7 +484,8 @@ def test_exec_sql_predicate_text_is_never_copied_into_effect() -> None:
         sql_access=[sql_access],
     )
     effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
-    assert "SECRET_COLUMN" not in effects[0].model_dump_json()
+    assert effects[0].sql_predicate_text == "WHERE SECRET_COLUMN = :X"
+    assert effects[0].expression is None
 
 
 def test_exec_sql_select_never_assigns_where_and_into_variables_to_same_direction() -> None:
@@ -583,6 +588,156 @@ def test_exec_sql_delete_conserves_where_variable() -> None:
     assert effect.sql_host_variables == ["WS-ID"]
     assert effect.reads == []
     assert effect.writes == []
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B3-C3-B: direccion demostrada -> reads/writes poblados desde
+# CanonicalStatement.variables_read/variables_written (nunca recalculados
+# en el analizador).
+# ---------------------------------------------------------------------------
+
+
+def test_exec_sql_select_into_with_demonstrated_direction_populates_reads_and_writes() -> None:
+    """Cuando CanonicalSqlAccess.input_host_variables/output_host_variables
+    estan poblados (direccion demostrada por EmbeddedSqlExtractor) Y
+    CanonicalStatement.variables_read/variables_written reflejan esa
+    misma direccion (StatementExtractor.convertExecSql las agrega), el
+    efecto EXECUTE_SQL debe poblar reads/writes directamente desde el
+    statement -- sin el diagnostic SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED."""
+    sql_access = CanonicalSqlAccess(
+        table="CUENTAS",
+        operation=TableAccessOperation.READS,
+        predicate_text="WHERE CUENTA = :WS-CUENTA",
+        host_variables=["WS-SALDO", "WS-CUENTA"],
+        input_host_variables=["WS-CUENTA"],
+        output_host_variables=["WS-SALDO"],
+        predicate_host_variables=["WS-CUENTA"],
+        location_kind=LocationKind.UNKNOWN,
+    )
+    stmt = _statement(
+        statement_id="P1::A::1::EXEC_SQL",
+        kind=StatementKind.EXEC_SQL,
+        source_text="EXEC SQL SELECT SALDO INTO :WS-SALDO FROM CUENTAS "
+        "WHERE CUENTA = :WS-CUENTA END-EXEC",
+        variables_read=["WS-CUENTA"],
+        variables_written=["WS-SALDO"],
+        sql_access=[sql_access],
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    effect = effects[0]
+    assert effect.reads == ["WS-CUENTA"]
+    assert effect.writes == ["WS-SALDO"]
+    assert effect.sql_predicate_text == "WHERE CUENTA = :WS-CUENTA"
+    assert "SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED" not in effect.diagnostic_codes
+
+
+def test_exec_sql_select_expression_unresolved_var_publishes_no_partial_direction() -> None:
+    """Correccion pre-commit posterior a la entrega inicial de C3-B: un
+    SELECT con una expresion en la lista de columnas
+    (p. ej. ``SELECT :WS-FACTOR * SALDO INTO :WS-RESULTADO FROM CUENTAS
+    WHERE ID = :WS-ID``) deja ``WS-FACTOR`` en ``host_variables`` (legacy)
+    pero NUNCA en ``input_host_variables``/``output_host_variables`` (solo
+    aparece en la lista SELECT, nunca en INTO/WHERE/SET/VALUES). Publicar
+    reads=[WS-ID]/writes=[WS-RESULTADO] fabricaria un DATA_DEPENDS_ON
+    incompleto: el efecto debe quedar con reads/writes vacios y el
+    diagnostico dedicado, nunca SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED
+    (que implica que NINGUNA direccion se demostro, falso aqui)."""
+    sql_access = CanonicalSqlAccess(
+        table="CUENTAS",
+        operation=TableAccessOperation.READS,
+        predicate_text="WHERE ID = :WS-ID",
+        host_variables=["WS-FACTOR", "WS-RESULTADO", "WS-ID"],
+        input_host_variables=["WS-ID"],
+        output_host_variables=["WS-RESULTADO"],
+        predicate_host_variables=["WS-ID"],
+        location_kind=LocationKind.UNKNOWN,
+    )
+    # StatementExtractor.convertExecSql (Java) ya aplica el gate de
+    # completitud: como WS-FACTOR queda fuera de input/output, el
+    # CanonicalStatement real nunca llega a poblar variables_read/written
+    # para esta sentencia -- se replica ese mismo resultado aqui.
+    stmt = _statement(
+        statement_id="P1::A::1::EXEC_SQL",
+        kind=StatementKind.EXEC_SQL,
+        source_text="EXEC SQL SELECT :WS-FACTOR * SALDO INTO :WS-RESULTADO FROM CUENTAS "
+        "WHERE ID = :WS-ID END-EXEC",
+        variables_read=[],
+        variables_written=[],
+        sql_access=[sql_access],
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    effect = effects[0]
+    assert effect.reads == []
+    assert effect.writes == []
+    assert effect.sql_host_variables == ["WS-FACTOR", "WS-ID", "WS-RESULTADO"]
+    assert "SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED" in effect.diagnostic_codes
+    assert "SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED" not in effect.diagnostic_codes
+    assert "SQL_INDICATOR_VARIABLE_DIRECTION_UNSUPPORTED" not in effect.diagnostic_codes
+
+
+def test_exec_sql_coalesce_expression_unresolved_var_publishes_no_partial_direction() -> None:
+    """Mismo comportamiento que el caso anterior para
+    ``SELECT COALESCE(:WS-A, SALDO) INTO :WS-X FROM CUENTAS WHERE ID=:WS-ID``:
+    WS-A queda dentro de una funcion en la lista SELECT, nunca en
+    INTO/WHERE -- direccion parcial, nunca publicada."""
+    sql_access = CanonicalSqlAccess(
+        table="CUENTAS",
+        operation=TableAccessOperation.READS,
+        predicate_text="WHERE ID = :WS-ID",
+        host_variables=["WS-A", "WS-X", "WS-ID"],
+        input_host_variables=["WS-ID"],
+        output_host_variables=["WS-X"],
+        predicate_host_variables=["WS-ID"],
+        location_kind=LocationKind.UNKNOWN,
+    )
+    stmt = _statement(
+        statement_id="P1::A::1::EXEC_SQL",
+        kind=StatementKind.EXEC_SQL,
+        source_text="EXEC SQL SELECT COALESCE(:WS-A, SALDO) INTO :WS-X FROM CUENTAS "
+        "WHERE ID = :WS-ID END-EXEC",
+        variables_read=[],
+        variables_written=[],
+        sql_access=[sql_access],
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    effect = effects[0]
+    assert effect.reads == []
+    assert effect.writes == []
+    assert "SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED" in effect.diagnostic_codes
+
+
+def test_exec_sql_indicator_variable_never_assigns_direction() -> None:
+    """Fase 15B3-C3-B, seccion 15: una variable indicadora nunca recibe
+    direccion -- reads/writes permanecen vacios y se agrega el
+    diagnostico dedicado, incluso si host_variables no esta vacio."""
+    sql_access = CanonicalSqlAccess(
+        table="CUENTAS",
+        operation=TableAccessOperation.READS,
+        host_variables=["WS-SALDO", "WS-IND", "WS-CUENTA"],
+        has_indicator_variables=True,
+        location_kind=LocationKind.UNKNOWN,
+    )
+    stmt = _statement(
+        statement_id="P1::A::1::EXEC_SQL",
+        kind=StatementKind.EXEC_SQL,
+        source_text="EXEC SQL SELECT SALDO INTO :WS-SALDO:WS-IND FROM CUENTAS "
+        "WHERE CUENTA = :WS-CUENTA END-EXEC",
+        sql_access=[sql_access],
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    effect = effects[0]
+    assert effect.reads == []
+    assert effect.writes == []
+    assert "SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED" in effect.diagnostic_codes
+    assert "SQL_INDICATOR_VARIABLE_DIRECTION_UNSUPPORTED" in effect.diagnostic_codes
 
 
 def test_exec_sql_host_variables_are_sorted_and_deduplicated() -> None:

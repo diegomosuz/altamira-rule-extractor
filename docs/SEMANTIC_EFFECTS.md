@@ -95,7 +95,7 @@ No se invoca automáticamente desde `ingest`, `resume`, la API ni la UI.
 | `SET_VALUE` | `SET` ordinario, o `SET` no resuelto contra una condición 88 conocida | Nunca distingue `SET` de índice de `SET ... UP/DOWN BY`. |
 | `SET_CONDITION_TRUE` / `SET_CONDITION_FALSE` | `SET condición-88 TO TRUE`/`TO FALSE` resuelto estructuralmente (Fase 3, ver `docs/LEVEL_88_SUPPORT.md`) | Siempre `FULLY_SUPPORTED` cuando aparece; `condition_name`/`parent_data_item`/`condition_values` conservan la evidencia; `literal` solo se puebla para un VALUE simple sin THRU. |
 | `CONTROL_TRANSFER` | `GO TO`/`PERFORM` | `PERFORM` siempre `PARTIALLY_SUPPORTED` (UNTIL/VARYING pueden no estar representados). |
-| `EXECUTE_SQL` | Cada `CanonicalSqlAccess` de un `EXEC SQL` | `predicate_text` nunca se copia al efecto; `reads`/`writes` permanecen vacíos salvo evidencia inequívoca (ver "Variables host SQL: dirección no verificable" más abajo). |
+| `EXECUTE_SQL` | Cada `CanonicalSqlAccess` de un `EXEC SQL` | `predicate_text` se propaga verbatim a `sql_predicate_text`. Desde la Fase 15B3-C3-B, `reads`/`writes` SÍ se pueblan para la forma simple y **completa** de SELECT/INSERT/UPDATE/DELETE (ver "Variables host SQL: dirección" más abajo); permanecen vacíos para JOIN/subconsulta/variable indicadora/sintaxis no reconocida/clasificación parcial (expresión en la lista SELECT). |
 | `CALL_PROGRAM` | `CALL` (literal o dinámico), Fase 6 (`docs/INTERPROCEDURAL_CALL_LINKAGE.md`) | Nunca puebla `writes`/`target_data_items`: `BY REFERENCE`/`RETURNING` describen únicamente un efecto **potencial**, capturado exclusivamente en `call_arguments`/`call_returning_data_item`. `FULLY_SUPPORTED` solo para `CALL` literal con todos los argumentos de forma estructural identificable, sin `RETURNING` ni ramas `ON EXCEPTION`; cualquier otra combinación es `PARTIALLY_SUPPORTED`, nunca `UNSUPPORTED` (el `CALL` en sí siempre se reconoce estructuralmente). |
 | `PRESERVED_STATEMENT` | `StatementKind.OTHER`, `StatementKind.PROGRAM_TERMINATION` (Fase 7b: `GOBACK`/`STOP RUN`/`EXIT PROGRAM`, ninguno mueve/calcula/asigna datos), `MOVE CORRESPONDING`/grupo no resoluble, o precondiciones faltantes de `COMPUTE`/`GO TO`/`PERFORM`/`EXEC SQL` | Nunca afirma `writes`, `target_data_items` ni `literal`. |
 | `UNSUPPORTED_STATEMENT` | Cada entrada de `CanonicalProgram.unsupported_constructs` | Declaración explícita del propio productor del artefacto, no una inferencia de este analizador. |
@@ -112,43 +112,103 @@ LINKAGE, ver `docs/INTERPROCEDURAL_CALL_LINKAGE.md`). Deliberadamente
 **siguen sin existir** `CICS_LINK`, `READ_FILE` ni `WRITE_FILE`: requieren
 información que el parser no conserva de forma confiable hoy.
 
-## Variables host SQL: dirección no verificable
+## Variables host SQL: dirección
 
-**Auditoría** (`CanonicalSqlAccess`, `EmbeddedSqlExtractor.java`,
-`EmbeddedSqlExtractorTest`): `CanonicalSqlAccess.host_variables` es una
-**única lista plana**. El extractor Java (`hostVariablesOf`) la construye
-con un único regex (`:([A-Za-z][A-Za-z0-9-]*)`) aplicado sobre **todo** el
-texto crudo de la sentencia SQL — cláusulas `INTO`, `WHERE`, `VALUES` y
-`SET` indistintamente — sin registrar de cuál provino cada variable. El
-caso real que lo demuestra (`EmbeddedSqlExtractorTest.
-selectWithHostVariablesAndPredicate`):
+**Auditoría original** (Fase 15B3-C3-A): `CanonicalSqlAccess.host_variables`
+era una **única lista plana**. El extractor Java (`hostVariablesOf`) la
+construía con un único regex (`:([A-Za-z][A-Za-z0-9-]*)`) aplicado sobre
+**todo** el texto crudo de la sentencia SQL — cláusulas `INTO`, `WHERE`,
+`VALUES` y `SET` indistintamente — sin registrar de cuál provino cada
+variable. `host_variables` se **conserva sin cambios** por compatibilidad
+(el mismo caso real: `EmbeddedSqlExtractorTest.
+selectWithHostVariablesAndPredicate`).
+
+**Corrección (Fase 15B3-C3-B)**: `EmbeddedSqlExtractor` ahora segmenta el
+texto crudo por palabra clave (`INTO`/`SET`/`VALUES`/`WHERE`) — nunca
+gramática SQL, sigue siendo regex sobre delimitadores literales — y
+puebla `CanonicalSqlAccess.input_host_variables`/`output_host_variables`/
+`predicate_host_variables` cuando esa segmentación es estructuralmente
+segura (sin JOIN, sin variable indicadora `:VAR:IND`, sin sintaxis no
+reconocida). Reglas por verbo (`EmbeddedSqlExtractorTest`, casos
+`selectIntoAssignsOutputAndWherePredicateAssignsInput`/
+`insertValuesAssignsInputNeverOutput`/
+`updateSetAndWhereAssignInputNeverOutput`/
+`deleteWhereAssignsInputNeverOutput`):
 
 ```sql
 SELECT SALDO INTO :WS-SALDO FROM CUENTAS WHERE ID_CUENTA = :WS-CUENTA-ID
 ```
 
-produce `host_variables = [WS-SALDO, WS-CUENTA-ID]` en una sola lista: `WS-
-SALDO` es **salida** (`INTO`), `WS-CUENTA-ID` es **entrada** (`WHERE`), y
-el contrato no distingue cuál es cuál. `operation` (`READS`/`WRITES`/
-`UPDATES`/`INSERTS`) describe la operación sobre la **tabla** (mapeo
-léxico de la palabra clave SQL: `SELECT`→`READS`, `INSERT`→`INSERTS`,
-`UPDATE`→`UPDATES`, `DELETE`→`WRITES`), nunca la dirección de una variable
-individual — usarla para inferir `reads`/`writes` de las variables host
-sería una inferencia semántica no respaldada por el contrato, exactamente
-el tipo de "no inventar" que este proyecto prohíbe.
+produce ahora `output_host_variables=[WS-SALDO]` (INTO),
+`input_host_variables=predicate_host_variables=[WS-CUENTA-ID]` (WHERE) —
+`operation` (`READS`/`WRITES`/`UPDATES`/`INSERTS`) sigue describiendo
+únicamente la operación sobre la **tabla**, nunca la dirección de una
+variable individual; INSERT/UPDATE/DELETE **nunca** infieren `writes`
+sobre una variable host (una `SET COL=:A` nunca implica que `:A` se
+escribe, solo que la columna SQL se actualiza).
+`StatementExtractor.convertExecSql` agrega esta dirección directamente a
+`CanonicalStatement.variables_read`/`variables_written` (ver
+`SqlDirectedDataFlowTest`), lo que habilita `DATA_DEPENDS_ON` entre
+Paragraphs a través de SQL sin ningún cambio en `dependency_builder.py`
+(agnóstico a `StatementKind`, ver
+`test_dependency_builder.py::test_data_dependency_through_exec_sql_select_into`).
 
-**Diseño aplicado**: `SemanticEffect.sql_host_variables: list[str]` es un
-campo neutral (ordenado, sin duplicados, validado por contrato) donde se
-conservan todas las variables host de cada `CanonicalSqlAccess`.
-`reads`/`writes` de un efecto `EXECUTE_SQL` permanecen **vacíos** mientras
-no exista evidencia estructural inequívoca de dirección; cuando hay
-variables host, se agrega `diagnostic_code=
-SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED`. Un validador de contrato impide
-que ambos coexistan (`reads`/`writes` poblados junto con ese diagnóstico)
-para que esta clase de inferencia no pueda reintroducirse silenciosamente.
-No se agregó ningún parser SQL nuevo ni regex adicional sobre
-`predicate_text`/`source_text`: la limitación se declara, no se resuelve
-por adivinación.
+**Corrección pre-commit posterior a la entrega inicial de C3-B (clasificación
+parcial)**: `output_host_variables`/`input_host_variables` reflejan
+únicamente `INTO`/`WHERE`/`SET`/`VALUES` — nunca una expresión dentro de la
+lista de columnas del `SELECT`. Una sentencia como
+`SELECT :WS-FACTOR * SALDO INTO :WS-RESULTADO FROM CUENTAS WHERE ID=:WS-ID`
+deja `WS-FACTOR` presente en `host_variables` (legacy) pero **fuera** de
+`input_host_variables ∪ output_host_variables`. Publicar
+`variables_read=[WS-ID]`/`variables_written=[WS-RESULTADO]` en ese caso
+fabricaría un `DATA_DEPENDS_ON` incompleto (la dependencia real vía
+`WS-FACTOR` quedaría invisible sin ningún aviso). Por eso
+`StatementExtractor.convertExecSql` exige que **toda** entrada de
+`host_variables` esté contenida en esa unión antes de promoverla a
+`CanonicalStatement.variables_read`/`variables_written`
+(`isDirectionFullyResolved`, `SqlDirectedDataFlowTest.
+selectExpressionWithUnresolvedHostVariableNeverPromotesPartialDirection`);
+si algún access de la sentencia queda incompleto, `variables_read`/
+`variables_written` quedan **vacíos para toda la sentencia** (nunca se
+mezclan accesses completos e incompletos). `_normalize_exec_sql` replica el
+mismo cálculo sobre `CanonicalSqlAccess` y agrega
+`diagnostic_code=SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED` — distinto de
+`SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED` (que implica que **ninguna**
+variable tiene dirección): aquí sí hay variables dirigidas, pero no todas
+(`test_semantic_effects_analyzer.py::
+test_exec_sql_select_expression_unresolved_var_publishes_no_partial_direction`,
+`test_dependency_builder.py::
+test_data_dependency_absent_when_exec_sql_direction_partially_unresolved`).
+`EmbeddedSqlExtractor` **no cambió**: sigue sin interpretar expresiones,
+funciones (`COALESCE`, etc.) ni gramática SQL — el fix es exclusivamente de
+completitud en la promoción de la dirección ya extraída, nunca una
+ampliación del subconjunto soportado.
+
+**Cuándo permanece sin resolver**: JOIN explícito (la sentencia completa
+se declara `unsupported`, nunca una tabla parcial — ver más abajo),
+variable indicadora (`:VAR:IND`, degrada TODA la sentencia a dirección no
+resuelta más `diagnostic_code=
+SQL_INDICATOR_VARIABLE_DIRECTION_UNSUPPORTED`), subconsulta, cursor, SQL
+dinámico, o cualquier forma no reconocida por los delimitadores de
+palabra clave. En esos casos, `reads`/`writes` permanecen **vacíos** y
+`diagnostic_code=SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED` se agrega (un
+validador de contrato impide que ambos coexistan). Sin parser SQL nuevo,
+sin gramática, sin inferencia por adivinación: la dirección se declara
+solo cuando el delimitador de palabra clave la demuestra.
+
+## JOIN explícito: corrección de correctness (Fase 15B3-C3-B)
+
+**Auditoría 15B3-C3-A** encontró una violación real de no-silent-loss:
+`FROM CUENTAS A JOIN MOVIMIENTOS B ON ...` (sin coma) producía
+`table=CUENTAS`, `interpreted=true` — la tabla `MOVIMIENTOS` se perdía
+silenciosamente, sin warning, presentando un resultado parcial como si
+fuera completo. **Corregido**: `EmbeddedSqlExtractor` detecta cualquier
+variante de `JOIN` (`INNER`/`LEFT`/`RIGHT`/`FULL`) en la cláusula `FROM`
+y devuelve la sentencia completa como `unsupported` — nunca una tabla
+parcial (`EmbeddedSqlExtractorTest.
+selectWithExplicitJoinIsUnsupportedNeverPartialTable` y variantes por
+tipo de JOIN). El caso ya soportado de múltiples tablas separadas por
+coma (`FROM CUENTAS A, MOVIMIENTOS B`) no se ve afectado.
 
 ## `SemanticSupportStatus`
 

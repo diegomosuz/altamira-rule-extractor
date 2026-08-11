@@ -89,6 +89,7 @@ class _NormalizeContext:
         sql_operation: TableAccessOperation | None = None,
         sql_tables: list[str] | None = None,
         sql_host_variables: list[str] | None = None,
+        sql_predicate_text: str | None = None,
         condition_name: str | None = None,
         parent_data_item: str | None = None,
         condition_values: list[str] | None = None,
@@ -131,6 +132,7 @@ class _NormalizeContext:
             sql_operation=sql_operation,
             sql_tables=sql_tables or [],
             sql_host_variables=sql_host_variables or [],
+            sql_predicate_text=sql_predicate_text,
             condition_name=condition_name,
             parent_data_item=parent_data_item,
             condition_values=condition_values or [],
@@ -495,21 +497,43 @@ def _normalize_perform(ctx: _NormalizeContext) -> list[SemanticEffect]:
 
 
 def _normalize_exec_sql(ctx: _NormalizeContext) -> list[SemanticEffect]:
-    """`CanonicalSqlAccess.host_variables` es una unica lista plana que el
-    extractor Java (`EmbeddedSqlExtractor.hostVariablesOf`) construye con
-    un regex sobre TODO el texto crudo de la sentencia -- INTO, WHERE,
-    VALUES y SET indistintamente, sin distinguir entrada de salida. Un
-    `SELECT ... INTO :destino ... WHERE campo = :filtro` demuestra el
-    caso: ambas variables terminan en la misma lista, aunque `:destino`
-    es salida y `:filtro` es entrada (`EmbeddedSqlExtractorTest.
-    selectWithHostVariablesAndPredicate`). `operation` (READS/WRITES/
-    UPDATES/INSERTS) describe la operacion sobre la TABLA, nunca la
-    direccion de cada variable individual -- nunca se usa para inferir
-    reads/writes. Mientras no exista evidencia estructural inequivoca,
+    """`CanonicalSqlAccess.host_variables` sigue siendo una unica lista
+    plana sin direccion, conservada por compatibilidad. Desde la Fase
+    15B3-C3-B, `EmbeddedSqlExtractor` SI distingue direccion para la forma
+    simple y no ambigua de cada verbo (`input_host_variables`/
+    `output_host_variables` de `CanonicalSqlAccess`, segmentando por
+    INTO/SET/VALUES/WHERE -- nunca gramatica SQL completa). Cuando esa
+    direccion esta demostrada Y ES COMPLETA -- toda entrada de
+    `host_variables` (legacy) queda contenida en `input_host_variables
+    union output_host_variables`, correccion pre-commit posterior a la
+    entrega inicial de C3-B --, `reads`/`writes` de este efecto se pueblan
+    DIRECTAMENTE desde `stmt.variables_read`/`stmt.variables_written` (ya
+    agregados por el extractor Java para esta sentencia bajo el mismo gate
+    de completitud, ver `StatementExtractor.convertExecSql`/
+    `isDirectionFullyResolved`) -- nunca recalculados aqui. Un
+    `SELECT ... INTO :destino ... WHERE campo = :filtro` ya demuestra
+    `reads=[filtro]`/`writes=[destino]` (`EmbeddedSqlExtractorTest.
+    selectIntoAssignsOutputAndWherePredicateAssignsInput`).
+
+    Cuando existe direccion mas alguna variable host SIN clasificar (p.ej.
+    `SELECT :FACTOR * SALDO INTO :X ...`, donde `:FACTOR` aparece en la
+    lista de columnas y nunca en INTO/WHERE/SET/VALUES), publicar
+    `reads`/`writes` parciales fabricaria un `DATA_DEPENDS_ON` incompleto y
+    enganoso -- `reads`/`writes` quedan vacios y se emite
+    `SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED`. Cuando la direccion NO esta
+    demostrada en absoluto (JOIN -- nunca llega aqui, se reporta
+    `unsupported` antes --, variable indicadora, sintaxis no reconocida),
     `reads`/`writes` permanecen vacios y toda variable host se conserva
-    unicamente en el campo neutral `sql_host_variables` (ordenado, sin
-    duplicados) junto con `diagnostic_code=
-    SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED`."""
+    unicamente en el campo neutral `sql_host_variables` junto con
+    `diagnostic_code=SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED` (mas
+    `SQL_INDICATOR_VARIABLE_DIRECTION_UNSUPPORTED` especificamente para el
+    caso de variable indicadora). Los tres casos (completo/parcial/no
+    resuelto) son mutuamente excluyentes: nunca se emite mas de un
+    diagnostico de direccion para el mismo access (indicator variables
+    degradan `input_host_variables`/`output_host_variables` a vacio en el
+    extractor, por lo que jamas coexisten con una direccion parcial).
+    `sql_predicate_text` propaga `CanonicalSqlAccess.predicate_text`
+    verbatim (texto crudo de WHERE, nunca parseado)."""
     stmt = ctx.stmt
     if not stmt.sql_access:
         return [
@@ -524,26 +548,73 @@ def _normalize_exec_sql(ctx: _NormalizeContext) -> list[SemanticEffect]:
     effects: list[SemanticEffect] = []
     for index, access in enumerate(stmt.sql_access):
         sql_host_variables = sorted(set(access.host_variables))
+        directed_host_variables = set(access.input_host_variables) | set(
+            access.output_host_variables
+        )
+        unresolved_host_variables = sorted(set(access.host_variables) - directed_host_variables)
+        has_any_direction = bool(access.input_host_variables or access.output_host_variables)
+        direction_resolved = (
+            has_any_direction
+            and not unresolved_host_variables
+            and not access.has_indicator_variables
+        )
         diagnostic_codes = ["EXEC_SQL_BASIC_ACCESS_ONLY"]
-        if sql_host_variables:
-            diagnostic_codes.append("SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED")
+        reads: list[str] = []
+        writes: list[str] = []
+        if direction_resolved:
+            reads = list(stmt.variables_read)
+            writes = list(stmt.variables_written)
+            explanation = (
+                "Operacion y tabla se conservan; sin JOIN, subconsulta, CTE, cursores ni SQL "
+                "dinamico. El predicado WHERE se conserva verbatim en sql_predicate_text, "
+                "nunca parseado. Direccion de variables host demostrada COMPLETA para la forma "
+                "simple de esta sentencia (INTO/SET/VALUES/WHERE identificados sin ambiguedad, "
+                "toda variable host clasificada): reads/writes reflejan "
+                "CanonicalStatement.variables_read/variables_written."
+            )
+        elif has_any_direction and unresolved_host_variables:
+            diagnostic_codes.append("SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED")
+            explanation = (
+                "Operacion y tabla se conservan; sin JOIN, subconsulta, CTE, cursores ni SQL "
+                "dinamico. El predicado WHERE nunca se copia completo a este artefacto. Se "
+                "identificaron algunas variables host, pero no todas pudieron clasificarse "
+                "direccionalmente (probable expresion o funcion en la lista de columnas del "
+                "SELECT, p. ej. \":FACTOR * SALDO\" o \"COALESCE(:A, SALDO)\"): por seguridad no "
+                "se publico directed data flow para esta sentencia. reads/writes quedan vacios "
+                "para evitar un DATA_DEPENDS_ON parcial y enganoso; todas las variables host "
+                "(clasificadas y sin clasificar) se listan en sql_host_variables."
+            )
+        else:
+            if sql_host_variables:
+                diagnostic_codes.append("SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED")
+            if access.has_indicator_variables:
+                diagnostic_codes.append("SQL_INDICATOR_VARIABLE_DIRECTION_UNSUPPORTED")
+            explanation = (
+                "Operacion y tabla se conservan; sin JOIN, subconsulta, CTE, cursores ni SQL "
+                "dinamico. El predicado WHERE nunca se copia completo a este artefacto. "
+                + (
+                    "La sentencia contiene una variable indicadora (\":VAR:IND\"): nunca se le "
+                    "asigna direccion a ninguna variable de esta sentencia. "
+                    if access.has_indicator_variables
+                    else "El parser no pudo demostrar la direccion de forma estructuralmente "
+                    "segura para esta forma de la sentencia. "
+                )
+                + "Las variables host se listan en sql_host_variables sin asignarlas a reads "
+                "ni writes."
+            )
         effects.append(
             ctx.build(
                 SemanticEffectKind.EXECUTE_SQL,
                 SemanticSupportStatus.PARTIALLY_SUPPORTED,
                 ordinal=index,
+                reads=reads,
+                writes=writes,
                 sql_operation=access.operation,
                 sql_tables=[access.table],
                 sql_host_variables=sql_host_variables,
+                sql_predicate_text=access.predicate_text,
                 diagnostic_codes=diagnostic_codes,
-                explanation=(
-                    "Operacion y tabla se conservan; sin JOIN, subconsulta, CTE, cursores "
-                    "ni SQL dinamico. El predicado WHERE nunca se copia completo a este "
-                    "artefacto. El parser actual conserva las variables host declaradas "
-                    "pero no distingue contractualmente cuales son de entrada (WHERE/"
-                    "VALUES/SET) y cuales de salida (INTO): se listan en "
-                    "sql_host_variables sin asignarlas a reads ni writes."
-                ),
+                explanation=explanation,
             )
         )
     return effects

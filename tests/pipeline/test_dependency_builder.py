@@ -236,6 +236,99 @@ def test_data_dependency_qualified_match_between_paragraphs() -> None:
     assert not warnings
 
 
+def test_data_dependency_through_exec_sql_select_into() -> None:
+    """Fase 15B3-C3-B, seccion 10 (obligatorio): dependency_builder.py NO
+    se modifica -- DATA_DEPENDS_ON a traves de SQL debe funcionar
+    automaticamente porque StatementExtractor.convertExecSql ya puebla
+    CanonicalStatement.variables_read/variables_written para un EXEC_SQL
+    con direccion demostrada (dependency_builder es agnostico a
+    StatementKind, solo lee esos dos campos). Caso E2E obligatorio del
+    enunciado: Paragraph A hace SELECT SALDO INTO :WS-SALDO WHERE
+    CUENTA=:WS-CUENTA; Paragraph B hace IF WS-SALDO < WS-LIMITE."""
+    select_stmt = _statement(
+        statement_id="P1::A::0::EXEC_SQL",
+        kind=StatementKind.EXEC_SQL,
+        variables_read=["WS-CUENTA"],
+        variables_written=["WS-SALDO"],
+        line_start=5,
+        line_end=9,
+    )
+    para_a = _paragraph("CONSULTAR-SALDO-PARA", [select_stmt])
+    if_stmt = _statement(
+        statement_id="P1::B::0::IF",
+        kind=StatementKind.IF,
+        variables_read=["WS-SALDO", "WS-LIMITE"],
+        line_start=20,
+        line_end=20,
+    )
+    para_b = _paragraph("EVALUAR-SALDO-PARA", [if_stmt])
+    program = _program(
+        paragraphs=[para_a, para_b],
+        data_items=[_data_item("WS-SALDO"), _data_item("WS-CUENTA"), _data_item("WS-LIMITE")],
+    )
+
+    deps, warnings = build_dependencies(
+        [ProgramInput(program, IDENTITY)], source_package_hash=VALID_HASH
+    )
+
+    data_deps = [d for d in deps if d.dependency_type == DependencyType.DATA_DEPENDS_ON]
+    assert len(data_deps) == 1
+    dep = data_deps[0]
+    program_id_ = IDENTITY.program_id(program_name="PROG1", source_hash=program.source_hash)
+    # Sentido verificado (nunca asumido por el nombre, ver seccion 10):
+    # from_paragraph_id es quien ESCRIBE (origen del dato), to_paragraph_id
+    # es quien LEE (consumidor) -- mismo sentido que
+    # test_data_dependency_qualified_match_between_paragraphs, coherente
+    # con Q2 (data_origin)-[:DATA_DEPENDS_ON*]->(sink).
+    assert dep.from_paragraph_id == paragraph_id(program_id_, "CONSULTAR-SALDO-PARA")
+    assert dep.to_paragraph_id == paragraph_id(program_id_, "EVALUAR-SALDO-PARA")
+    assert dep.variables == ["WS-SALDO"]
+    assert not warnings
+
+
+def test_data_dependency_absent_when_exec_sql_direction_partially_unresolved() -> None:
+    """Correccion pre-commit posterior a la entrega inicial de C3-B: un
+    EXEC SQL con una expresion en la lista SELECT (p. ej.
+    ``SELECT :WS-FACTOR * SALDO INTO :WS-RESULTADO FROM CUENTAS
+    WHERE ID = :WS-ID``) deja WS-FACTOR fuera de input/output -- el gate
+    de completitud de StatementExtractor.convertExecSql (Java) NUNCA puebla
+    CanonicalStatement.variables_read/variables_written en ese caso
+    (ambos quedan vacios, se replica aqui). dependency_builder.py NO se
+    modifica: al recibir variables_written=[] para el EXEC SQL, nunca
+    construye una arista DATA_DEPENDS_ON hacia el Paragraph B que lee
+    WS-RESULTADO -- publicar esa arista habria sido un lineage parcial y
+    enganoso (WS-FACTOR nunca se contabilizo)."""
+    select_expression_stmt = _statement(
+        statement_id="P1::A::0::EXEC_SQL",
+        kind=StatementKind.EXEC_SQL,
+        variables_read=[],
+        variables_written=[],
+        line_start=5,
+        line_end=9,
+    )
+    para_a = _paragraph("CONSULTAR-FACTOR-PARA", [select_expression_stmt])
+    if_stmt = _statement(
+        statement_id="P1::B::0::IF",
+        kind=StatementKind.IF,
+        variables_read=["WS-RESULTADO", "WS-LIMITE"],
+        line_start=20,
+        line_end=20,
+    )
+    para_b = _paragraph("EVALUAR-RESULTADO-PARA", [if_stmt])
+    program = _program(
+        paragraphs=[para_a, para_b],
+        data_items=[_data_item("WS-RESULTADO"), _data_item("WS-LIMITE")],
+    )
+
+    deps, warnings = build_dependencies(
+        [ProgramInput(program, IDENTITY)], source_package_hash=VALID_HASH
+    )
+
+    data_deps = [d for d in deps if d.dependency_type == DependencyType.DATA_DEPENDS_ON]
+    assert data_deps == []
+    assert not warnings
+
+
 def test_data_dependency_confidence_seven_for_unique_simple_name_match() -> None:
     write_stmt = _statement(
         statement_id="P1::A::0::MOVE",

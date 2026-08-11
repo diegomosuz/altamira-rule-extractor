@@ -149,12 +149,32 @@ class CanonicalConditionName(AltamiraBaseModel):
 
 class CanonicalSqlAccess(AltamiraBaseModel):
     """Acceso SQL conservado como texto/estructura suficiente para derivar
-    la relacion directa Paragraph->Table en el grafo semantico."""
+    la relacion directa Paragraph->Table en el grafo semantico.
+
+    `input_host_variables`/`output_host_variables`/`predicate_host_variables`/
+    `selected_columns` (Fase 15B3-C3-B): aditivos, retrocompatibles con
+    `host_variables` (que se conserva sin cambios, lista plana sin
+    direccion). Poblados por `EmbeddedSqlExtractor` UNICAMENTE cuando la
+    direccion/columna es estructuralmente segura para la forma simple de
+    cada verbo (segmentacion por palabra clave INTO/SET/VALUES/WHERE,
+    nunca gramatica SQL) -- vacios en cualquier otro caso, nunca inferidos
+    de forma dudosa. `output_host_variables`/`selected_columns` preservan
+    orden POSICIONAL exacto (nunca deduplicados: la correspondencia
+    columna->host-variable depende de la posicion). `input_host_variables`/
+    `predicate_host_variables` son ordenados-sin-duplicados, igual que
+    `host_variables`. `has_indicator_variables=True` (variable indicadora
+    ":VAR:IND" detectada) fuerza los cuatro campos nuevos a listas vacias
+    -- nunca se le asigna direccion a una variable indicadora."""
 
     table: str = Field(min_length=1)
     operation: TableAccessOperation
     predicate_text: str | None = None
     host_variables: list[str] = Field(default_factory=list)
+    input_host_variables: list[str] = Field(default_factory=list)
+    output_host_variables: list[str] = Field(default_factory=list)
+    predicate_host_variables: list[str] = Field(default_factory=list)
+    selected_columns: list[str] = Field(default_factory=list)
+    has_indicator_variables: bool = False
     source_file: RelativePath | None = None
     line_start: int | None = Field(default=None, ge=1)
     line_end: int | None = Field(default=None, ge=1)
@@ -168,6 +188,47 @@ class CanonicalSqlAccess(AltamiraBaseModel):
             line_end=self.line_end,
             location_kind=self.location_kind,
         )
+        return self
+
+    @model_validator(mode="after")
+    def _check_host_variable_names_not_empty(self) -> CanonicalSqlAccess:
+        all_names = (
+            *self.host_variables,
+            *self.input_host_variables,
+            *self.output_host_variables,
+            *self.predicate_host_variables,
+            *self.selected_columns,
+        )
+        if any(not name for name in all_names):
+            raise ValueError(
+                "CanonicalSqlAccess: host_variables/selected_columns nunca admite un "
+                "nombre vacio"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_selected_columns_matches_output_arity(self) -> CanonicalSqlAccess:
+        if self.selected_columns and len(self.selected_columns) != len(self.output_host_variables):
+            raise ValueError(
+                "CanonicalSqlAccess: selected_columns solo puede declararse cuando su "
+                "longitud coincide exactamente con output_host_variables (correspondencia "
+                "posicional demostrada) -- nunca un pairing parcial/dudoso"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_indicator_variables_never_carry_direction(self) -> CanonicalSqlAccess:
+        if self.has_indicator_variables and (
+            self.input_host_variables
+            or self.output_host_variables
+            or self.predicate_host_variables
+            or self.selected_columns
+        ):
+            raise ValueError(
+                "CanonicalSqlAccess: has_indicator_variables=True nunca puede coexistir con "
+                "input_host_variables/output_host_variables/predicate_host_variables/"
+                "selected_columns poblados -- una variable indicadora nunca recibe direccion"
+            )
         return self
 
 

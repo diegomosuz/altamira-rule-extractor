@@ -104,15 +104,30 @@ class SemanticEffect(AltamiraBaseModel):
     `source_data_items`: no hay una variable origen, solo un literal).
 
     `sql_host_variables` es un campo NEUTRAL (sin direccion) para variables
-    host de un EXEC SQL: `CanonicalSqlAccess.host_variables` es una unica
-    lista plana que el extractor Java construye con un regex sobre TODO el
-    texto de la sentencia (INTO, WHERE, VALUES, SET indistintamente) -- no
-    hay evidencia estructural para decidir si una variable es entrada o
-    salida (ver auditoria en `docs/SEMANTIC_EFFECTS.md`). `reads`/`writes`
-    de un `EXECUTE_SQL` solo pueden poblarse cuando exista informacion
-    inequivoca; mientras eso no exista, permanecen vacios y la variable
-    aparece unicamente en `sql_host_variables` (ordenado, sin duplicados)
-    junto con `diagnostic_code=SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED`."""
+    host de un EXEC SQL, conservado sin cambios por compatibilidad
+    (`CanonicalSqlAccess.host_variables`, lista plana). Desde la Fase
+    15B3-C3-B, `reads`/`writes` de un `EXECUTE_SQL` SI se pueblan --
+    directamente desde `CanonicalStatement.variables_read`/
+    `variables_written`, que a su vez ya reflejan la direccion demostrada
+    por `EmbeddedSqlExtractor` (`input_host_variables`/
+    `output_host_variables` de `CanonicalSqlAccess`) -- para la forma
+    simple y no ambigua de SELECT/INSERT/UPDATE/DELETE. Cuando la
+    direccion NO pudo demostrarse (JOIN, variable indicadora, sintaxis no
+    reconocida), `reads`/`writes` permanecen vacios y
+    `diagnostic_code=SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED` se conserva
+    (ver auditoria en `docs/SEMANTIC_EFFECTS.md`) -- nunca coexisten
+    (ver `_check_kind_specific_invariants`). Cuando la direccion esta
+    PARCIALMENTE demostrada -- alguna variable host clasificada, pero al
+    menos una de `host_variables` (legacy) fuera de `input_host_variables
+    union output_host_variables` (p. ej. un host variable dentro de una
+    expresion de la lista SELECT, nunca en INTO/WHERE/SET/VALUES) --
+    `reads`/`writes` tambien permanecen vacios (nunca un directed data flow
+    parcial) y se usa `diagnostic_code=SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED`
+    en su lugar, igualmente mutuamente excluyente con reads/writes
+    poblados. `sql_predicate_text` (Fase
+    15B3-C3-B) propaga `CanonicalSqlAccess.predicate_text` verbatim (texto
+    crudo de la clausula WHERE, nunca parseado) -- antes se perdia entre
+    `CanonicalSqlAccess` y `SemanticEffect`."""
 
     effect_id: str = Field(min_length=1)
     kind: SemanticEffectKind
@@ -128,6 +143,7 @@ class SemanticEffect(AltamiraBaseModel):
     sql_operation: TableAccessOperation | None = None
     sql_tables: list[str] = Field(default_factory=list)
     sql_host_variables: list[str] = Field(default_factory=list)
+    sql_predicate_text: str | None = None
     condition_name: str | None = None
     parent_data_item: str | None = None
     condition_values: list[str] = Field(default_factory=list)
@@ -180,6 +196,14 @@ class SemanticEffect(AltamiraBaseModel):
                     f"{label}: SQL_HOST_VARIABLE_DIRECTION_UNRESOLVED no puede coexistir "
                     "con reads/writes poblados (CanonicalSqlAccess no distingue direccion "
                     "de variables host: ver docs/SEMANTIC_EFFECTS.md)"
+                )
+            if "SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED" in self.diagnostic_codes and (
+                self.reads or self.writes
+            ):
+                raise ValueError(
+                    f"{label}: SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED no puede coexistir "
+                    "con reads/writes poblados (una direccion incompleta nunca publica "
+                    "directed data flow parcial: ver docs/SEMANTIC_EFFECTS.md)"
                 )
         elif self.kind == SemanticEffectKind.CALL_PROGRAM:
             if self.call_target_kind is None:

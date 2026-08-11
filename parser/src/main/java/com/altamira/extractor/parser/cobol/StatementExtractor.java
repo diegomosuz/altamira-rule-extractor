@@ -777,7 +777,9 @@ final class StatementExtractor {
         for (EmbeddedSqlExtractor.Access access : result.accesses()) {
             sqlAccess.add(new CanonicalSqlAccess(
                     access.table(), access.operation(), access.predicateText(), access.hostVariables(),
-                    loc.sourceFile(), loc.lineStart(), loc.lineEnd(), loc.kind()));
+                    access.inputHostVariables(), access.outputHostVariables(), access.predicateHostVariables(),
+                    access.selectedColumns(), access.hasIndicatorVariables(), loc.sourceFile(), loc.lineStart(),
+                    loc.lineEnd(), loc.kind()));
         }
         if (!result.interpreted()) {
             ctx.unsupported(
@@ -786,11 +788,69 @@ final class StatementExtractor {
                             + result.reason());
         }
 
+        // Fase 15B3-C3-B, seccion 8 (obligatorio): variables_read/
+        // variables_written del propio CanonicalStatement se pueblan desde
+        // la direccion YA demostrada por EmbeddedSqlExtractor -- union
+        // ordenada y sin duplicados entre los sql_access de esta sentencia
+        // (normalmente uno solo; un SELECT multi-tabla via coma comparte la
+        // MISMA direccion en todos sus accesos). Sin esto, CanonicalParagraph
+        // nunca agrega estas variables (ver CanonicalProgramExtractor.
+        // collectOrderedUnique) y dependency_builder.py nunca puede construir
+        // DATA_DEPENDS_ON a traves de SQL.
+        //
+        // Correccion pre-commit (Fase 15B3-C3-B): un access solo aporta a
+        // variablesRead/variablesWritten cuando su direccion esta
+        // COMPLETAMENTE resuelta -- toda entrada de hostVariables() (legacy)
+        // debe estar contenida en input_host_variables union
+        // output_host_variables (ver isDirectionFullyResolved). Un SELECT
+        // con una expresion en la lista de columnas (":FACTOR * SALDO",
+        // "COALESCE(:A, SALDO)") deja una host variable fuera de esa union
+        // -- publicar variablesRead/variablesWritten parciales en ese caso
+        // fabricaria un DATA_DEPENDS_ON incompleto y enganoso. Si CUALQUIER
+        // access de esta sentencia queda incompleto, ninguno aporta (nunca
+        // se mezclan accesses completos e incompletos dentro del mismo
+        // EXEC SQL).
+        LinkedHashSet<String> variablesRead = new LinkedHashSet<>();
+        LinkedHashSet<String> variablesWritten = new LinkedHashSet<>();
+        boolean allAccessesFullyResolved = !sqlAccess.isEmpty();
+        for (CanonicalSqlAccess access : sqlAccess) {
+            allAccessesFullyResolved &= isDirectionFullyResolved(access);
+        }
+        if (allAccessesFullyResolved) {
+            for (CanonicalSqlAccess access : sqlAccess) {
+                variablesRead.addAll(access.inputHostVariables());
+                variablesWritten.addAll(access.outputHostVariables());
+            }
+        }
+
         String id = nextId(StatementKind.EXEC_SQL);
         collected.add(new CanonicalStatement(
                 id, StatementKind.EXEC_SQL, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
-                loc.kind(), parentId, branchKind, null, null, null, List.of(), List.of(), List.of(),
-                List.of(), null, List.of(), List.copyOf(sqlAccess), null, null, List.of()));
+                loc.kind(), parentId, branchKind, null, null, null, List.of(), List.copyOf(variablesRead),
+                List.copyOf(variablesWritten), List.of(), null, List.of(), List.copyOf(sqlAccess), null, null,
+                List.of()));
+    }
+
+    /**
+     * {@code true} unicamente cuando toda entrada de {@code hostVariables()}
+     * (legacy, sin direccion) esta contenida en la union de {@code
+     * inputHostVariables()}/{@code outputHostVariables()} -- y existe al
+     * menos una variable dirigida, y no hay variable indicadora. Un SELECT
+     * con una expresion en la lista de columnas conserva un host variable
+     * fuera de esa union (p. ej. {@code :FACTOR} en
+     * {@code SELECT :FACTOR * SALDO INTO :X ...}): esta sentencia nunca
+     * debe reportarse como completamente dirigida.
+     */
+    private static boolean isDirectionFullyResolved(CanonicalSqlAccess access) {
+        if (access.hasIndicatorVariables()) {
+            return false;
+        }
+        if (access.inputHostVariables().isEmpty() && access.outputHostVariables().isEmpty()) {
+            return false;
+        }
+        Set<String> directed = new LinkedHashSet<>(access.inputHostVariables());
+        directed.addAll(access.outputHostVariables());
+        return directed.containsAll(access.hostVariables());
     }
 
     /**

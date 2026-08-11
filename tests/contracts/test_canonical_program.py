@@ -197,6 +197,65 @@ def test_sql_access_location_kind_is_enforced() -> None:
         make_sql_access(source_file=None, location_kind=LocationKind.EXACT)
 
 
+# --- Fase 15B3-C3-B: direccion de host variables ----------------------------
+
+
+def test_sql_access_direction_fields_default_to_empty_and_backward_compatible() -> None:
+    """JSON historico (sin los campos nuevos) sigue parseando identico:
+    los cuatro campos nuevos son opcionales, con default lista vacia."""
+    access = make_sql_access()
+    assert access.input_host_variables == []
+    assert access.output_host_variables == []
+    assert access.predicate_host_variables == []
+    assert access.selected_columns == []
+    assert access.has_indicator_variables is False
+
+
+def test_sql_access_accepts_demonstrated_direction() -> None:
+    access = make_sql_access(
+        operation=TableAccessOperation.READS,
+        input_host_variables=["WS-CUENTA"],
+        output_host_variables=["WS-SALDO"],
+        predicate_host_variables=["WS-CUENTA"],
+    )
+    assert access.input_host_variables == ["WS-CUENTA"]
+    assert access.output_host_variables == ["WS-SALDO"]
+
+
+def test_sql_access_rejects_empty_host_variable_name() -> None:
+    with pytest.raises(ValidationError):
+        make_sql_access(input_host_variables=[""])
+
+
+def test_sql_access_selected_columns_must_match_output_arity() -> None:
+    with pytest.raises(ValidationError):
+        make_sql_access(
+            operation=TableAccessOperation.READS,
+            output_host_variables=["WS-SALDO", "WS-ESTADO"],
+            selected_columns=["SALDO"],
+        )
+
+
+def test_sql_access_selected_columns_with_matching_arity_is_valid() -> None:
+    access = make_sql_access(
+        operation=TableAccessOperation.READS,
+        output_host_variables=["WS-SALDO", "WS-ESTADO"],
+        selected_columns=["SALDO", "ESTADO"],
+    )
+    assert access.selected_columns == ["SALDO", "ESTADO"]
+
+
+def test_sql_access_indicator_variables_cannot_carry_direction() -> None:
+    with pytest.raises(ValidationError):
+        make_sql_access(has_indicator_variables=True, input_host_variables=["WS-CUENTA"])
+
+
+def test_sql_access_indicator_variables_with_no_direction_is_valid() -> None:
+    access = make_sql_access(has_indicator_variables=True, host_variables=["WS-SALDO", "WS-IND"])
+    assert access.has_indicator_variables is True
+    assert access.input_host_variables == []
+
+
 def test_paragraph_location_kind_is_enforced() -> None:
     with pytest.raises(ValidationError):
         CanonicalParagraph(

@@ -1000,8 +1000,12 @@ constructs:
     notes: El bloque EXEC SQL como tal no se modela; se traduce a relaciones directas Paragraph-[READS|WRITES|UPDATES|INSERTS]->Table.
   - layer: DATA_FLOW
     status: PARTIALLY_SUPPORTED
-    notes: Las tablas referenciadas alimentan USES/READS/WRITES; las columnas y predicados SQL no se modelan
-      como data flow.
+    notes: 'Tablas referenciadas alimentan USES/READS/WRITES/UPDATES/INSERTS a nivel
+      Paragraph->Table; columnas SQL y predicados no se modelan como nodos propios.
+      Fase 15B3-C3-B: para la forma simple sin JOIN/subconsulta/indicator variable,
+      la direccion de host variables SI se demuestra y alimenta variables_read/
+      variables_written -> DATA_DEPENDS_ON (ver constructs SQL_SELECT/SQL_INSERT/
+      SQL_UPDATE/SQL_DELETE) -- sigue PARTIALLY_SUPPORTED por los casos restantes.'
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
@@ -2743,8 +2747,13 @@ constructs:
     evidence:
     - kind: CONTRACT_TEST
       reference: tests/pipeline/test_semantic_graph_builder.py
-    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
-      en esta capa.
+    - kind: UNIT_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/sql/EmbeddedSqlExtractorTest.java::deleteWhereAssignsInputNeverOutput
+    notes: 'Nivel tabla: Paragraph-[:WRITES]->Table (mecanismo generico
+      compartido, DELETE nunca tiene un valor TableAccessOperation propio).
+      Fase 15B3-C3-B: las variables de WHERE se declaran input_host_variables
+      y predicate_host_variables (identicas para DELETE); output_host_variables
+      siempre vacio (DELETE nunca escribe una variable host).'
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
@@ -2779,7 +2788,7 @@ constructs:
   graph_relationships:
   - WRITES
   fixtures:
-  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  - parser/src/test/resources/fixtures/comprehensive.cbl
   limitations:
   - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
     de EmbeddedSqlExtractor.
@@ -2817,8 +2826,13 @@ constructs:
     evidence:
     - kind: CONTRACT_TEST
       reference: tests/pipeline/test_semantic_graph_builder.py
-    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
-      en esta capa.
+    - kind: UNIT_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/sql/EmbeddedSqlExtractorTest.java::insertValuesAssignsInputNeverOutput
+    notes: 'Nivel tabla: Paragraph-[:INSERTS]->Table (mecanismo generico
+      compartido). Fase 15B3-C3-B: las variables de VALUES(...) se declaran
+      input_host_variables; output_host_variables siempre vacio (INSERT
+      nunca escribe una variable host, solo la tabla). Pairing
+      columna->valor fuera de alcance (seccion 7 del enunciado de la fase).'
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
@@ -2853,8 +2867,10 @@ constructs:
   graph_relationships:
   - INSERTS
   fixtures:
-  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  - parser/src/test/resources/fixtures/comprehensive.cbl
   limitations:
+  - Pairing columna->host-variable de INSERT (p. ej. (COL1,COL2) VALUES
+    (:A,:B)) fuera de alcance de 15B3-C3-B -- ver docs/SEMANTIC_EFFECTS.md.
   - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
     de EmbeddedSqlExtractor.
   domain_reviewed: false
@@ -2891,8 +2907,25 @@ constructs:
     evidence:
     - kind: CONTRACT_TEST
       reference: tests/pipeline/test_semantic_graph_builder.py
-    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
-      en esta capa.
+    - kind: UNIT_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/sql/EmbeddedSqlExtractorTest.java::selectIntoAssignsOutputAndWherePredicateAssignsInput
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py::test_exec_sql_select_into_with_demonstrated_direction_populates_reads_and_writes
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_dependency_builder.py::test_data_dependency_through_exec_sql_select_into
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/SqlDirectedDataFlowTest.java::selectExpressionWithUnresolvedHostVariableNeverPromotesPartialDirection
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py::test_exec_sql_select_expression_unresolved_var_publishes_no_partial_direction
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_dependency_builder.py::test_data_dependency_absent_when_exec_sql_direction_partially_unresolved
+    notes: 'Nivel tabla: Paragraph-[:READS]->Table (mecanismo generico compartido).
+      Fase 15B3-C3-B: forma simple y completa (INTO/WHERE sin JOIN/indicator,
+      toda host var clasificada) demuestra direccion: variables_read/written y
+      DATA_DEPENDS_ON reflejan INTO=salida/WHERE=entrada. Correccion pre-commit:
+      expresion en SELECT list con host var sin clasificar (ej. COALESCE) ->
+      direccion NO se publica, reads/writes vacios, diagnostic
+      SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED, sin DATA_DEPENDS_ON fabricado.'
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
@@ -2927,10 +2960,29 @@ constructs:
   graph_relationships:
   - READS
   fixtures:
-  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  - parser/src/test/resources/fixtures/comprehensive.cbl
+  - parser/src/test/resources/fixtures/sql-directed-data-flow.cbl
   limitations:
-  - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
-    de EmbeddedSqlExtractor.
+  - 'Correccion pre-commit posterior a la entrega inicial de 15B3-C3-B: una
+    expresion o funcion en la lista SELECT que contenga un host variable
+    (":FACTOR * SALDO", "COALESCE(:A, SALDO)") deja esa variable fuera de
+    input_host_variables/output_host_variables -- variables_read/written y
+    SemanticEffect.reads/writes quedan vacios (diagnostic_code=
+    SQL_HOST_VARIABLE_PARTIALLY_UNRESOLVED), nunca un DATA_DEPENDS_ON parcial.'
+  - 'JOIN explicito (INNER/LEFT/RIGHT/FULL): correccion pre-commit 15B3-C3-B --
+    antes podia devolver una tabla parcial presentada como completa (silent
+    loss real, ver EmbeddedSqlExtractorTest.selectWithExplicitJoinIsUnsupportedNeverPartialTable
+    y variantes); ahora RECOGNIZED_NOT_INTERPRETED explicito, nunca tabla
+    parcial.'
+  - Subconsultas (EXISTS/IN/NOT EXISTS) se conservan solo como texto crudo en
+    predicate_text, nunca estructuradas.
+  - Variable indicadora (":VAR:IND") detectada -> ninguna variable de la
+    sentencia recibe direccion (diagnostic_code=
+    SQL_INDICATOR_VARIABLE_DIRECTION_UNSUPPORTED).
+  - selected_columns/output_host_variables solo se declaran cuando la lista
+    SELECT es de identificadores simples separados por coma (sin funciones,
+    expresiones, alias ni "*") Y su longitud coincide exactamente con la
+    lista INTO.
   domain_reviewed: false
   diagnostics: []
 - construct_id: SQL_UPDATE
@@ -2965,8 +3017,14 @@ constructs:
     evidence:
     - kind: CONTRACT_TEST
       reference: tests/pipeline/test_semantic_graph_builder.py
-    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
-      en esta capa.
+    - kind: UNIT_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/sql/EmbeddedSqlExtractorTest.java::updateSetAndWhereAssignInputNeverOutput
+    notes: 'Nivel tabla: Paragraph-[:UPDATES]->Table (mecanismo generico
+      compartido). Fase 15B3-C3-B: variables de SET y de WHERE se distinguen
+      entre si (predicate_host_variables solo WHERE) y ambas se declaran
+      input_host_variables -- UPDATE nunca infiere writes sobre host
+      variables (nunca se asume que :A en "SET COL=:A" es escritura de :A,
+      solo de la columna SQL).'
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
@@ -3001,8 +3059,11 @@ constructs:
   graph_relationships:
   - UPDATES
   fixtures:
-  - parser/src/test/resources/fixtures/embedded-sql.cbl
+  - parser/src/test/resources/fixtures/comprehensive.cbl
   limitations:
+  - Pairing columna->host-variable de SET (p. ej. SALDO=:A) fuera de alcance
+    de 15B3-C3-B (solo direccion input/predicate, nunca column-level DML) --
+    ver docs/SEMANTIC_EFFECTS.md.
   - Solo sentencias de forma simple (una tabla, sin subconsultas ni JOIN) son reconocidas por el regex
     de EmbeddedSqlExtractor.
   domain_reviewed: false
