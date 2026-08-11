@@ -1,25 +1,70 @@
 """Integracion minima de los detectores V2 en el flujo productivo de
 CANDIDATES_DETECTED (Fase 15B3-B, "realineacion minima del motor de
-extraccion de reglas"; Fase 15B3-B1, "cierre correctivo").
+extraccion de reglas"; Fase 15B3-B1, "cierre correctivo"; Fase 15B3-C1,
+"generalizacion de reglas de decision, estado y flags").
 
-Alcance deliberado: unicamente `V2RuleType.RETURN_CODE_RULE` y
-`V2RuleType.LEVEL_88_RETURN_CODE_RULE`, con `support=DETERMINISTIC` y
-`decision_id` resuelto contra un nodo `Decision` real -- las dos unicas
+Alcance deliberado: `V2RuleType.RETURN_CODE_RULE`,
+`V2RuleType.LEVEL_88_RETURN_CODE_RULE` (con `support=DETERMINISTIC`) y,
+desde Fase 15B3-C1, `V2RuleType.STATE_CHANGE_RULE` (con
+`support=PARTIAL`, su unico valor posible -- ver mas abajo) -- las tres
 familias V2 cuya evidencia esta anclada a una `Decision` (misma
 granularidad que Q0/V1) y por lo tanto son compatibles, sin modificar
 `context_package_builder.py`, con las queries Q4/Q5a (que exigen un
 `Decision` real con ese `decision_id`).
 
-Deliberadamente fuera de alcance: `V2RuleType.STATE_CHANGE_RULE` (nunca
-DETERMINISTIC, nunca promovible) e `InterproceduralRuleType.
-BY_REFERENCE_RULE` (anclado a un `call_site_id`, no a una `Decision`).
+## `V2_STATE_CHANGE` -> `STATE_TRANSITION` (Fase 15B3-C1)
+
+`v2_detectors.detect_state_change` (sin modificar) NUNCA produce
+`support=DETERMINISTIC`: por diseno deliberado de Fase 7, siempre
+`support=PARTIAL` con `detector_score=STATE_CHANGE_DETECTOR_SCORE`
+(constante `0.7`), independientemente de que el valor este completamente
+demostrado -- la funcion NUNCA produce un candidato `BLOCKED` (filtra
+`fact.fact_kind not in _LITERAL_FACT_KINDS or fact.literal is None`
+ANTES de construir cualquier candidato), asi que todo `V2ShadowCandidate`
+que devuelve ya tiene un literal estructuralmente probado. `PARTIAL` en
+este detector especifico describe EXCLUSIVAMENTE "relevancia funcional
+no evaluada" -- nunca "valor no probado" (a diferencia de `BLOCKED` en
+`V2_RETURN_CODE_PROPAGATION`/`V2_LEVEL_88_RETURN_CODE`, donde SI existe
+incertidumbre real sobre el valor).
+
+La modificacion minima (auditoria 15B3-C1) es evaluar esa relevancia
+funcional AQUI, en memoria, DESPUES de que `detect_state_change` ya
+produjo su resultado -- reutilizando integramente
+`v2_detectors._data_item_semantic_tag` (mismo mecanismo que ya usa
+`V2_LEVEL_88_RETURN_CODE` para su propio target) contra el semantic_tag
+YA asignado por `SemanticTagger`/`config/semantic-tags.yml` (nunca LLM,
+NLP, embeddings ni heuristica de texto libre). Solo se promueve cuando
+el target tiene `semantic_tag in {status, status_flag}`
+(`_STATE_TRANSITION_SEMANTIC_TAGS`) -- ver `_convert_v2_candidate`. Un
+target sin esa relevancia demostrada permanece invisible fuera de
+`diagnostics/v2-candidates-shadow.json`, exactamente igual que antes de
+esta fase: `detect_state_change` en si mismo NO se modifica, su
+artefacto diagnostico NO cambia, `docs/V2_DETECTORS_SHADOW_MODE.md`
+("V2_STATE_CHANGE nunca garantiza relevancia funcional") sigue siendo
+cierto tal cual esta escrito -- lo que cambia es que ESTE modulo, aparte
+de ese artefacto, ahora sabe reconocer los casos donde la relevancia SI
+esta demostrada.
+
+`rule_family=STATE_TRANSITION` aqui es deliberadamente DISTINTO del
+mapping de Fase 9 (`candidate_source_adapters._V2_RULE_FAMILY_BY_TYPE`,
+que mapea `STATE_CHANGE_RULE -> UNKNOWN` y documenta explicitamente que
+nunca cambia): Fase 9 cataloga equivalencia ESTRUCTURAL sin evaluar
+relevancia funcional (su UNKNOWN sigue siendo correcto para ese
+proposito distinto); este modulo, tras la verificacion ADICIONAL de
+semantic_tag, cataloga PROMOCION PRODUCTIVA -- dos preguntas diferentes,
+dos mappings deliberadamente distintos, `_LOCAL_RULE_FAMILY_BY_TYPE` no
+reemplaza ni contradice al de Fase 9.
+
+Deliberadamente fuera de alcance: `InterproceduralRuleType.
+BY_REFERENCE_RULE` (anclado a un `call_site_id`, no a una `Decision`,
+ver informe 15B3-B2-A).
 
 Reutiliza sin modificar: `v2_detector_context.build_v2_detector_context`,
 `v2_detectors.detect_return_code_propagation`/
-`detect_level_88_return_code`, `semantic_effects_analyzer.
+`detect_level_88_return_code`/`detect_state_change`/
+`_data_item_semantic_tag`, `semantic_effects_analyzer.
 analyze_semantic_effects`, `semantic_propagation_analyzer.
-analyze_semantic_propagation`, y el mapping ya existente
-`candidate_source_adapters._V2_RULE_FAMILY_BY_TYPE`. Nunca persiste
+analyze_semantic_propagation`. Nunca persiste
 `diagnostics/v2-candidates-shadow.json` ni ningun otro artefacto
 diagnostico.
 
@@ -65,17 +110,41 @@ from ..contracts.candidate_promotion_assessment import CandidateSource, UnifiedR
 from ..contracts.canonical import CanonicalProgram
 from ..contracts.semantic_graph import SemanticGraph
 from ..contracts.v2_shadow_candidates import V2CandidateSupport, V2RuleType, V2ShadowCandidate
-from .candidate_source_adapters import _V2_RULE_FAMILY_BY_TYPE
 from .errors import CandidateDetectionError
 from .semantic_effects_analyzer import analyze_semantic_effects
 from .semantic_propagation_analyzer import analyze_semantic_propagation
 from .v2_detector_context import V2DetectorContext, build_v2_detector_context
-from .v2_detectors import detect_level_88_return_code, detect_return_code_propagation
-
-_PROMOTABLE_RULE_TYPES = (V2RuleType.RETURN_CODE_RULE, V2RuleType.LEVEL_88_RETURN_CODE_RULE)
-_PROMOTABLE_RULE_FAMILIES = frozenset(
-    {UnifiedRuleFamily.RETURN_CODE, UnifiedRuleFamily.LEVEL_88_RETURN_CODE}
+from .v2_detectors import (
+    _data_item_semantic_tag,
+    detect_level_88_return_code,
+    detect_return_code_propagation,
+    detect_state_change,
 )
+
+# Mapping LOCAL de este modulo (deliberadamente distinto del de Fase 9,
+# `candidate_source_adapters._V2_RULE_FAMILY_BY_TYPE` -- ver docstring).
+_LOCAL_RULE_FAMILY_BY_TYPE: dict[V2RuleType, UnifiedRuleFamily] = {
+    V2RuleType.RETURN_CODE_RULE: UnifiedRuleFamily.RETURN_CODE,
+    V2RuleType.LEVEL_88_RETURN_CODE_RULE: UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+    V2RuleType.STATE_CHANGE_RULE: UnifiedRuleFamily.STATE_TRANSITION,
+}
+_PROMOTABLE_RULE_TYPES = (
+    V2RuleType.RETURN_CODE_RULE,
+    V2RuleType.LEVEL_88_RETURN_CODE_RULE,
+    V2RuleType.STATE_CHANGE_RULE,
+)
+_PROMOTABLE_RULE_FAMILIES = frozenset(
+    {
+        UnifiedRuleFamily.RETURN_CODE,
+        UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        UnifiedRuleFamily.STATE_TRANSITION,
+    }
+)
+
+# Fase 15B3-C1, seccion 6: unico criterio de relevancia funcional para
+# promover STATE_CHANGE_RULE -- reutiliza los tags ya declarados en
+# config/semantic-tags.yml (allowed_tags), nunca un enum nuevo.
+_STATE_TRANSITION_SEMANTIC_TAGS = frozenset({"status", "status_flag"})
 
 
 def _program_id_from_paragraph_id(paragraph_id: str) -> str:
@@ -172,12 +241,29 @@ def _convert_v2_candidate(
             f"{paragraph_node.id!r} no expone line_start/source_file validos"
         )
 
-    rule_family = _V2_RULE_FAMILY_BY_TYPE.get(v2_candidate.rule_type)
+    rule_family = _LOCAL_RULE_FAMILY_BY_TYPE.get(v2_candidate.rule_type)
     if rule_family not in _PROMOTABLE_RULE_FAMILIES:
         return None, (
             f"candidato V2 {v2_candidate.candidate_id!r} descartado: rule_family "
             f"{rule_family} no esta en el alcance de esta fase"
         )
+
+    if rule_family == UnifiedRuleFamily.STATE_TRANSITION:
+        # Fase 15B3-C1, seccion 5/6: unico gate de relevancia funcional --
+        # nunca LLM/NLP/heuristica de texto libre, solo el semantic_tag ya
+        # asignado por SemanticTagger. Sin esto, CUALQUIER escritura
+        # determinista (V2_STATE_CHANGE) se promoveria -- prohibido
+        # explicitamente.
+        target_tag = _data_item_semantic_tag(
+            ctx, program=v2_candidate.program, qualified_name=v2_candidate.target_qualified_name
+        )
+        if target_tag not in _STATE_TRANSITION_SEMANTIC_TAGS:
+            return None, (
+                f"candidato V2 {v2_candidate.candidate_id!r} descartado: target "
+                f"{v2_candidate.target_qualified_name!r} tiene semantic_tag {target_tag!r} "
+                f"(se requiere uno de {sorted(_STATE_TRANSITION_SEMANTIC_TAGS)} para "
+                "STATE_TRANSITION); relevancia funcional no demostrada, permanece shadow"
+            )
 
     evidence_ids = tuple(
         sorted({*v2_candidate.semantic_effect_ids, *v2_candidate.propagation_fact_ids})
@@ -318,8 +404,8 @@ def detect_enhanced_candidates(
     run_id: str,
     source_package_hash: str,
 ) -> tuple[list[RuleCandidate], list[str]]:
-    """Ejecuta `V2_RETURN_CODE_PROPAGATION`/`V2_LEVEL_88_RETURN_CODE` en
-    memoria (nunca STATE_CHANGE_RULE) y fusiona el resultado con
+    """Ejecuta `V2_RETURN_CODE_PROPAGATION`/`V2_LEVEL_88_RETURN_CODE`/
+    `V2_STATE_CHANGE` en memoria y fusiona el resultado con
     `v1_candidates` via `_merge_candidates`. Devuelve `(candidatos_a_
     agregar_o_reemplazar, warnings)` -- el llamador (`candidates_detected_
     stage.py`) debe indexar por `candidate_id` y reemplazar/agregar,
@@ -356,16 +442,30 @@ def detect_enhanced_candidates(
         ) from exc
 
     v2_candidates = sorted(
-        (*detect_return_code_propagation(ctx), *detect_level_88_return_code(ctx)),
+        (
+            *detect_return_code_propagation(ctx),
+            *detect_level_88_return_code(ctx),
+            *detect_state_change(ctx),
+        ),
         key=lambda candidate: candidate.candidate_id,
     )
 
     converted: list[_ConvertedCandidate] = []
     discard_warnings: list[str] = []
     for v2_candidate in v2_candidates:
-        if v2_candidate.support != V2CandidateSupport.DETERMINISTIC:
-            continue
         if v2_candidate.rule_type not in _PROMOTABLE_RULE_TYPES:
+            continue
+        if v2_candidate.rule_type == V2RuleType.STATE_CHANGE_RULE:
+            # V2_STATE_CHANGE nunca produce BLOCKED (detect_state_change
+            # filtra fact_kind/literal ANTES de construir un candidato) --
+            # support=PARTIAL aqui es su UNICO valor posible y describe
+            # exclusivamente "relevancia funcional no evaluada en V2",
+            # nunca incertidumbre sobre el valor. La relevancia se evalua
+            # a continuacion, dentro de _convert_v2_candidate (semantic_tag
+            # del target), nunca aqui -- un unico punto de decision.
+            if v2_candidate.support != V2CandidateSupport.PARTIAL:
+                continue
+        elif v2_candidate.support != V2CandidateSupport.DETERMINISTIC:
             continue
         if v2_candidate.decision_id is None:
             continue

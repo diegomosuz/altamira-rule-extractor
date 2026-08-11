@@ -1,5 +1,6 @@
 """E2E hermetico productivo de la deteccion ampliada (Fase 15B3-B1,
-seccion 5): "package sintetico versionado -> parser Java real ->
+seccion 5; extendido en Fase 15B3-C1 con STATE_TRANSITION): "package
+sintetico versionado -> parser Java real ->
 canonical -> semantic graph en Neo4j real efimero -> V1 + V2 ->
 06-candidates.json -> ContextPackage -> RuleDraft -> guardrail",
 ejercitando exclusivamente `run_ingestion` y los stages productivos
@@ -66,7 +67,7 @@ _MANIFEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 </altamira-package>
 """
 
-# Cuatro paragraphs, cuatro casos:
+# Cinco paragraphs, cinco casos:
 # - CHECK-SALDO-PARA: RETURN_CODE directo (Q0/V1 lo detecta, MOVE literal
 #   directo a WS-COD-RETORNO -- baseline V1 para probar preservacion).
 # - CHECK-PROPAGACION-PARA: RETURN_CODE via propagacion V2 (MOVE literal
@@ -74,10 +75,14 @@ _MANIFEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 #   tiene LEADS_TO directo, solo V2_RETURN_CODE_PROPAGATION lo alcanza).
 # - CHECK-INVALIDO-PARA: LEVEL_88_RETURN_CODE (SET condicion-88 TO TRUE,
 #   unico VALUE, padre WS-COD-RETORNO).
-# - CHECK-ESTADO-PARA: escribe WS-ESTADO (NO matchea el regex
-#   return_code de config/semantic-tags.yml) -- solo V2_STATE_CHANGE
-#   (UNKNOWN, nunca invocado por enhanced_candidate_integration.py) lo
-#   detectaria; prueba "UNKNOWN excluido".
+# - CHECK-TRANSICION-PARA (Fase 15B3-C1): STATE_TRANSITION -- MOVE literal
+#   a WS-ESTADO-OPERACION, que matchea la regla status-name de
+#   config/semantic-tags.yml (relevancia funcional demostrada).
+# - CHECK-INDICADOR-PARA: escribe WS-INDICADOR-INTERNO (NO matchea NINGUNA
+#   regla de config/semantic-tags.yml, ni return_code ni status/
+#   status_flag) -- solo V2_STATE_CHANGE (UNKNOWN, nunca promovido por
+#   enhanced_candidate_integration.py sin semantic_tag) lo detectaria;
+#   prueba "UNKNOWN excluido" / target ordinario sin relevancia.
 _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        PROGRAM-ID. ENHRULE1.
        DATA DIVISION.
@@ -86,13 +91,15 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        01 WS-COD-RETORNO PIC X(4) VALUE SPACES.
           88 COD-SALDO-INVALIDO VALUE 'R003'.
        01 WS-COD-AUX PIC X(4) VALUE SPACES.
-       01 WS-ESTADO PIC X(1) VALUE SPACES.
+       01 WS-ESTADO-OPERACION PIC X(1) VALUE SPACES.
+       01 WS-INDICADOR-INTERNO PIC X(1) VALUE SPACES.
        PROCEDURE DIVISION.
        MAIN-PARA.
            PERFORM CHECK-SALDO-PARA.
            PERFORM CHECK-PROPAGACION-PARA.
            PERFORM CHECK-INVALIDO-PARA.
-           PERFORM CHECK-ESTADO-PARA.
+           PERFORM CHECK-TRANSICION-PARA.
+           PERFORM CHECK-INDICADOR-PARA.
            GOBACK.
        CHECK-SALDO-PARA.
            IF WS-SALDO < 0
@@ -107,9 +114,13 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
            IF WS-SALDO > 999999
                SET COD-SALDO-INVALIDO TO TRUE
            END-IF.
-       CHECK-ESTADO-PARA.
+       CHECK-TRANSICION-PARA.
            IF WS-SALDO < -1000
-               MOVE 'X' TO WS-ESTADO
+               MOVE 'R' TO WS-ESTADO-OPERACION
+           END-IF.
+       CHECK-INDICADOR-PARA.
+           IF WS-SALDO < -2000
+               MOVE 'X' TO WS-INDICADOR-INTERNO
            END-IF.
 """
 
@@ -152,6 +163,35 @@ def _run(tmp_path: Path, *, run_label: str):
     with hermetic_llm_and_network_guard():
         state = run_ingestion(source_zip=zip_path, settings=settings)
     return state, settings
+
+
+def _assert_full_downstream(run_dir: Path, candidate_id: str) -> None:
+    """ContextPackage/RuleDraft/Guardrail reales para `candidate_id`,
+    generados por las etapas productivas (`contexts_built_stage.py`/
+    `rule_drafts_generated_stage.py`/`guardrails_applied_stage.py`),
+    nunca un pipeline alternativo."""
+    artifact_filename = _artifact_filename(candidate_id)
+
+    context_path = run_dir / "artifacts" / "07-context" / artifact_filename
+    assert context_path.is_file(), f"no se genero ContextPackage para {candidate_id!r}"
+    context_package = ContextPackage.model_validate_json(context_path.read_text(encoding="utf-8"))
+    assert context_package.candidate.candidate_id == candidate_id
+
+    rule_draft_path = run_dir / "artifacts" / "08-rule-drafts" / artifact_filename
+    assert rule_draft_path.is_file(), f"no se genero RuleDraft para {candidate_id!r}"
+    # RuleDraft no expone candidate_id (se identifica por nombre de
+    # archivo, ver docstring de _artifact_filename) -- valida que el
+    # archivo al menos parsea contra el contrato real.
+    RuleDraft.model_validate_json(rule_draft_path.read_text(encoding="utf-8"))
+
+    guardrail_path = run_dir / "artifacts" / "09-guardrails" / artifact_filename
+    assert guardrail_path.is_file(), f"no se aplico guardrail a {candidate_id!r}"
+    guardrail_candidate = GuardrailCandidateArtifact.model_validate_json(
+        guardrail_path.read_text(encoding="utf-8")
+    )
+    assert guardrail_candidate.candidate_id == candidate_id
+    assert guardrail_candidate.guardrail_report.candidate_id == candidate_id
+    assert guardrail_candidate.guardrail_report.verdict == GuardrailVerdict.EVIDENCE_VALIDATED
 
 
 def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates(
@@ -203,15 +243,26 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     assert level88[0].candidate_source == CandidateSource.V2
     assert all(c.outcome_code == "R003" for c in invalido_candidates)
 
-    # --- Caso 3: UNKNOWN excluido (WS-ESTADO nunca return_code) -----------
+    # --- Caso 15B3-C1: STATE_TRANSITION (CHECK-TRANSICION-PARA, target
+    # WS-ESTADO-OPERACION tageado `status`) -------------------------------
+    transicion_candidates = _by_paragraph("CHECK-TRANSICION-PARA")
+    assert len(transicion_candidates) == 1, artifact.candidates
+    transicion = transicion_candidates[0]
+    assert transicion.rule_family == UnifiedRuleFamily.STATE_TRANSITION
+    assert transicion.candidate_source == CandidateSource.V2
+    assert transicion.outcome_code == "R"
+    assert transicion.evidence_ids != []
+    assert transicion.decision_id
+
+    # --- Caso 3: UNKNOWN excluido (WS-INDICADOR-INTERNO sin semantic_tag) -
     assert not any(c.rule_family == UnifiedRuleFamily.UNKNOWN for c in artifact.candidates)
-    assert _by_paragraph("CHECK-ESTADO-PARA") == []
+    assert _by_paragraph("CHECK-INDICADOR-PARA") == []
 
     # --- Caso 4: candidatos ampliados con evidence/provenance -------------
     enhanced_candidates = [
         c for c in artifact.candidates if c.candidate_source == CandidateSource.V2
     ]
-    assert len(enhanced_candidates) == 3, artifact.candidates
+    assert len(enhanced_candidates) == 4, artifact.candidates
     for enhanced_candidate in enhanced_candidates:
         assert enhanced_candidate.evidence_ids != []
         assert enhanced_candidate.source_file == "01-codigo/cobol/ENHRULE1.cbl"
@@ -236,31 +287,11 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     # --- Caso 8: ningun candidato es FUNCTIONALLY_APPROVED automatico -----
     assert all(c.status == CandidateStatus.DETECTED_CANDIDATE for c in artifact.candidates)
 
-    # --- Caso 5/6/7: ContextPackage/RuleDraft/guardrail para el candidato
-    # ampliado (propagacion V2), no solo para el candidato V1 baseline ----
-    enhanced_id = propagated.candidate_id
-    artifact_filename = _artifact_filename(enhanced_id)
-
-    context_path = run_dir / "artifacts" / "07-context" / artifact_filename
-    assert context_path.is_file(), "no se genero ContextPackage para el candidato V2 ampliado"
-    context_package = ContextPackage.model_validate_json(context_path.read_text(encoding="utf-8"))
-    assert context_package.candidate.candidate_id == enhanced_id
-
-    rule_draft_path = run_dir / "artifacts" / "08-rule-drafts" / artifact_filename
-    assert rule_draft_path.is_file(), "no se genero RuleDraft para el candidato V2 ampliado"
-    # RuleDraft no expone candidate_id (se identifica por nombre de
-    # archivo, ver docstring de _artifact_filename) -- valida que el
-    # archivo al menos parsea contra el contrato real.
-    RuleDraft.model_validate_json(rule_draft_path.read_text(encoding="utf-8"))
-
-    guardrail_path = run_dir / "artifacts" / "09-guardrails" / artifact_filename
-    assert guardrail_path.is_file(), "no se aplico guardrail al candidato V2 ampliado"
-    guardrail_candidate = GuardrailCandidateArtifact.model_validate_json(
-        guardrail_path.read_text(encoding="utf-8")
-    )
-    assert guardrail_candidate.candidate_id == enhanced_id
-    assert guardrail_candidate.guardrail_report.candidate_id == enhanced_id
-    assert guardrail_candidate.guardrail_report.verdict == GuardrailVerdict.EVIDENCE_VALIDATED
+    # --- Caso 5/6/7: ContextPackage/RuleDraft/guardrail -- tanto para el
+    # candidato RETURN_CODE ampliado (propagacion V2) como para el
+    # candidato STATE_TRANSITION nuevo (Fase 15B3-C1), no solo para V1 ----
+    _assert_full_downstream(run_dir, propagated.candidate_id)
+    _assert_full_downstream(run_dir, transicion.candidate_id)
 
     rules_dir = run_dir / "artifacts" / "10-rules"
     assert len(list(rules_dir.glob("*.md"))) >= 1
@@ -293,7 +324,7 @@ def test_enhanced_pipeline_repeated_run_produces_same_candidate_ids_and_order(
     ids_2 = [c.candidate_id for c in artifact_2.candidates]
     assert ids_1 == ids_2
     assert ids_1 == sorted(ids_1)
-    assert len(ids_1) >= 3
+    assert len(ids_1) >= 4
 
 
 def test_enhanced_flag_disabled_produces_only_v1_candidate(tmp_path: Path) -> None:

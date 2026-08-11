@@ -1,0 +1,11 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GTSTNEG1.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-SALDO                 PIC 9(7)V99.
+       01 WS-INDICADOR-PROCESO     PIC X(1).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           IF WS-SALDO > 100
+               MOVE 'X' TO WS-INDICADOR-PROCESO
+           END-IF.

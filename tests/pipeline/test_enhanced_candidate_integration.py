@@ -51,6 +51,23 @@ from .v2_shadow_helpers import (
 _RUN_ID = "run-15b3b"
 
 
+def assert_only_state_change_discard_warnings(warnings: list[str], *, targets: list[str]) -> None:
+    """Fase 15B3-C1: `detect_enhanced_candidates` ahora tambien ejecuta
+    `V2_STATE_CHANGE` sobre todo el programa -- cualquier target escrito
+    deterministicamente pero sin semantic_tag de relevancia funcional
+    (`status`/`status_flag`) produce un warning de descarte trazable,
+    nunca un candidato. Los tests de RETURN_CODE/LEVEL_88_RETURN_CODE que
+    reutilizan fixtures con targets intermedios sin tag (p. ej. WS-AUX)
+    deben esperar exactamente estos warnings -- nunca `warnings == []`
+    llanamente, ni un match de texto fragil sobre el hash del
+    candidate_id interno."""
+    assert len(warnings) == len(targets), warnings
+    for warning, target in zip(sorted(warnings), sorted(targets), strict=True):
+        assert "V2_STATE_CHANGE" in warning
+        assert f"target {target!r}" in warning
+        assert "permanece shadow" in warning
+
+
 def _empty_v1_candidates() -> CandidateArtifact:
     return CandidateArtifact(
         run_id=_RUN_ID,
@@ -223,7 +240,10 @@ def test_return_code_propagation_produces_a_promotable_rule_candidate() -> None:
         source_package_hash=HASH,
     )
 
-    assert warnings == []
+    # WS-AUX (intermediario de la propagacion, sin semantic_tag) tambien es
+    # visto por V2_STATE_CHANGE -- se descarta (sin relevancia funcional
+    # demostrada) con un warning trazable, nunca como STATE_TRANSITION.
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-AUX"])
     assert len(new_candidates) == 1
     candidate = new_candidates[0]
     assert candidate.candidate_source == CandidateSource.V2
@@ -374,9 +394,15 @@ def test_v2_candidate_matching_v1_functional_key_merges_into_v1_identity() -> No
     assert merged.detector_id == v1_candidate.detector_id
     assert merged.candidate_source == CandidateSource.V1
     assert merged.evidence_ids != []
-    assert len(warnings) == 1
-    assert v1_candidate.candidate_id in warnings[0]
-    assert "V2_RETURN_CODE_PROPAGATION" in warnings[0]
+
+    # WS-AUX (sin semantic_tag) produce ademas un warning de descarte de
+    # V2_STATE_CHANGE (Fase 15B3-C1) -- se separa del warning de fusion D.
+    merge_warnings = [w for w in warnings if "V2_STATE_CHANGE" not in w]
+    state_change_warnings = [w for w in warnings if "V2_STATE_CHANGE" in w]
+    assert len(merge_warnings) == 1
+    assert v1_candidate.candidate_id in merge_warnings[0]
+    assert "V2_RETURN_CODE_PROPAGATION" in merge_warnings[0]
+    assert_only_state_change_discard_warnings(state_change_warnings, targets=["WS-AUX"])
 
 
 def test_v1_rule_candidates_are_never_mutated_in_place_by_dedup() -> None:
@@ -469,7 +495,7 @@ def test_v2_candidate_with_different_decision_is_added_not_deduplicated() -> Non
         source_package_hash=HASH,
     )
 
-    assert warnings == []
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-AUX"])
     assert len(result) == 1
     assert result[0].candidate_source == CandidateSource.V2
     assert result[0].candidate_id != v1_candidate.candidate_id
@@ -716,9 +742,10 @@ def test_rule_e_v1_candidate_order_never_affects_result() -> None:
 
 
 def test_state_change_only_case_never_produces_a_candidate() -> None:
-    """Caso C de `test_v2_detectors.py`: WS-AUX no es `return_code`, asi
-    que solo `V2_STATE_CHANGE` (PARTIAL, nunca promovible) lo detecta --
-    `detect_enhanced_candidates` no lo invoca en absoluto."""
+    """Caso C de `test_v2_detectors.py`: WS-AUX no es `return_code` ni
+    tiene semantic_tag `status`/`status_flag` -- `V2_STATE_CHANGE` (Fase
+    15B3-C1: ahora si se invoca) lo detecta pero se descarta sin
+    relevancia funcional demostrada, nunca se promueve."""
     if_stmt = make_stmt(
         statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="CONDICION"
     )
@@ -757,7 +784,7 @@ def test_state_change_only_case_never_produces_a_candidate() -> None:
     )
 
     assert new_candidates == []
-    assert warnings == []
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-AUX"])
 
 
 # ---------------------------------------------------------------------------
@@ -785,9 +812,12 @@ def test_paragraph_node_without_source_file_is_discarded_with_warning() -> None:
         source_package_hash=HASH,
     )
 
+    # Sin source_file en el nodo Paragraph, TODO candidato ancla a ese
+    # paragraph se descarta -- incluye tanto el de RETURN_CODE_PROPAGATION
+    # (WS-COD-RETORNO) como el de V2_STATE_CHANGE (WS-AUX, Fase 15B3-C1).
     assert new_candidates == []
-    assert len(warnings) == 1
-    assert "line_start/source_file" in warnings[0]
+    assert len(warnings) == 2
+    assert all("line_start/source_file" in warning for warning in warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -819,3 +849,549 @@ def test_result_is_deterministic_across_repeated_calls() -> None:
     )
 
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B3-C1: STATE_TRANSITION (generalizacion de reglas de decision,
+# estado y flags) -- casos obligatorios de la seccion 7/12 del cierre.
+# ---------------------------------------------------------------------------
+
+
+def _run_detection(
+    program: CanonicalProgram, decisions: list[tuple[str, int, str]], *, tags: dict[str, str | None]
+) -> tuple[list[RuleCandidate], list[str]]:
+    graph = _build_graph_with_source_file(program=program, decisions=decisions, data_item_tags=tags)
+    return detect_enhanced_candidates(
+        canonical_programs=[program],
+        semantic_graph=graph,
+        v1_candidates=_empty_v1_candidates(),
+        run_id=_RUN_ID,
+        source_package_hash=HASH,
+    )
+
+
+# --- Caso A: IF simple -----------------------------------------------------
+
+
+def test_if_simple_move_to_status_target_produces_state_transition() -> None:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="A = 'S'"
+    )
+    move_stmt = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="R",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, move_stmt],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "A = 'S'")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    candidate = new_candidates[0]
+    assert candidate.rule_family == UnifiedRuleFamily.STATE_TRANSITION
+    assert candidate.candidate_source == CandidateSource.V2
+    assert candidate.condition == "A = 'S'"
+    assert candidate.outcome_code == "R"
+    assert candidate.paragraph_name == "A"
+    assert candidate.evidence_ids != []
+    assert candidate.decision_id == decision_node_id_for("PROG1", "A", 10, 1)
+
+
+# --- Caso B: IF / ELSE -------------------------------------------------
+
+
+def test_if_else_produces_two_state_transition_candidates_for_different_effects() -> None:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="A = 'S'"
+    )
+    then_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="A",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    else_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="R",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="ELSE",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, then_move, else_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "A = 'S'")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2
+    assert {c.outcome_code for c in new_candidates} == {"A", "R"}
+    assert all(c.rule_family == UnifiedRuleFamily.STATE_TRANSITION for c in new_candidates)
+    assert all(c.condition == "A = 'S'" for c in new_candidates)
+    assert len({c.candidate_id for c in new_candidates}) == 2
+
+
+# --- Caso C: nested IF -------------------------------------------------
+
+
+def test_nested_if_preserves_the_real_inner_condition_never_a_combined_one() -> None:
+    outer_if = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="A = 'S'"
+    )
+    inner_if = make_stmt(
+        statement_id="P1::A::1::IF",
+        kind=StatementKind.IF,
+        line_start=11,
+        expression="B > 10",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    inner_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="M",
+        parent_statement_id="P1::A::1::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[outer_if, inner_if, inner_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program,
+        [("A", 10, "A = 'S'"), ("A", 11, "B > 10")],
+        tags={"WS-ESTADO": "status"},
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    candidate = new_candidates[0]
+    assert candidate.condition == "B > 10"
+    assert candidate.outcome_code == "M"
+    # Ordinal 2: segunda decision declarada para el paragraph "A" (linea 10
+    # primero, linea 11 segundo) -- ver _build_graph_with_source_file.
+    assert candidate.decision_id == decision_node_id_for("PROG1", "A", 11, 2)
+
+
+# --- Caso D: EVALUATE / WHEN --------------------------------------------
+
+
+def test_evaluate_when_produces_state_transition_per_branch() -> None:
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="WS-RIESGO",
+    )
+    when1_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="A",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+    )
+    when2_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="M",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, when1_move, when2_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-RIESGO")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2
+    assert {c.outcome_code for c in new_candidates} == {"A", "M"}
+    assert all(c.condition == "WS-RIESGO" for c in new_candidates)
+
+
+# --- Caso E: WHEN OTHER --------------------------------------------------
+
+
+def test_when_other_branch_produces_a_distinguishable_state_transition() -> None:
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="WS-RIESGO",
+    )
+    other_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="D",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN_OTHER",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, other_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-RIESGO")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    assert new_candidates[0].outcome_code == "D"
+
+
+# --- Caso F: condicion compuesta -----------------------------------------
+
+
+def test_compound_condition_is_preserved_verbatim_never_reparsed() -> None:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF",
+        kind=StatementKind.IF,
+        line_start=10,
+        expression="A = 'S' AND B > 100",
+    )
+    move_stmt = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="R",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, move_stmt],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "A = 'S' AND B > 100")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    assert new_candidates[0].condition == "A = 'S' AND B > 100"
+
+
+# --- Caso G: SET condition-name/88 TO TRUE (flag funcional) -------------
+
+
+def test_set_level_88_flag_with_status_flag_tag_produces_state_transition() -> None:
+    condition = CanonicalConditionName(
+        name="REQUIERE-AUTORIZACION",
+        qualified_name="WS-ESTADO-AUTORIZACION.REQUIERE-AUTORIZACION",
+        parent_name="WS-ESTADO-AUTORIZACION",
+        parent_qualified_name="WS-ESTADO-AUTORIZACION",
+        values=[CanonicalConditionValue(value="S", location_kind=LocationKind.UNKNOWN)],
+        location_kind=LocationKind.UNKNOWN,
+    )
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF",
+        kind=StatementKind.IF,
+        line_start=10,
+        expression="WS-MONTO > WS-LIMITE",
+    )
+    set_stmt = make_stmt(
+        statement_id="P1::A::1::SET",
+        kind=StatementKind.SET,
+        target_data_items=["REQUIERE-AUTORIZACION"],
+        variables_written=["REQUIERE-AUTORIZACION"],
+        condition_name_target="REQUIERE-AUTORIZACION",
+        condition_set_value=True,
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, set_stmt],
+        variables_written=["REQUIERE-AUTORIZACION"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-ESTADO-AUTORIZACION")],
+        paragraphs=[paragraph],
+        condition_names=[condition],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program,
+        [("A", 10, "WS-MONTO > WS-LIMITE")],
+        tags={"WS-ESTADO-AUTORIZACION": "status_flag"},
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    candidate = new_candidates[0]
+    assert candidate.rule_family == UnifiedRuleFamily.STATE_TRANSITION
+    assert candidate.outcome_code == "S"
+    assert candidate.condition == "WS-MONTO > WS-LIMITE"
+
+
+# --- Caso H: propagacion simple existente --------------------------------
+
+
+def test_propagation_via_intermediate_variable_produces_state_transition() -> None:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="COND"
+    )
+    aux_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-AUX-ESTADO"],
+        variables_written=["WS-AUX-ESTADO"],
+        assigned_literal="R",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    final_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        variables_read=["WS-AUX-ESTADO"],
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, aux_move, final_move],
+        variables_read=["WS-AUX-ESTADO"],
+        variables_written=["WS-AUX-ESTADO", "WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-AUX-ESTADO"), _data_item("WS-ESTADO")],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program,
+        [("A", 10, "COND")],
+        tags={"WS-AUX-ESTADO": None, "WS-ESTADO": "status"},
+    )
+
+    # WS-AUX-ESTADO (intermediario, sin semantic_tag) tambien es visto por
+    # V2_STATE_CHANGE -- descartado, nunca promovido.
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-AUX-ESTADO"])
+    assert len(new_candidates) == 1
+    candidate = new_candidates[0]
+    assert candidate.rule_family == UnifiedRuleFamily.STATE_TRANSITION
+    assert candidate.outcome_code == "R"
+
+
+def test_propagation_barrier_never_invents_a_value() -> None:
+    """Si la propagacion no puede demostrar el literal (WS-ENTRADA nunca
+    recibe un valor conocido), no debe producirse NINGUN candidato --
+    nunca se inventa un valor ni se emite un warning fabricado."""
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="COND"
+    )
+    move_from_unresolved = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        variables_read=["WS-ENTRADA"],
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, move_from_unresolved],
+        variables_read=["WS-ENTRADA"],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-ENTRADA"), _data_item("WS-ESTADO")],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "COND")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert new_candidates == []
+    assert warnings == []
+
+
+# --- Caso multiples efectos (seccion 8 del cierre) -----------------------
+
+
+def test_single_decision_with_two_functional_targets_produces_two_rules() -> None:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF",
+        kind=StatementKind.IF,
+        line_start=10,
+        expression="WS-SALDO < WS-MONTO",
+    )
+    move1 = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO-OPERACION"],
+        variables_written=["WS-ESTADO-OPERACION"],
+        assigned_literal="R",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    move2 = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO-BLOQUEO"],
+        variables_written=["WS-ESTADO-BLOQUEO"],
+        assigned_literal="S",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, move1, move2],
+        variables_written=["WS-ESTADO-OPERACION", "WS-ESTADO-BLOQUEO"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-ESTADO-OPERACION"), _data_item("WS-ESTADO-BLOQUEO")],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program,
+        [("A", 10, "WS-SALDO < WS-MONTO")],
+        tags={"WS-ESTADO-OPERACION": "status", "WS-ESTADO-BLOQUEO": "status"},
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2
+    assert {(c.paragraph_name, c.outcome_code) for c in new_candidates} == {
+        ("A", "R"),
+        ("A", "S"),
+    }
+    assert all(c.rule_family == UnifiedRuleFamily.STATE_TRANSITION for c in new_candidates)
+    decision_id = decision_node_id_for("PROG1", "A", 10, 1)
+    assert all(c.decision_id == decision_id for c in new_candidates)
+    # No deduplicar solo por decision_id: dos candidate_id distintos.
+    assert len({c.candidate_id for c in new_candidates}) == 2
+
+
+# --- Casos negativos: sin relevancia funcional demostrada ----------------
+
+
+def _ordinary_target_program(
+    target_name: str,
+) -> tuple[CanonicalProgram, list[tuple[str, int, str]]]:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression="COND"
+    )
+    move_stmt = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=[target_name],
+        variables_written=[target_name],
+        assigned_literal="0",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, move_stmt],
+        variables_written=[target_name],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item(target_name)], paragraphs=[paragraph]
+    )
+    return program, [("A", 10, "COND")]
+
+
+def test_ordinary_target_without_semantic_tag_never_becomes_state_transition() -> None:
+    """Fixture obligatoria #7: target ordinario (WS-SALDO, sin
+    semantic_tag alguno) -- nunca STATE_TRANSITION, aunque la escritura
+    sea deterministica."""
+    program, decisions = _ordinary_target_program("WS-SALDO")
+
+    new_candidates, warnings = _run_detection(program, decisions, tags={"WS-SALDO": None})
+
+    assert new_candidates == []
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-SALDO"])
+
+
+def test_ambiguous_named_target_never_becomes_state_transition() -> None:
+    """Fixture obligatoria #8 (corregida, correccion pre-commit 15B3-C1):
+    tras el fix de regex en config/semantic-tags.yml, `status-name` y
+    `status-flag-name` son mutuamente NO ambiguas -- `IND-ESTADO` e
+    `INDICADOR-ESTADO` son ahora patrones POSITIVOS explicitos de
+    `status_flag` (ver tests/pipeline/test_semantic_tagger.py), no un
+    caso de ambiguedad. `WS-INDICADOR-PROCESO` contiene el prefijo
+    INDICADOR pero no el sufijo `-ESTADO` exigido por `status-flag-name`,
+    ni ESTADO/STATUS/STATE exigido por `status-name` -- no matchea
+    ninguna regla, el SemanticTagger real no le asigna tag, y por lo
+    tanto nunca se promueve a STATE_TRANSITION."""
+    program, decisions = _ordinary_target_program("WS-INDICADOR-PROCESO")
+
+    new_candidates, warnings = _run_detection(
+        program, decisions, tags={"WS-INDICADOR-PROCESO": None}
+    )
+
+    assert new_candidates == []
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-INDICADOR-PROCESO"])

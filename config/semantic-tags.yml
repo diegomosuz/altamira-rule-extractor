@@ -46,3 +46,11 @@ rules:
     tag: customer_segment
     name_regex: "(?i).*(SEGMENTO|SEGMENT).*"
     base_confidence: 0.80
+  - id: status-name
+    tag: status
+    name_regex: "(?i)(^|-)(STATUS|STATE)(?!-FLAG)(-|$)|(?<!IND)(?<!INDICADOR)(^|-)ESTADO(?!-FLAG)(-|$)"
+    base_confidence: 0.75
+  - id: status-flag-name
+    tag: status_flag
+    name_regex: "(?i)(^|-)((STATUS|STATE)-FLAG|(IND|INDICADOR)-ESTADO)(-|$)"
+    base_confidence: 0.75

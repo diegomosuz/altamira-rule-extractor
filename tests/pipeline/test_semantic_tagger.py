@@ -295,3 +295,64 @@ def test_no_match_produces_no_tag_and_no_warning(tmp_path: Path) -> None:
 
     assert tags == []
     assert not warnings
+
+
+# --- Fase 15B3-C1: reglas status/status_flag en config/semantic-tags.yml
+# real (nunca un YAML sintetico aparte -- prueba el archivo productivo tal
+# como se despliega) ---
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REAL_CONFIG_PATH = _REPO_ROOT / "config" / "semantic-tags.yml"
+
+
+def _tag_names(tmp_path: Path, *names: str) -> dict[str, str | None]:
+    config = load_semantic_tags_config(_REAL_CONFIG_PATH)
+    program = _program([_data_item(name) for name in names])
+    warnings: list[str] = []
+    tags = tag_data_items(program, IDENTITY, config, warnings)
+    by_name = {tag.original_name: tag.semantic_tag for tag in tags}
+    return {name: by_name.get(name) for name in names}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "WS-ESTADO",
+        "WS-ESTADO-OPERACION",
+        "WS-STATUS",
+        "WS-STATE",
+        "WS-ESTADO-AUTORIZACION",
+        "ESTADO-CUENTA",
+    ],
+)
+def test_real_config_tags_status_names(tmp_path: Path, name: str) -> None:
+    assert _tag_names(tmp_path, name)[name] == "status"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["WS-STATUS-FLAG", "WS-STATE-FLAG", "WS-IND-ESTADO", "WS-INDICADOR-ESTADO"],
+)
+def test_real_config_tags_status_flag_names(tmp_path: Path, name: str) -> None:
+    # Correccion pre-commit 15B3-C1: `status-name` y `status-flag-name`
+    # deben ser mutuamente NO ambiguas via regex puro (lookbehind negativo
+    # `(?<!IND)(?<!INDICADOR)` en status-name) -- IND-ESTADO/INDICADOR-ESTADO
+    # son patrones POSITIVOS de status_flag, nunca colisionan con status.
+    assert _tag_names(tmp_path, name)[name] == "status_flag"
+
+
+def test_real_config_status_regex_does_not_match_statement(tmp_path: Path) -> None:
+    """Precision > recall (Fase 15B3-C1, seccion 6): `STATE` como
+    subcadena de `STATEMENT` nunca debe producir un falso positivo."""
+    assert _tag_names(tmp_path, "WS-STATEMENT-COUNT")["WS-STATEMENT-COUNT"] is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["WS-SALDO", "WS-MONTO", "WS-BLOQUEADO", "WS-CLIENTE-ID", "WS-FLAG", "WS-IND"],
+)
+def test_real_config_ordinary_names_get_no_status_tag(tmp_path: Path, name: str) -> None:
+    # WS-FLAG y WS-IND (Fase 15B3-C1, correccion pre-commit): ni
+    # status-name ni status-flag-name deben matchear un nombre generico
+    # que solo contiene el segmento FLAG o IND sin ESTADO/STATUS/STATE.
+    assert _tag_names(tmp_path, name)[name] is None

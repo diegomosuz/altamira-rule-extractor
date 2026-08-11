@@ -10,6 +10,18 @@
 schema_version: "1.0"
 catalog_edition: fase-15b2-a-2026.08.05
 cases:
+- case_id: gt-negative-state-transition-nonfunctional-indicator-name
+  kind: NEGATIVE
+  program: GTSTNEG1
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_state_transition_negative_001.cbl
+    sha256: 73d689135737071fe7507872a5fd08c213b7f7b6ec47cbde8a37a7adb41846dd
+  description: 'IF WS-SALDO > 100 MOVE ''X'' TO WS-INDICADOR-PROCESO END-IF: correccion
+    pre-commit 15B3-C1 -- status-name y status-flag-name son ahora mutuamente NO
+    ambiguas via regex puro. WS-INDICADOR-PROCESO tiene el prefijo INDICADOR sin
+    el sufijo -ESTADO exigido por status-flag-name, y no contiene ESTADO/STATUS/STATE
+    exigido por status-name: no matchea ninguna regla, semantic_tag=None.'
+  expected_rules: []
 - case_id: gt-negative-untagged-counter-decision
   kind: NEGATIVE
   program: GTNEG001
@@ -102,8 +114,35 @@ cases:
       altamira-cobol-parser.jar parse): ambos MOVE (branch=THEN/ELSE) declaran
       target_data_items=[WS-COD-RETORNO] con parent_statement_id apuntando al mismo IF, y
       unsupported_constructs=[] (sin degradacion de extraccion).'
+- case_id: gt-positive-state-transition-if-status-target
+  kind: POSITIVE
+  program: GTST001
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_state_transition_001.cbl
+    sha256: 3103ed4d60be693aed1ad5a473bb8641b09c6597e485065d77afc0a994cafa6a
+  description: 'IF WS-SALDO < WS-MONTO MOVE ''R'' TO WS-ESTADO-OPERACION END-IF: decision
+    IF cuya unica rama escribe un DataItem taggeado status (Fase 15B3-C1,
+    config/semantic-tags.yml regla status-name).'
+  expected_rules:
+  - expectation_id: gt-positive-state-transition-if-status-target::v2-state-change
+    rule_family: STATE_TRANSITION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'pipeline/v2_detectors.py::detect_state_change detecta la escritura
+      deterministica (MOVE literal, DIRECT_LITERAL) de WS-ESTADO-OPERACION dentro de la
+      decision -- support=PARTIAL siempre (Fase 7, sin evaluar relevancia funcional).
+      pipeline/enhanced_candidate_integration.py (Fase 15B3-C1) promueve a
+      RuleCandidate(rule_family=STATE_TRANSITION) UNICAMENTE porque
+      WS-ESTADO-OPERACION matchea la regla status-name de config/semantic-tags.yml
+      (correccion pre-commit 15B3-C1: contiene "-ESTADO" como palabra completa
+      delimitada por guiones, sin ir seguida de "-FLAG" y sin estar precedida de
+      "IND"/"INDICADOR" -- ese ultimo lookbehind negativo es lo que hace que
+      status-name y status-flag-name sean mutuamente NO ambiguas) -- semantic_tag=status.
+      Sin ese semantic_tag, V2_STATE_CHANGE nunca se promueve (permanece UNKNOWN/shadow,
+      ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
+      heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 4
-  positive_case_count: 3
-  negative_case_count: 1
-  expected_rule_count: 3
+  case_count: 6
+  positive_case_count: 4
+  negative_case_count: 2
+  expected_rule_count: 4

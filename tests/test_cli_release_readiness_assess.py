@@ -62,6 +62,8 @@ _ALL_GROUND_TRUTH_FIXTURES = (
     "gt_negative_001.cbl",
     "gt_by_reference_output_caller_001.cbl",
     "gt_by_reference_output_callee_001.cbl",
+    "gt_state_transition_001.cbl",
+    "gt_state_transition_negative_001.cbl",
 )
 
 
