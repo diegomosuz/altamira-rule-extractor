@@ -283,6 +283,114 @@ def test_compute_produces_compute_value_without_evaluating_expression() -> None:
     assert "COMPUTE_EXPRESSION_NOT_EVALUATED" in effect.diagnostic_codes
 
 
+def test_compute_with_multiple_targets_produces_one_effect_per_target() -> None:
+    """`COMPUTE A B = X + Y` (Fase 15B3-C2-B1, seccion 11): un efecto
+    INDEPENDIENTE por target, nunca un unico efecto con
+    writes=[A, B]. Mismo patron ya usado por `_normalize_move` caso B."""
+    stmt = _statement(
+        statement_id="P1::A::1::COMPUTE",
+        kind=StatementKind.COMPUTE,
+        source_text="COMPUTE WS-A WS-B = WS-X + WS-Y",
+        variables_read=["WS-X", "WS-Y"],
+        target_data_items=["WS-A", "WS-B"],
+        expression="WS-X + WS-Y",
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 2
+    assert [effect.effect_id.rsplit("::", 1)[-1] for effect in effects] == ["0", "1"]
+    assert effects[0].target_data_items == ["WS-A"]
+    assert effects[1].target_data_items == ["WS-B"]
+    for effect in effects:
+        assert effect.kind == SemanticEffectKind.COMPUTE_VALUE
+        assert effect.expression == "WS-X + WS-Y"
+        assert "MULTIPLE_TARGET_ASSIGNMENT" in effect.diagnostic_codes
+        assert "COMPUTE_EXPRESSION_NOT_EVALUATED" in effect.diagnostic_codes
+
+
+def test_compute_without_target_stays_preserved_statement() -> None:
+    stmt = _statement(
+        statement_id="P1::A::1::COMPUTE", kind=StatementKind.COMPUTE, source_text="COMPUTE X",
+        expression="X",
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    assert effects[0].kind == SemanticEffectKind.PRESERVED_STATEMENT
+    assert "CALCULATION_TARGET_UNAVAILABLE" in effects[0].diagnostic_codes
+
+
+# ---------------------------------------------------------------------------
+# ADD / SUBTRACT / MULTIPLY / DIVIDE (Fase 15B3-C2-B1)
+# ---------------------------------------------------------------------------
+
+
+def test_add_without_expression_produces_compute_value_using_source_text() -> None:
+    """`StatementExtractor.convertAdd` deja `expression=None` por diseno
+    (sin nodo ASG de expresion dedicado, ver docstring de
+    `_normalize_calculation`) -- el effect debe seguir siendo valido
+    (`COMPUTE_VALUE` exige `expression` no-None) usando `source_text`
+    como valor, nunca inventando una expresion sintetica."""
+    stmt = _statement(
+        statement_id="P1::A::1::ADD", kind=StatementKind.ADD, source_text="ADD WS-A TO WS-B",
+        variables_read=["WS-A"], target_data_items=["WS-B"], expression=None,
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    effect = effects[0]
+    assert effect.kind == SemanticEffectKind.COMPUTE_VALUE
+    assert effect.expression == "ADD WS-A TO WS-B"
+    assert effect.target_data_items == ["WS-B"]
+    assert effect.reads == ["WS-A"]
+    assert "CALCULATION_SOURCE_TEXT_ONLY" in effect.diagnostic_codes
+
+
+def test_subtract_multiply_divide_all_produce_compute_value_never_a_kind_per_verb() -> None:
+    for kind, source_text in (
+        (StatementKind.SUBTRACT, "SUBTRACT WS-A FROM WS-B"),
+        (StatementKind.MULTIPLY, "MULTIPLY WS-A BY WS-B"),
+        (StatementKind.DIVIDE, "DIVIDE WS-A INTO WS-B"),
+    ):
+        stmt = _statement(
+            statement_id=f"P1::A::1::{kind.value}", kind=kind, source_text=source_text,
+            variables_read=["WS-A"], target_data_items=["WS-B"], expression=None,
+        )
+        effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+        assert len(effects) == 1
+        assert effects[0].kind == SemanticEffectKind.COMPUTE_VALUE, kind
+        assert effects[0].expression == source_text
+
+
+def test_arithmetic_verb_with_multiple_targets_produces_one_effect_per_target() -> None:
+    stmt = _statement(
+        statement_id="P1::A::1::ADD", kind=StatementKind.ADD, source_text="ADD WS-X TO WS-A WS-B",
+        variables_read=["WS-X"], target_data_items=["WS-A", "WS-B"], expression=None,
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 2
+    assert effects[0].target_data_items == ["WS-A"]
+    assert effects[1].target_data_items == ["WS-B"]
+    for effect in effects:
+        assert "MULTIPLE_TARGET_ASSIGNMENT" in effect.diagnostic_codes
+
+
+def test_arithmetic_verb_without_target_stays_preserved_statement() -> None:
+    """`ADD CORRESPONDING` (target_data_items=[] por diseno de
+    `convertAdd`) nunca desaparece silenciosamente: PRESERVED_STATEMENT
+    con diagnostico explicito, mismo patron que MOVE CORRESPONDING/grupo."""
+    stmt = _statement(
+        statement_id="P1::A::1::ADD", kind=StatementKind.ADD,
+        source_text="ADD CORRESPONDING WS-GROUP-1 TO WS-GROUP-2", expression=None,
+    )
+    effects = _effects_of([_program("P1", [_paragraph("A", [stmt])])])
+
+    assert len(effects) == 1
+    assert effects[0].kind == SemanticEffectKind.PRESERVED_STATEMENT
+    assert "CALCULATION_TARGET_UNAVAILABLE" in effects[0].diagnostic_codes
+
+
 # ---------------------------------------------------------------------------
 # GO_TO
 # ---------------------------------------------------------------------------

@@ -605,3 +605,147 @@ def detect_state_change(ctx: V2DetectorContext) -> list[V2ShadowCandidate]:
                     )
 
     return sorted(candidates_by_id.values(), key=lambda candidate: candidate.candidate_id)
+
+
+# ---------------------------------------------------------------------------
+# V2_CALCULATION (Fase 15B3-C2-B1)
+# ---------------------------------------------------------------------------
+
+DETECTOR_ID_CALCULATION = "V2_CALCULATION"
+DETECTOR_VERSION_CALCULATION = "1.0"
+
+
+def detect_calculation(ctx: V2DetectorContext) -> list[V2ShadowCandidate]:
+    """Un unico detector para COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE (nunca
+    uno por verbo): itera `SemanticEffect`s de kind `COMPUTE_VALUE`
+    (poblados por `semantic_effects_analyzer._normalize_calculation` para
+    los 5 `StatementKind`, un efecto por target -- ver ese modulo) en vez
+    de `ctx.facts_by_target` (facts de propagacion literal, que COMPUTE/
+    aritmetica NUNCA producen: `_handle_compute_value` siempre invalida,
+    ver `semantic_propagation_analyzer.py`).
+
+    `support=PARTIAL` (nunca `DETERMINISTIC`, auditado explicitamente --
+    seccion 18 de la fase): `V2ShadowCandidate._check_score_and_support_
+    coherence` exige, para `DETERMINISTIC`, `resolved_literal` no-None Y
+    `propagation_fact_ids` no vacio -- ambos campos describen "conocemos
+    el VALOR concreto via propagacion", algo que una formula aritmetica
+    (`WS-COMISION = WS-MONTO * WS-TASA`) nunca tiene ni debe fingir tener
+    (prohibido inventar un literal, seccion 17). Forzar `DETERMINISTIC`
+    aqui exigiria debilitar ese validador compartido con RETURN_CODE_RULE/
+    LEVEL_88_RETURN_CODE_RULE -- exactamente lo que la fase prohibe
+    ("no degradar la trazabilidad semantica para hacer pasar promotion").
+    En su lugar se reutiliza el MISMO patron ya establecido por
+    `STATE_CHANGE_RULE`: `PARTIAL` reinterpretado localmente. Para
+    `STATE_CHANGE_RULE` significa "relevancia funcional no evaluada"; AQUI
+    significa "formula estructuralmente completa (operacion + operandos +
+    target demostrados), valor numerico runtime no evaluado" -- nunca
+    incertidumbre sobre la ESTRUCTURA. `detector_score=1.0` (a diferencia
+    de `STATE_CHANGE_DETECTOR_SCORE=0.7`): el predicado estructural que
+    este detector exige (target no vacio, target_data_items resuelto) SI
+    esta 100% satisfecho aqui, sin la incertidumbre de relevancia
+    funcional que motiva el score reducido de `V2_STATE_CHANGE`.
+
+    Calculos CONDICIONADOS e INCONDICIONALES ambos producen un
+    `V2ShadowCandidate` (correccion pre-commit 15B3-C2-B1, seccion 1): a
+    diferencia de la version anterior de este detector -- que hacia
+    `continue` puro para el caso incondicional, dejandolo invisible en
+    `diagnostics/v2-candidates-shadow.json` y solo reconstruible llamando
+    `compute_semantic_effects_artifact(...)` manualmente despues del run,
+    lo cual NUNCA ocurre en una ejecucion normal de `run_ingestion` -- un
+    calculo SIN `Decision` envolvente ahora produce un candidato con
+    `decision_id=None` (campo YA opcional en este contrato, `str | None =
+    None`, reutilizado tal cual, NUNCA fabricado con un valor sintetico) y
+    `diagnostic_codes=["V2_CALCULATION_NO_DECISION_ANCHOR"]`. Ese
+    candidato SIGUE sin llegar nunca a `06-candidates.json`
+    (`enhanced_candidate_integration.detect_enhanced_candidates` exige
+    `decision_id is not None` antes de convertir/productivizar, sin
+    cambios en ese requisito) -- pero, en vez de descartarse en silencio,
+    su `reason` (citando el `SemanticEffect.effect_id` real) se convierte
+    en un warning persistido en `CandidateArtifact.warnings`
+    (`06-candidates.json`, escrito por la etapa CANDIDATES_DETECTED en
+    CADA ejecucion normal con `enhanced_candidates_enabled=true` -- nunca
+    un artefacto/comando nuevo). Ver `enhanced_candidate_integration.
+    detect_enhanced_candidates` para el punto exacto donde ese warning se
+    genera."""
+    candidates_by_id: dict[str, V2ShadowCandidate] = {}
+
+    for program in ctx.canonical_programs:
+        program_name = program.program_name
+        for paragraph in program.paragraphs:
+            for statement in paragraph.statements:
+                for effect in ctx.effects_by_source_statement.get(statement.statement_id, []):
+                    if effect.kind != SemanticEffectKind.COMPUTE_VALUE:
+                        continue
+                    if not effect.target_data_items:
+                        continue
+                    target = effect.target_data_items[0]
+
+                    decision_statement = _nearest_enclosing_decision(ctx, statement)
+                    decision_id: str | None = None
+                    if decision_statement is not None:
+                        decision_node = _decision_graph_node_for(
+                            ctx, program=program_name, paragraph=paragraph.name,
+                            decision_statement=decision_statement,
+                        )
+                        decision_id = decision_node.id if decision_node else None
+
+                    candidate_id = candidate_id_for(
+                        detector_id=DETECTOR_ID_CALCULATION,
+                        detector_version=DETECTOR_VERSION_CALCULATION,
+                        program=program_name, paragraph=paragraph.name, decision_id=decision_id,
+                        anchor_statement_id=statement.statement_id, target_key=target,
+                        resolved_literal=None,
+                    )
+                    formula_text = (statement.expression or statement.source_text or "").strip()
+                    if decision_id is not None:
+                        diagnostic_codes: list[str] = []
+                        reason = (
+                            f"Decision en {paragraph.name!r} envuelve un calculo "
+                            f"({statement.kind.value}) estructuralmente demostrado: "
+                            f"{target!r} via {formula_text!r} (formula probada; valor "
+                            "numerico runtime no evaluado)."
+                        )
+                    else:
+                        diagnostic_codes = ["V2_CALCULATION_NO_DECISION_ANCHOR"]
+                        reason = (
+                            f"Calculo ({statement.kind.value}) reconocido en "
+                            f"{paragraph.name!r} SIN Decision envolvente: target {target!r} "
+                            f"via {formula_text!r}. SemanticEffect {effect.effect_id!r} "
+                            "(COMPUTE_VALUE) demostrado; no productivizado en 15B3-C2-B1 "
+                            "(calculo incondicional, fuera de alcance -- ver 15B3-C2-B2)."
+                        )
+                    candidate = V2ShadowCandidate(
+                        candidate_id=candidate_id,
+                        detector_id=DETECTOR_ID_CALCULATION,
+                        detector_version=DETECTOR_VERSION_CALCULATION,
+                        rule_type=V2RuleType.CALCULATION_RULE,
+                        support=V2CandidateSupport.PARTIAL,
+                        detector_score=1.0,
+                        program=program_name, paragraph=paragraph.name,
+                        anchor_statement_id=statement.statement_id, decision_id=decision_id,
+                        target_variable=target,
+                        target_qualified_name=None,
+                        resolved_literal=None,
+                        semantic_effect_ids=[effect.effect_id],
+                        propagation_fact_ids=[],
+                        source_references=[
+                            _source_reference_for_step_statement(
+                                ctx, program=program_name, paragraph=paragraph.name,
+                                statement_id=statement.statement_id,
+                            )
+                        ],
+                        diagnostic_codes=diagnostic_codes,
+                        reason=reason,
+                        comparable_v1_candidate_ids=_comparable_v1_ids_for_decision(
+                            ctx, decision_id
+                        ),
+                    )
+                    existing = candidates_by_id.get(candidate.candidate_id)
+                    if existing is None:
+                        candidates_by_id[candidate.candidate_id] = candidate
+                    elif existing != candidate:
+                        candidates_by_id[candidate.candidate_id] = _merge_candidate_evidence(
+                            existing, candidate
+                        )
+
+    return sorted(candidates_by_id.values(), key=lambda candidate: candidate.candidate_id)

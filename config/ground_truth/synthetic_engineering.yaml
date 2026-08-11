@@ -63,6 +63,30 @@ cases:
       real hasta PARSED + compute_interprocedural_rule_candidates_artifact (sin Neo4j): 1
       candidato support=DETERMINISTIC caller=GTBRCLR1 callee=GTBRCLE1 target=WS-STATUS
       output_literal=OK00, sin barriers ni diagnostics.'
+- case_id: gt-positive-calculation-if-compute-multiplication
+  kind: POSITIVE
+  program: GTCALC001
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_calculation_001.cbl
+    sha256: 4c5810841ee6bcefc55e98e5e45bf68b92204156f55288ccc12083fcc2a29c8b
+  description: 'IF WS-TIPO = ''I'' COMPUTE WS-COMISION = WS-MONTO * WS-TASA END-IF:
+    calculo condicionado (Fase 15B3-C2-B1) -- COMPUTE dentro de un IF produce un
+    unico CALCULATION_RULE anclado a esa Decision.'
+  expected_rules:
+  - expectation_id: gt-positive-calculation-if-compute-multiplication::v2-calculation
+    rule_family: CALCULATION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'pipeline/v2_detectors.py::detect_calculation itera SemanticEffects
+      de kind=COMPUTE_VALUE (un unico normalizador para COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE,
+      semantic_effects_analyzer._normalize_calculation) y exige un IF/EVALUATE envolvente via
+      _nearest_enclosing_decision (reutilizado sin cambios) -- el COMPUTE esta anidado dentro
+      del IF, decision_id resuelve contra el Decision real. support=PARTIAL (nunca
+      DETERMINISTIC: su validador exige resolved_literal, y una formula nunca tiene un
+      literal) reinterpretado localmente como "formula probada, valor runtime no evaluado".
+      enhanced_candidate_integration.py promueve a RuleCandidate(rule_family=CALCULATION) SIN
+      gate de semantic_tag. Confirmado con el JAR real: target_data_items=[WS-COMISION],
+      parent_statement_id apunta al IF, unsupported_constructs=[].'
 - case_id: gt-positive-level88-return-code-nested-set
   kind: POSITIVE
   program: GTL88001
@@ -142,7 +166,7 @@ cases:
       ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
       heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 6
-  positive_case_count: 4
+  case_count: 7
+  positive_case_count: 5
   negative_case_count: 2
-  expected_rule_count: 4
+  expected_rule_count: 5

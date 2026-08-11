@@ -177,7 +177,7 @@ def test_success_prints_readable_summary_and_exit_0(patched_settings: Settings) 
 
     assert result.exit_code == 0, result.output
     assert f"run_id: {_RUN_ID}" in result.output
-    assert "detectors_executed: 3" in result.output
+    assert "detectors_executed: 4" in result.output  # Fase 15B3-C2-B1: +V2_CALCULATION
     assert "v1_candidates: 0" in result.output
     assert "v2_candidates:" in result.output
     assert "deterministic:" in result.output

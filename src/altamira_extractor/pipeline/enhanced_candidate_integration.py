@@ -116,6 +116,7 @@ from .semantic_propagation_analyzer import analyze_semantic_propagation
 from .v2_detector_context import V2DetectorContext, build_v2_detector_context
 from .v2_detectors import (
     _data_item_semantic_tag,
+    detect_calculation,
     detect_level_88_return_code,
     detect_return_code_propagation,
     detect_state_change,
@@ -127,17 +128,20 @@ _LOCAL_RULE_FAMILY_BY_TYPE: dict[V2RuleType, UnifiedRuleFamily] = {
     V2RuleType.RETURN_CODE_RULE: UnifiedRuleFamily.RETURN_CODE,
     V2RuleType.LEVEL_88_RETURN_CODE_RULE: UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
     V2RuleType.STATE_CHANGE_RULE: UnifiedRuleFamily.STATE_TRANSITION,
+    V2RuleType.CALCULATION_RULE: UnifiedRuleFamily.CALCULATION,
 }
 _PROMOTABLE_RULE_TYPES = (
     V2RuleType.RETURN_CODE_RULE,
     V2RuleType.LEVEL_88_RETURN_CODE_RULE,
     V2RuleType.STATE_CHANGE_RULE,
+    V2RuleType.CALCULATION_RULE,
 )
 _PROMOTABLE_RULE_FAMILIES = frozenset(
     {
         UnifiedRuleFamily.RETURN_CODE,
         UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
         UnifiedRuleFamily.STATE_TRANSITION,
+        UnifiedRuleFamily.CALCULATION,
     }
 )
 
@@ -268,11 +272,34 @@ def _convert_v2_candidate(
     evidence_ids = tuple(
         sorted({*v2_candidate.semantic_effect_ids, *v2_candidate.propagation_fact_ids})
     )
+    if rule_family == UnifiedRuleFamily.CALCULATION:
+        # Fase 15B3-C2-B1, seccion 16: `functional_identity_key` no recibe
+        # el target como argumento separado -- `resolved_literal` (usado
+        # por las demas familias) es SIEMPRE None para un calculo (no hay
+        # literal, hay formula). Sin incluir el target explicitamente en
+        # `effect`, dos targets de la MISMA Decision (p.ej.
+        # `COMPUTE A B = X + Y`) colisionarian (mismo paragraph_id/
+        # decision_id/condition/rule_family, effect="" en ambos) y se
+        # fusionarian incorrectamente en un unico RuleCandidate. La formula
+        # (statement.expression si existe -- COMPUTE --, si no
+        # statement.source_text -- ADD/SUBTRACT/MULTIPLY/DIVIDE, sin nodo
+        # de expresion dedicado) se incluye para que la MISMA Decision +
+        # MISMO target + MISMA formula si deduplique correctamente.
+        origin_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
+        formula_text = ""
+        if origin_statement is not None:
+            formula_text = (
+                origin_statement.expression or origin_statement.source_text or ""
+            ).strip()
+        target_key = v2_candidate.target_qualified_name or v2_candidate.target_variable
+        effect = f"target={target_key}\x1fformula={formula_text}"
+    else:
+        effect = v2_candidate.resolved_literal or ""
     key = functional_identity_key(
         paragraph_id=paragraph_node.id,
         decision_id=v2_candidate.decision_id,
         condition=condition,
-        effect=v2_candidate.resolved_literal or "",
+        effect=effect,
         rule_family=rule_family,
     )
     return (
@@ -405,7 +432,7 @@ def detect_enhanced_candidates(
     source_package_hash: str,
 ) -> tuple[list[RuleCandidate], list[str]]:
     """Ejecuta `V2_RETURN_CODE_PROPAGATION`/`V2_LEVEL_88_RETURN_CODE`/
-    `V2_STATE_CHANGE` en memoria y fusiona el resultado con
+    `V2_STATE_CHANGE`/`V2_CALCULATION` en memoria y fusiona el resultado con
     `v1_candidates` via `_merge_candidates`. Devuelve `(candidatos_a_
     agregar_o_reemplazar, warnings)` -- el llamador (`candidates_detected_
     stage.py`) debe indexar por `candidate_id` y reemplazar/agregar,
@@ -446,6 +473,7 @@ def detect_enhanced_candidates(
             *detect_return_code_propagation(ctx),
             *detect_level_88_return_code(ctx),
             *detect_state_change(ctx),
+            *detect_calculation(ctx),
         ),
         key=lambda candidate: candidate.candidate_id,
     )
@@ -465,9 +493,37 @@ def detect_enhanced_candidates(
             # del target), nunca aqui -- un unico punto de decision.
             if v2_candidate.support != V2CandidateSupport.PARTIAL:
                 continue
+        elif v2_candidate.rule_type == V2RuleType.CALCULATION_RULE:
+            # V2_CALCULATION (Fase 15B3-C2-B1): support=PARTIAL aqui es su
+            # UNICO valor posible, con un significado LOCAL DISTINTO al de
+            # STATE_CHANGE_RULE -- "formula estructuralmente completa,
+            # valor numerico runtime no evaluado" (nunca "relevancia no
+            # evaluada": una formula aritmetica siempre es relevante por
+            # construccion, sin necesitar un semantic_tag gate -- ver
+            # docstring de detect_calculation). DETERMINISTIC no se usa
+            # porque su validador exige resolved_literal/
+            # propagation_fact_ids, que una formula nunca tiene.
+            if v2_candidate.support != V2CandidateSupport.PARTIAL:
+                continue
         elif v2_candidate.support != V2CandidateSupport.DETERMINISTIC:
             continue
         if v2_candidate.decision_id is None:
+            if v2_candidate.rule_type == V2RuleType.CALCULATION_RULE:
+                # Correccion pre-commit 15B3-C2-B1, seccion 1: un calculo
+                # incondicional (sin Decision envolvente) NUNCA se
+                # productiviza, pero tampoco se descarta en silencio --
+                # detect_calculation ya construyo este candidato
+                # (decision_id=None, NUNCA fabricado) precisamente para
+                # que su `reason` (formula + SemanticEffect.effect_id
+                # real) quede aqui, en `discard_warnings`, que termina
+                # persistido en CandidateArtifact.warnings
+                # (06-candidates.json) por CADA ejecucion normal con
+                # enhanced_candidates_enabled=true -- ningun artifact ni
+                # comando nuevo.
+                discard_warnings.append(
+                    f"candidato V2 {v2_candidate.candidate_id!r} descartado: "
+                    f"{v2_candidate.reason}"
+                )
             continue
         item, discard_reason = _convert_v2_candidate(v2_candidate, ctx)
         if item is None:

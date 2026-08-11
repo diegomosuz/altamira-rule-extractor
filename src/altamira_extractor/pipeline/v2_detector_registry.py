@@ -15,12 +15,15 @@ from dataclasses import dataclass
 from ..contracts.v2_shadow_candidates import V2RuleType, V2ShadowCandidate
 from .v2_detector_context import V2DetectorContext
 from .v2_detectors import (
+    DETECTOR_ID_CALCULATION,
     DETECTOR_ID_LEVEL_88_RETURN_CODE,
     DETECTOR_ID_RETURN_CODE_PROPAGATION,
     DETECTOR_ID_STATE_CHANGE,
+    DETECTOR_VERSION_CALCULATION,
     DETECTOR_VERSION_LEVEL_88_RETURN_CODE,
     DETECTOR_VERSION_RETURN_CODE_PROPAGATION,
     DETECTOR_VERSION_STATE_CHANGE,
+    detect_calculation,
     detect_level_88_return_code,
     detect_return_code_propagation,
     detect_state_change,
@@ -69,6 +72,19 @@ V2_DETECTOR_REGISTRY: dict[str, V2DetectorDefinition] = {
             "Decisiones que cambian deterministicamente un data item ordinario (no "
             "return_code). Conservador: support=PARTIAL, relevancia funcional no "
             "garantizada."
+        ),
+    ),
+    DETECTOR_ID_CALCULATION: V2DetectorDefinition(
+        detector_id=DETECTOR_ID_CALCULATION,
+        detector_version=DETECTOR_VERSION_CALCULATION,
+        rule_type=V2RuleType.CALCULATION_RULE,
+        callable=detect_calculation,
+        description=(
+            "Calculos (COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE) cuya formula esta "
+            "estructuralmente demostrada via SemanticEffect COMPUTE_VALUE. "
+            "support=PARTIAL: formula probada, valor numerico runtime no evaluado. "
+            "decision_id=None cuando no hay IF/EVALUATE envolvente (calculo "
+            "incondicional, no productivizado en 15B3-C2-B1)."
         ),
     ),
 }

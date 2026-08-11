@@ -35,16 +35,21 @@ from .base import AltamiraBaseModel, RelativePath, Sha256Hex
 
 class V2RuleType(StrEnum):
     """Tipo de regla funcional que un detector V2 afirma haber
-    demostrado. Solo se declaran los tres tipos con semantica ya
-    completamente modelada por las fases anteriores (Fase 2 SemanticEffects
-    + Fase 3 nivel 88 + Fase 4 SemanticPropagation); THRESHOLD_RULE/
-    CALCULATION_RULE/PERSISTENCE_RULE/ROUTING_RULE/AUTHORIZATION_RULE/
-    FILE_OUTPUT_RULE/PARAMETER_DEPENDENT_RULE quedan deliberadamente fuera
-    hasta que exista esa semantica (docs/V2_DETECTORS_SHADOW_MODE.md)."""
+    demostrado. Solo se declaran los tipos con semantica ya completamente
+    modelada por las fases anteriores (Fase 2 SemanticEffects + Fase 3
+    nivel 88 + Fase 4 SemanticPropagation); THRESHOLD_RULE/
+    PERSISTENCE_RULE/ROUTING_RULE/AUTHORIZATION_RULE/FILE_OUTPUT_RULE/
+    PARAMETER_DEPENDENT_RULE quedan deliberadamente fuera hasta que exista
+    esa semantica (docs/V2_DETECTORS_SHADOW_MODE.md).
+
+    `CALCULATION_RULE` (Fase 15B3-C2-B1) cubre COMPUTE/ADD/SUBTRACT/
+    MULTIPLY/DIVIDE con un unico tipo -- nunca un tipo por verbo (el verbo
+    original se preserva via `StatementKind`, nunca duplicado aqui)."""
 
     RETURN_CODE_RULE = "RETURN_CODE_RULE"
     LEVEL_88_RETURN_CODE_RULE = "LEVEL_88_RETURN_CODE_RULE"
     STATE_CHANGE_RULE = "STATE_CHANGE_RULE"
+    CALCULATION_RULE = "CALCULATION_RULE"
 
 
 class V2CandidateSupport(StrEnum):

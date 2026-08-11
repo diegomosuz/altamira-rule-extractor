@@ -14,6 +14,12 @@ import io.proleap.cobol.Cobol85Parser;
 import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.call.DataDescriptionEntryCall;
 import io.proleap.cobol.asg.metamodel.procedure.Statement;
+import io.proleap.cobol.asg.metamodel.procedure.add.AddCorrespondingStatement;
+import io.proleap.cobol.asg.metamodel.procedure.add.AddStatement;
+import io.proleap.cobol.asg.metamodel.procedure.add.AddToGivingStatement;
+import io.proleap.cobol.asg.metamodel.procedure.add.AddToStatement;
+import io.proleap.cobol.asg.metamodel.procedure.add.From;
+import io.proleap.cobol.asg.metamodel.procedure.add.ToGiving;
 import io.proleap.cobol.asg.metamodel.procedure.call.ByContent;
 import io.proleap.cobol.asg.metamodel.procedure.call.ByReference;
 import io.proleap.cobol.asg.metamodel.procedure.call.ByValue;
@@ -22,6 +28,11 @@ import io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter;
 import io.proleap.cobol.asg.metamodel.procedure.call.UsingPhrase;
 import io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.Store;
+import io.proleap.cobol.asg.metamodel.procedure.divide.DivideByGivingStatement;
+import io.proleap.cobol.asg.metamodel.procedure.divide.DivideIntoGivingStatement;
+import io.proleap.cobol.asg.metamodel.procedure.divide.DivideIntoStatement;
+import io.proleap.cobol.asg.metamodel.procedure.divide.DivideStatement;
+import io.proleap.cobol.asg.metamodel.procedure.divide.Into;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.When;
 import io.proleap.cobol.asg.metamodel.procedure.evaluate.WhenPhrase;
@@ -32,12 +43,24 @@ import io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement;
 import io.proleap.cobol.asg.metamodel.procedure.ifstmt.IfStatement;
 import io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement;
 import io.proleap.cobol.asg.metamodel.procedure.move.MoveToStatement;
+import io.proleap.cobol.asg.metamodel.procedure.multiply.ByOperand;
+import io.proleap.cobol.asg.metamodel.procedure.multiply.ByPhrase;
+import io.proleap.cobol.asg.metamodel.procedure.multiply.GivingOperand;
+import io.proleap.cobol.asg.metamodel.procedure.multiply.GivingResult;
+import io.proleap.cobol.asg.metamodel.procedure.multiply.MultiplyStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement;
 import io.proleap.cobol.asg.metamodel.procedure.set.SetStatement;
 import io.proleap.cobol.asg.metamodel.procedure.set.SetTo;
 import io.proleap.cobol.asg.metamodel.procedure.set.To;
 import io.proleap.cobol.asg.metamodel.procedure.set.Value;
 import io.proleap.cobol.asg.metamodel.procedure.stop.StopStatement;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.Minuend;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.MinuendGiving;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractCorrespondingStatement;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractFromGivingStatement;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractFromStatement;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractStatement;
+import io.proleap.cobol.asg.metamodel.procedure.subtract.Subtrahend;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -88,6 +111,14 @@ final class StatementExtractor {
             convertSet(setStmt, parentId, branchKind);
         } else if (statement instanceof ComputeStatement computeStmt) {
             convertCompute(computeStmt, parentId, branchKind);
+        } else if (statement instanceof AddStatement addStmt) {
+            convertAdd(addStmt, parentId, branchKind);
+        } else if (statement instanceof SubtractStatement subtractStmt) {
+            convertSubtract(subtractStmt, parentId, branchKind);
+        } else if (statement instanceof MultiplyStatement multiplyStmt) {
+            convertMultiply(multiplyStmt, parentId, branchKind);
+        } else if (statement instanceof DivideStatement divideStmt) {
+            convertDivide(divideStmt, parentId, branchKind);
         } else if (statement instanceof GoToStatement gotoStmt) {
             convertGoTo(gotoStmt, parentId, branchKind);
         } else if (statement instanceof PerformStatement performStmt) {
@@ -373,6 +404,312 @@ final class StatementExtractor {
                 loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
                 read, List.copyOf(targets), List.copyOf(targets), null, List.of(), List.of(), null, null,
                 List.of()));
+    }
+
+    /**
+     * {@code ADD} (Fase 15B3-C2-B1): a diferencia de {@code COMPUTE}, ninguna
+     * de las 4 variantes ({@code TO}/{@code TO...GIVING}/{@code
+     * CORRESPONDING}) expone un nodo de expresion unico equivalente a
+     * {@code ArithmeticExpression} -- {@code expression}/{@code
+     * normalizedExpression} quedan {@code null} por diseno (mismo criterio
+     * ya usado por {@code convertMove}: sin nodo de expresion dedicado, no
+     * se sintetiza texto reconstruido via {@code getText()}, que ademas
+     * pierde todo espacio entre tokens -- verificado empiricamente que
+     * {@code getText()} produce p.ej. {@code "WS-SALDO<0"} sin espacios).
+     * {@code source_text} (siempre preservado, verbatim) queda como unica
+     * evidencia textual. {@code ROUNDED}/{@code ON SIZE ERROR}/{@code NOT
+     * ON SIZE ERROR}/{@code CORRESPONDING} se registran via {@code
+     * ctx.unsupported()} (camino feliz aritmetico interpretado, esas
+     * clausulas no) -- nunca se pierden silenciosamente.
+     */
+    private void convertAdd(AddStatement addStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(addStmt.getCtx());
+        List<String> targets = new ArrayList<>();
+        List<String> read = new ArrayList<>();
+
+        if (addStmt.getOnSizeErrorPhrase() != null || addStmt.getNotOnSizeErrorPhrase() != null) {
+            ctx.unsupported(
+                    "ADD ... ON SIZE ERROR/NOT ON SIZE ERROR en paragraph " + paragraphName
+                            + " no interpreta el branch de control (kind=ADD, camino feliz procesado)");
+        }
+
+        AddToStatement addTo = addStmt.getAddToStatement();
+        AddToGivingStatement addToGiving = addStmt.getAddToGivingStatement();
+        AddCorrespondingStatement addCorresponding = addStmt.getAddCorrespondingStatement();
+
+        if (addTo != null) {
+            for (From from : addTo.getFroms()) {
+                read.addAll(ValueReferences.collectVariableNames(from.getFromValueStmt()));
+            }
+            for (io.proleap.cobol.asg.metamodel.procedure.add.To to : addTo.getTos()) {
+                if (to.getToCall() != null && to.getToCall().getName() != null) {
+                    targets.add(to.getToCall().getName());
+                }
+                if (to.isRounded()) {
+                    ctx.unsupported(
+                            "ADD ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=ADD, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else if (addToGiving != null) {
+            for (From from : addToGiving.getFroms()) {
+                read.addAll(ValueReferences.collectVariableNames(from.getFromValueStmt()));
+            }
+            for (ToGiving to : addToGiving.getTos()) {
+                read.addAll(ValueReferences.collectVariableNames(to.getToValueStmt()));
+            }
+            for (io.proleap.cobol.asg.metamodel.procedure.add.Giving giving : addToGiving.getGivings()) {
+                if (giving.getGivingCall() != null && giving.getGivingCall().getName() != null) {
+                    targets.add(giving.getGivingCall().getName());
+                }
+                if (giving.isRounded()) {
+                    ctx.unsupported(
+                            "ADD ... GIVING ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=ADD, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else if (addCorresponding != null) {
+            ctx.unsupported(
+                    "ADD CORRESPONDING en paragraph " + paragraphName
+                            + " no decodificado estructuralmente (kind=ADD, source_text conservado)");
+        } else {
+            ctx.unsupported(
+                    "AddStatement en paragraph " + paragraphName
+                            + " con forma no reconocida estructuralmente (kind=ADD)");
+        }
+
+        String id = nextId(StatementKind.ADD);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.ADD, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
+                loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.copyOf(targets),
+                List.copyOf(targets), null, List.of(), List.of(), null, null, List.of()));
+    }
+
+    /** {@code SUBTRACT} (Fase 15B3-C2-B1): mismo criterio que {@link #convertAdd}. */
+    private void convertSubtract(SubtractStatement subtractStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(subtractStmt.getCtx());
+        List<String> targets = new ArrayList<>();
+        List<String> read = new ArrayList<>();
+
+        if (subtractStmt.getOnSizeErrorPhrase() != null || subtractStmt.getNotOnSizeErrorPhrase() != null) {
+            ctx.unsupported(
+                    "SUBTRACT ... ON SIZE ERROR/NOT ON SIZE ERROR en paragraph " + paragraphName
+                            + " no interpreta el branch de control (kind=SUBTRACT, camino feliz procesado)");
+        }
+
+        SubtractFromStatement subtractFrom = subtractStmt.getSubtractFromStatement();
+        SubtractFromGivingStatement subtractFromGiving = subtractStmt.getSubtractFromGivingStatement();
+        SubtractCorrespondingStatement subtractCorresponding = subtractStmt.getSubtractCorrespondingStatement();
+
+        if (subtractFrom != null) {
+            for (Subtrahend subtrahend : subtractFrom.getSubtrahends()) {
+                read.addAll(ValueReferences.collectVariableNames(subtrahend.getSubtrahendValueStmt()));
+            }
+            for (Minuend minuend : subtractFrom.getMinuends()) {
+                if (minuend.getMinuendCall() != null && minuend.getMinuendCall().getName() != null) {
+                    targets.add(minuend.getMinuendCall().getName());
+                }
+                if (minuend.isRounded()) {
+                    ctx.unsupported(
+                            "SUBTRACT ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=SUBTRACT, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else if (subtractFromGiving != null) {
+            for (Subtrahend subtrahend : subtractFromGiving.getSubtrahends()) {
+                read.addAll(ValueReferences.collectVariableNames(subtrahend.getSubtrahendValueStmt()));
+            }
+            MinuendGiving minuendGiving = subtractFromGiving.getMinuend();
+            if (minuendGiving != null && minuendGiving.getMinuendValueStmt() != null) {
+                read.addAll(ValueReferences.collectVariableNames(minuendGiving.getMinuendValueStmt()));
+            }
+            for (io.proleap.cobol.asg.metamodel.procedure.subtract.Giving giving :
+                    subtractFromGiving.getGivings()) {
+                if (giving.getGivingCall() != null && giving.getGivingCall().getName() != null) {
+                    targets.add(giving.getGivingCall().getName());
+                }
+                if (giving.isRounded()) {
+                    ctx.unsupported(
+                            "SUBTRACT ... GIVING ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=SUBTRACT, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else if (subtractCorresponding != null) {
+            ctx.unsupported(
+                    "SUBTRACT CORRESPONDING en paragraph " + paragraphName
+                            + " no decodificado estructuralmente (kind=SUBTRACT, source_text conservado)");
+        } else {
+            ctx.unsupported(
+                    "SubtractStatement en paragraph " + paragraphName
+                            + " con forma no reconocida estructuralmente (kind=SUBTRACT)");
+        }
+
+        String id = nextId(StatementKind.SUBTRACT);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.SUBTRACT, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
+                loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.copyOf(targets),
+                List.copyOf(targets), null, List.of(), List.of(), null, null, List.of()));
+    }
+
+    /**
+     * {@code MULTIPLY} (Fase 15B3-C2-B1): sin variante {@code
+     * CORRESPONDING} (no existe en la gramatica COBOL estandar para este
+     * verbo, confirmado por ausencia de esa clase en el ASG de ProLeap).
+     */
+    private void convertMultiply(MultiplyStatement multiplyStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(multiplyStmt.getCtx());
+        List<String> targets = new ArrayList<>();
+        List<String> read = new ArrayList<>();
+
+        if (multiplyStmt.getOnSizeErrorPhrase() != null || multiplyStmt.getNotOnSizeErrorPhrase() != null) {
+            ctx.unsupported(
+                    "MULTIPLY ... ON SIZE ERROR/NOT ON SIZE ERROR en paragraph " + paragraphName
+                            + " no interpreta el branch de control (kind=MULTIPLY, camino feliz procesado)");
+        }
+
+        if (multiplyStmt.getOperandValueStmt() != null) {
+            read.addAll(ValueReferences.collectVariableNames(multiplyStmt.getOperandValueStmt()));
+        }
+
+        ByPhrase byPhrase = multiplyStmt.getByPhrase();
+        io.proleap.cobol.asg.metamodel.procedure.multiply.GivingPhrase givingPhrase =
+                multiplyStmt.getGivingPhrase();
+
+        if (byPhrase != null) {
+            for (ByOperand operand : byPhrase.getByOperands()) {
+                if (operand.getOperandCall() != null && operand.getOperandCall().getName() != null) {
+                    targets.add(operand.getOperandCall().getName());
+                }
+                if (operand.isRounded()) {
+                    ctx.unsupported(
+                            "MULTIPLY ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=MULTIPLY, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else if (givingPhrase != null) {
+            GivingOperand givingOperand = givingPhrase.getGivingOperand();
+            if (givingOperand != null && givingOperand.getOperandValueStmt() != null) {
+                read.addAll(ValueReferences.collectVariableNames(givingOperand.getOperandValueStmt()));
+            }
+            for (GivingResult result : givingPhrase.getGivingResults()) {
+                if (result.getResultCall() != null && result.getResultCall().getName() != null) {
+                    targets.add(result.getResultCall().getName());
+                }
+                if (result.isRounded()) {
+                    ctx.unsupported(
+                            "MULTIPLY ... GIVING ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=MULTIPLY, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else {
+            ctx.unsupported(
+                    "MultiplyStatement en paragraph " + paragraphName
+                            + " con forma no reconocida estructuralmente (kind=MULTIPLY)");
+        }
+
+        String id = nextId(StatementKind.MULTIPLY);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.MULTIPLY, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
+                loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.copyOf(targets),
+                List.copyOf(targets), null, List.of(), List.of(), null, null, List.of()));
+    }
+
+    /**
+     * {@code DIVIDE} (Fase 15B3-C2-B1): sin variante {@code
+     * CORRESPONDING} (misma razon que {@link #convertMultiply}). {@code
+     * REMAINDER} (segundo target real, {@code Remainder.getRemainderCall()})
+     * deliberadamente NO se agrega a {@code target_data_items}: hacerlo
+     * produciria {@code writes=[cociente,resto]} sin forma de distinguir
+     * cual es cual sin un campo nuevo (rechazado en 15B3-C2-A2, opcion B:
+     * diagnostico explicito, productizacion diferida) -- se registra via
+     * {@code ctx.unsupported()}, nunca se pierde silenciosamente, y el
+     * cociente (unico target capturado) sigue siendo una escritura limpia
+     * y sin ambiguedad.
+     */
+    private void convertDivide(DivideStatement divideStmt, String parentId, BranchKind branchKind) {
+        Location loc = resolveLocation(divideStmt.getCtx());
+        List<String> targets = new ArrayList<>();
+        List<String> read = new ArrayList<>();
+
+        if (divideStmt.getOnSizeErrorPhrase() != null || divideStmt.getNotOnSizeErrorPhrase() != null) {
+            ctx.unsupported(
+                    "DIVIDE ... ON SIZE ERROR/NOT ON SIZE ERROR en paragraph " + paragraphName
+                            + " no interpreta el branch de control (kind=DIVIDE, camino feliz procesado)");
+        }
+
+        if (divideStmt.getDivisorValueStmt() != null) {
+            read.addAll(ValueReferences.collectVariableNames(divideStmt.getDivisorValueStmt()));
+        }
+
+        DivideIntoStatement divideInto = divideStmt.getDivideIntoStatement();
+        DivideIntoGivingStatement divideIntoGiving = divideStmt.getDivideIntoGivingStatement();
+        DivideByGivingStatement divideByGiving = divideStmt.getDivideByGivingStatement();
+
+        if (divideInto != null) {
+            for (Into into : divideInto.getIntos()) {
+                if (into.getGivingCall() != null && into.getGivingCall().getName() != null) {
+                    targets.add(into.getGivingCall().getName());
+                }
+                if (into.isRounded()) {
+                    ctx.unsupported(
+                            "DIVIDE ... ROUNDED en paragraph " + paragraphName
+                                    + " no ajusta el valor estructuralmente (kind=DIVIDE, presencia "
+                                    + "registrada, valor no recalculado)");
+                }
+            }
+        } else if (divideIntoGiving != null) {
+            if (divideIntoGiving.getIntoValueStmt() != null) {
+                read.addAll(ValueReferences.collectVariableNames(divideIntoGiving.getIntoValueStmt()));
+            }
+            collectDivideGivingPhrase(divideIntoGiving.getGivingPhrase(), targets);
+        } else if (divideByGiving != null) {
+            if (divideByGiving.getByValueStmt() != null) {
+                read.addAll(ValueReferences.collectVariableNames(divideByGiving.getByValueStmt()));
+            }
+            collectDivideGivingPhrase(divideByGiving.getGivingPhrase(), targets);
+        } else {
+            ctx.unsupported(
+                    "DivideStatement en paragraph " + paragraphName
+                            + " con forma no reconocida estructuralmente (kind=DIVIDE)");
+        }
+
+        if (divideStmt.getRemainder() != null) {
+            ctx.unsupported(
+                    "DIVIDE ... REMAINDER en paragraph " + paragraphName
+                            + " no se representa como target estructurado (kind=DIVIDE, cociente "
+                            + "capturado, resto no capturado en target_data_items para evitar "
+                            + "ambiguedad quotient/remainder; ver 15B3-C2-A2 seccion REMAINDER)");
+        }
+
+        String id = nextId(StatementKind.DIVIDE);
+        collected.add(new CanonicalStatement(
+                id, StatementKind.DIVIDE, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
+                loc.kind(), parentId, branchKind, null, null, null, List.of(), read, List.copyOf(targets),
+                List.copyOf(targets), null, List.of(), List.of(), null, null, List.of()));
+    }
+
+    private void collectDivideGivingPhrase(
+            io.proleap.cobol.asg.metamodel.procedure.divide.GivingPhrase givingPhrase, List<String> targets) {
+        if (givingPhrase == null) {
+            return;
+        }
+        for (io.proleap.cobol.asg.metamodel.procedure.divide.Giving giving : givingPhrase.getGivings()) {
+            if (giving.getGivingCall() != null && giving.getGivingCall().getName() != null) {
+                targets.add(giving.getGivingCall().getName());
+            }
+            if (giving.isRounded()) {
+                ctx.unsupported(
+                        "DIVIDE ... GIVING ... ROUNDED en paragraph " + paragraphName
+                                + " no ajusta el valor estructuralmente (kind=DIVIDE, presencia "
+                                + "registrada, valor no recalculado)");
+            }
+        }
     }
 
     private void convertGoTo(GoToStatement gotoStmt, String parentId, BranchKind branchKind) {

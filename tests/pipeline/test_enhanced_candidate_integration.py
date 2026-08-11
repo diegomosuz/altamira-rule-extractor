@@ -1395,3 +1395,200 @@ def test_ambiguous_named_target_never_becomes_state_transition() -> None:
 
     assert new_candidates == []
     assert_only_state_change_discard_warnings(warnings, targets=["WS-INDICADOR-PROCESO"])
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B3-C2-B1: CALCULATION (COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE
+# condicionados) -- productizacion hasta RuleCandidate.
+# ---------------------------------------------------------------------------
+
+
+def test_conditioned_compute_produces_a_calculation_rule_candidate() -> None:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10,
+        expression="WS-TIPO = 'I'",
+    )
+    compute_stmt = make_stmt(
+        statement_id="P1::A::1::COMPUTE",
+        kind=StatementKind.COMPUTE,
+        target_data_items=["WS-COMISION"],
+        variables_written=["WS-COMISION"],
+        variables_read=["WS-MONTO", "WS-TASA"],
+        expression="WS-MONTO * WS-TASA",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, compute_stmt],
+        variables_read=["WS-MONTO", "WS-TASA"], variables_written=["WS-COMISION"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-TIPO = 'I'")], tags={}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    candidate = new_candidates[0]
+    assert candidate.rule_family == UnifiedRuleFamily.CALCULATION
+    assert candidate.candidate_source == CandidateSource.V2
+    assert candidate.condition == "WS-TIPO = 'I'"
+    assert candidate.outcome_code is None, "CALCULATION nunca afirma un literal como outcome_code"
+    assert candidate.decision_id == decision_node_id_for("PROG1", "A", 10, 1)
+    assert candidate.evidence_ids != []
+
+
+def test_conditioned_arithmetic_verb_also_produces_a_calculation_rule_candidate() -> None:
+    """No solo COMPUTE: MULTIPLY (ejemplo del enunciado, seccion 22)
+    tambien produce un CALCULATION productivo end-to-end."""
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10,
+        expression="WS-TIPO = 'I'",
+    )
+    multiply_stmt = make_stmt(
+        statement_id="P1::A::1::MULTIPLY",
+        kind=StatementKind.MULTIPLY,
+        target_data_items=["WS-COMISION"],
+        variables_written=["WS-COMISION"],
+        variables_read=["WS-MONTO", "WS-TASA"],
+        expression=None,
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, multiply_stmt],
+        variables_read=["WS-MONTO", "WS-TASA"], variables_written=["WS-COMISION"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-TIPO = 'I'")], tags={}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    assert new_candidates[0].rule_family == UnifiedRuleFamily.CALCULATION
+
+
+def test_unconditional_calculation_never_produces_a_candidate_but_leaves_a_warning() -> None:
+    """Correccion pre-commit 15B3-C2-B1, seccion 1: sin Decision
+    envolvente, CERO candidatos en 06-candidates.json (sin cambios) --
+    pero SI un warning persistido en CandidateArtifact.warnings, citando
+    el target y el SemanticEffect real, para que una ejecucion NORMAL
+    (sin invocar nada manualmente despues del run) deje una senal de que
+    el calculo fue reconocido y no productivizado. No silent loss."""
+    compute_stmt = make_stmt(
+        statement_id="P1::A::1::COMPUTE",
+        kind=StatementKind.COMPUTE,
+        target_data_items=["WS-COMISION"],
+        variables_written=["WS-COMISION"],
+        variables_read=["WS-MONTO", "WS-TASA"],
+        expression="WS-MONTO * WS-TASA",
+    )
+    paragraph = CanonicalParagraph(
+        name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+        statements=[compute_stmt],
+        variables_read=["WS-MONTO", "WS-TASA"], variables_written=["WS-COMISION"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(program, [], tags={})
+
+    assert new_candidates == []
+    assert len(warnings) == 1, warnings
+    assert "WS-COMISION" in warnings[0]
+    assert "SemanticEffect" in warnings[0]
+    assert "COMPUTE_VALUE" in warnings[0]
+    assert "no Decision" in warnings[0] or "SIN Decision" in warnings[0]
+
+
+def test_single_decision_two_calculation_targets_produce_two_distinct_candidates_never_merged() -> (
+    None
+):
+    """Seccion 16 (obligatorio): `COMPUTE A B = X + Y` bajo la MISMA
+    Decision -- dos targets reales deben producir dos `RuleCandidate`
+    con `candidate_id` DISTINTO (el target esta incluido explicitamente
+    en el `effect` pasado a `functional_identity_key`, nunca colisiona
+    por `resolved_literal=None` compartido)."""
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10,
+        expression="WS-TIPO = 'I'",
+    )
+    compute_stmt = make_stmt(
+        statement_id="P1::A::1::COMPUTE",
+        kind=StatementKind.COMPUTE,
+        target_data_items=["WS-A-TARGET", "WS-B-TARGET"],
+        variables_written=["WS-A-TARGET", "WS-B-TARGET"],
+        variables_read=["WS-X", "WS-Y"],
+        expression="WS-X + WS-Y",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A", source_text="A.", location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, compute_stmt],
+        variables_read=["WS-X", "WS-Y"], variables_written=["WS-A-TARGET", "WS-B-TARGET"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[
+            _data_item("WS-A-TARGET"), _data_item("WS-B-TARGET"),
+            _data_item("WS-X"), _data_item("WS-Y"),
+        ],
+        paragraphs=[paragraph],
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-TIPO = 'I'")], tags={}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2
+    candidate_ids = {candidate.candidate_id for candidate in new_candidates}
+    assert len(candidate_ids) == 2, "targets distintos nunca deben fusionarse en un solo candidato"
+    for candidate in new_candidates:
+        assert candidate.rule_family == UnifiedRuleFamily.CALCULATION
+
+
+def test_same_decision_same_target_same_formula_deduplicates_to_one_candidate() -> None:
+    """Complemento de la seccion 16: MISMA Decision + MISMO target +
+    MISMA formula debe deduplicarse a un unico `RuleCandidate` (no
+    generar dos filas identicas por casualidad de construccion)."""
+    key_a = functional_identity_key(
+        paragraph_id="P::paragraph::A",
+        decision_id="DEC1",
+        condition="WS-TIPO = 'I'",
+        effect="target=WS-COMISION\x1fformula=WS-MONTO * WS-TASA",
+        rule_family=UnifiedRuleFamily.CALCULATION,
+    )
+    key_b = functional_identity_key(
+        paragraph_id="P::paragraph::A",
+        decision_id="DEC1",
+        condition="WS-TIPO = 'I'",
+        effect="target=WS-COMISION\x1fformula=WS-MONTO * WS-TASA",
+        rule_family=UnifiedRuleFamily.CALCULATION,
+    )
+    key_different_target = functional_identity_key(
+        paragraph_id="P::paragraph::A",
+        decision_id="DEC1",
+        condition="WS-TIPO = 'I'",
+        effect="target=WS-OTRO\x1fformula=WS-MONTO * WS-TASA",
+        rule_family=UnifiedRuleFamily.CALCULATION,
+    )
+    assert key_a == key_b, "misma Decision + mismo target + misma formula debe deduplicarse"
+    assert key_a != key_different_target, "target distinto nunca debe colisionar"

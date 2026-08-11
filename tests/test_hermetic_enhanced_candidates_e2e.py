@@ -1,6 +1,7 @@
 """E2E hermetico productivo de la deteccion ampliada (Fase 15B3-B1,
-seccion 5; extendido en Fase 15B3-C1 con STATE_TRANSITION): "package
-sintetico versionado -> parser Java real ->
+seccion 5; extendido en Fase 15B3-C1 con STATE_TRANSITION; extendido en
+Fase 15B3-C2-B1 con CALCULATION condicionada -- COMPUTE y un verbo
+aritmetico): "package sintetico versionado -> parser Java real ->
 canonical -> semantic graph en Neo4j real efimero -> V1 + V2 ->
 06-candidates.json -> ContextPackage -> RuleDraft -> guardrail",
 ejercitando exclusivamente `run_ingestion` y los stages productivos
@@ -67,7 +68,7 @@ _MANIFEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 </altamira-package>
 """
 
-# Cinco paragraphs, cinco casos:
+# Ocho paragraphs:
 # - CHECK-SALDO-PARA: RETURN_CODE directo (Q0/V1 lo detecta, MOVE literal
 #   directo a WS-COD-RETORNO -- baseline V1 para probar preservacion).
 # - CHECK-PROPAGACION-PARA: RETURN_CODE via propagacion V2 (MOVE literal
@@ -83,6 +84,17 @@ _MANIFEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 #   status_flag) -- solo V2_STATE_CHANGE (UNKNOWN, nunca promovido por
 #   enhanced_candidate_integration.py sin semantic_tag) lo detectaria;
 #   prueba "UNKNOWN excluido" / target ordinario sin relevancia.
+# - CHECK-CALCULO-COMPUTE-PARA (Fase 15B3-C2-B1): CALCULATION condicionado
+#   via COMPUTE dentro de un IF.
+# - CHECK-CALCULO-MULTIPLY-PARA (Fase 15B3-C2-B1): CALCULATION condicionado
+#   via un verbo aritmetico (MULTIPLY...GIVING, no solo COMPUTE) dentro de
+#   un IF -- ejemplo recomendado por el enunciado de la fase.
+# - CHECK-CALCULO-INCONDICIONAL-PARA (Fase 15B3-C2-B1): COMPUTE SIN IF/
+#   EVALUATE envolvente -- nunca debe llegar a 06-candidates.json (fuera
+#   de alcance de esta fase), pero deja un warning PERSISTIDO en
+#   06-candidates.json.warnings (correccion pre-commit, seccion 1: "no
+#   silent loss" via una ejecucion normal, sin invocar nada manualmente
+#   despues del run).
 _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        PROGRAM-ID. ENHRULE1.
        DATA DIVISION.
@@ -93,6 +105,11 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
        01 WS-COD-AUX PIC X(4) VALUE SPACES.
        01 WS-ESTADO-OPERACION PIC X(1) VALUE SPACES.
        01 WS-INDICADOR-INTERNO PIC X(1) VALUE SPACES.
+       01 WS-MONTO-CALC PIC 9(7)V99 VALUE 100.
+       01 WS-TASA-CALC PIC 9(3)V99 VALUE 5.
+       01 WS-COMISION-COMPUTE PIC 9(7)V99 VALUE 0.
+       01 WS-COMISION-MULTIPLY PIC 9(7)V99 VALUE 0.
+       01 WS-COMISION-INCONDICIONAL PIC 9(7)V99 VALUE 0.
        PROCEDURE DIVISION.
        MAIN-PARA.
            PERFORM CHECK-SALDO-PARA.
@@ -100,6 +117,9 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
            PERFORM CHECK-INVALIDO-PARA.
            PERFORM CHECK-TRANSICION-PARA.
            PERFORM CHECK-INDICADOR-PARA.
+           PERFORM CHECK-CALCULO-COMPUTE-PARA.
+           PERFORM CHECK-CALCULO-MULTIPLY-PARA.
+           PERFORM CHECK-CALCULO-INCONDICIONAL-PARA.
            GOBACK.
        CHECK-SALDO-PARA.
            IF WS-SALDO < 0
@@ -122,6 +142,18 @@ _PROGRAM_SOURCE = b"""       IDENTIFICATION DIVISION.
            IF WS-SALDO < -2000
                MOVE 'X' TO WS-INDICADOR-INTERNO
            END-IF.
+       CHECK-CALCULO-COMPUTE-PARA.
+           IF WS-SALDO < -3000
+               COMPUTE WS-COMISION-COMPUTE = WS-MONTO-CALC * WS-TASA-CALC
+           END-IF.
+       CHECK-CALCULO-MULTIPLY-PARA.
+           IF WS-SALDO < -4000
+               MULTIPLY WS-MONTO-CALC BY WS-TASA-CALC
+                   GIVING WS-COMISION-MULTIPLY
+           END-IF.
+       CHECK-CALCULO-INCONDICIONAL-PARA.
+           COMPUTE WS-COMISION-INCONDICIONAL =
+               WS-MONTO-CALC + WS-TASA-CALC.
 """
 
 _PARAM_DEMO_DDL = b"CREATE TABLE PARAM_DEMO (ID INT);\n"
@@ -258,11 +290,80 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     assert not any(c.rule_family == UnifiedRuleFamily.UNKNOWN for c in artifact.candidates)
     assert _by_paragraph("CHECK-INDICADOR-PARA") == []
 
+    # --- Caso 15B3-C2-B1: CALCULATION condicionado, COMPUTE ---------------
+    compute_calc_candidates = _by_paragraph("CHECK-CALCULO-COMPUTE-PARA")
+    assert len(compute_calc_candidates) == 1, artifact.candidates
+    compute_calc = compute_calc_candidates[0]
+    assert compute_calc.rule_family == UnifiedRuleFamily.CALCULATION
+    assert compute_calc.candidate_source == CandidateSource.V2
+    # ProLeap getText() no preserva espacios entre tokens (verificado
+    # empiricamente, ver docstring de _normalize_calculation) -- "WS-SALDO
+    # < -3000" en el COBOL fuente se refleja como "WS-SALDO<-3000" en la
+    # condition real de la Decision.
+    assert compute_calc.condition == "WS-SALDO<-3000"
+    assert compute_calc.outcome_code is None, "CALCULATION nunca afirma un literal"
+    assert compute_calc.evidence_ids != []
+    assert compute_calc.decision_id
+
+    # --- Caso 15B3-C2-B1: CALCULATION condicionado, verbo aritmetico
+    # (MULTIPLY...GIVING, no solo COMPUTE) ---------------------------------
+    multiply_calc_candidates = _by_paragraph("CHECK-CALCULO-MULTIPLY-PARA")
+    assert len(multiply_calc_candidates) == 1, artifact.candidates
+    multiply_calc = multiply_calc_candidates[0]
+    assert multiply_calc.rule_family == UnifiedRuleFamily.CALCULATION
+    assert multiply_calc.candidate_source == CandidateSource.V2
+    assert multiply_calc.condition == "WS-SALDO<-4000"
+    assert multiply_calc.outcome_code is None
+    assert multiply_calc.evidence_ids != []
+    assert multiply_calc.decision_id
+
+    # --- Caso 15B3-C2-B1: calculo incondicional NUNCA llega a
+    # 06-candidates.json -- pero deja una senal PERSISTIDA por la
+    # ejecucion NORMAL (correccion pre-commit, seccion 1: "no silent
+    # loss" exige que una corrida normal, sin invocar nada manualmente
+    # despues, deje rastro). La senal primaria es EL PROPIO
+    # `artifact.warnings` de 06-candidates.json (ya cargado arriba desde
+    # el archivo real escrito por la etapa CANDIDATES_DETECTED de ESTA
+    # ejecucion) -- nunca un artifact/comando nuevo.
+    assert _by_paragraph("CHECK-CALCULO-INCONDICIONAL-PARA") == []
+    incondicional_warnings = [
+        w for w in artifact.warnings
+        if "WS-COMISION-INCONDICIONAL" in w and "CHECK-CALCULO-INCONDICIONAL-PARA" in w
+    ]
+    assert len(incondicional_warnings) == 1, artifact.warnings
+    assert "SemanticEffect" in incondicional_warnings[0]
+    assert "COMPUTE_VALUE" in incondicional_warnings[0]
+    assert "effect::" in incondicional_warnings[0], (
+        "el warning debe citar el effect_id real, no solo describir el caso"
+    )
+
+    # Verificacion suplementaria (no la unica prueba, ver seccion 1 del
+    # informe corrective): el SemanticEffect citado en el warning es
+    # ademas independientemente reconstruible via el mismo analizador
+    # puro que detect_calculation ya consulto en memoria durante ESTA
+    # misma ejecucion.
+    from altamira_extractor.contracts.semantic_effects import SemanticEffectKind
+    from altamira_extractor.pipeline.semantic_effects_service import (
+        compute_semantic_effects_artifact,
+    )
+
+    semantic_effects = compute_semantic_effects_artifact(run_dir, state.run_id)
+    incondicional_effects = [
+        effect
+        for program_effects in semantic_effects.programs
+        for effect in program_effects.effects
+        if effect.source_reference.paragraph == "CHECK-CALCULO-INCONDICIONAL-PARA"
+    ]
+    assert len(incondicional_effects) == 1, incondicional_effects
+    assert incondicional_effects[0].kind == SemanticEffectKind.COMPUTE_VALUE
+    assert incondicional_effects[0].target_data_items == ["WS-COMISION-INCONDICIONAL"]
+    assert incondicional_effects[0].effect_id in incondicional_warnings[0]
+
     # --- Caso 4: candidatos ampliados con evidence/provenance -------------
     enhanced_candidates = [
         c for c in artifact.candidates if c.candidate_source == CandidateSource.V2
     ]
-    assert len(enhanced_candidates) == 4, artifact.candidates
+    assert len(enhanced_candidates) == 6, artifact.candidates
     for enhanced_candidate in enhanced_candidates:
         assert enhanced_candidate.evidence_ids != []
         assert enhanced_candidate.source_file == "01-codigo/cobol/ENHRULE1.cbl"
@@ -289,9 +390,12 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
 
     # --- Caso 5/6/7: ContextPackage/RuleDraft/guardrail -- tanto para el
     # candidato RETURN_CODE ampliado (propagacion V2) como para el
-    # candidato STATE_TRANSITION nuevo (Fase 15B3-C1), no solo para V1 ----
+    # candidato STATE_TRANSITION (Fase 15B3-C1) y CALCULATION (Fase
+    # 15B3-C2-B1, COMPUTE y verbo aritmetico), no solo para V1 -----------
     _assert_full_downstream(run_dir, propagated.candidate_id)
     _assert_full_downstream(run_dir, transicion.candidate_id)
+    _assert_full_downstream(run_dir, compute_calc.candidate_id)
+    _assert_full_downstream(run_dir, multiply_calc.candidate_id)
 
     rules_dir = run_dir / "artifacts" / "10-rules"
     assert len(list(rules_dir.glob("*.md"))) >= 1
@@ -324,7 +428,7 @@ def test_enhanced_pipeline_repeated_run_produces_same_candidate_ids_and_order(
     ids_2 = [c.candidate_id for c in artifact_2.candidates]
     assert ids_1 == ids_2
     assert ids_1 == sorted(ids_1)
-    assert len(ids_1) >= 4
+    assert len(ids_1) >= 6
 
 
 def test_enhanced_flag_disabled_produces_only_v1_candidate(tmp_path: Path) -> None:

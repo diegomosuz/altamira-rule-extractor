@@ -228,15 +228,17 @@ def test_related_not_equivalent_when_v1_outcome_differs_from_v2_literal() -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_summary_detector_count_is_always_three() -> None:
+def test_summary_detector_count_is_always_four() -> None:
+    """Fase 15B3-C2-B1: V2_CALCULATION se agrego al registry -- 4
+    detectores, no 3."""
     program = _program_with_decision()
     artifact = _run(
         program,
         decisions=[("A", 10, "CONDICION")],
         data_item_tags={"WS-COD-RETORNO": "return_code"},
     )
-    assert artifact.summary.detector_count == 3
-    assert len(artifact.executions) == 3
+    assert artifact.summary.detector_count == 4
+    assert len(artifact.executions) == 4
 
 
 def test_summary_is_all_zero_for_empty_program() -> None:

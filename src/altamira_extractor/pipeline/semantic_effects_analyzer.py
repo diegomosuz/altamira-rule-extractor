@@ -366,33 +366,81 @@ def _normalize_set_condition(ctx: _NormalizeContext) -> list[SemanticEffect]:
     ]
 
 
-def _normalize_compute(ctx: _NormalizeContext) -> list[SemanticEffect]:
+def _normalize_calculation(ctx: _NormalizeContext) -> list[SemanticEffect]:
+    """COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE (Fase 15B3-C2-B1): un unico
+    normalizador para los 5 verbos aritmeticos -- ninguno evalua el valor
+    numerico, todos producen `SemanticEffectKind.COMPUTE_VALUE` (nunca un
+    effect kind por verbo). COMPUTE tiene un nodo de expresion dedicado
+    (`ArithmeticExpression`, `stmt.expression` no-None); ADD/SUBTRACT/
+    MULTIPLY/DIVIDE no tienen un nodo equivalente (`StatementExtractor`
+    deja `expression=None` por diseno -- ningun nodo ASG unico representa
+    "TO B" o "BY B GIVING C" como un solo arbol de expresion, y
+    reconstruir el texto via `getText()` produce tokens sin espacios,
+    p.ej. `"WS-SALDO<0"`, verificado empiricamente): el effect refleja esa
+    ausencia usando `stmt.source_text` (verbatim, ya con el espaciado
+    original del programa fuente -- a diferencia de `getText()`) como
+    valor de `expression` del effect: `SemanticEffect.
+    _check_kind_specific_invariants` exige `expression` no-None para
+    `COMPUTE_VALUE` (invariante preexistente, nunca relajado aqui), y
+    `source_text` es mas legible que la alternativa descartada
+    (`getText()` del statement completo, que produciria algo como
+    `"ADDATOB"`), sin sintetizar nada nuevo: es un campo ya existente y
+    verbatim del propio `CanonicalStatement`.
+
+    Multiples targets reales (`COMPUTE A B = X + Y`, `ADD X TO A B`)
+    producen un efecto INDEPENDIENTE por target (mismo patron ya usado por
+    `_normalize_move` caso B: `ordinal` estable = indice en
+    `target_data_items`, diagnostico `MULTIPLE_TARGET_ASSIGNMENT`) --
+    nunca un unico efecto con `writes=[...multiples]`: un detector de
+    reglas debe poder distinguir y citar cada efecto por separado."""
     stmt = ctx.stmt
-    if stmt.expression is None or not stmt.target_data_items:
+    targets = stmt.target_data_items
+    if not targets:
         return [
             ctx.build(
                 SemanticEffectKind.PRESERVED_STATEMENT,
                 SemanticSupportStatus.PRESERVED_ONLY,
                 ordinal=0,
-                diagnostic_codes=["COMPUTE_TARGET_OR_EXPRESSION_UNAVAILABLE"],
-                explanation="COMPUTE sin expression y/o target_data_items capturados.",
+                diagnostic_codes=["CALCULATION_TARGET_UNAVAILABLE"],
+                explanation=(
+                    f"{stmt.kind.value}: sin target_data_items capturado (forma no "
+                    "interpretada estructuralmente, p.ej. CORRESPONDING)."
+                ),
             )
         ]
+    effect_expression: str | None
+    if stmt.expression is not None:
+        effect_expression = stmt.expression
+        base_diagnostic = "COMPUTE_EXPRESSION_NOT_EVALUATED"
+        explanation = (
+            "La expresion se conserva como texto normalizado; no se evalua ni se "
+            "propaga su resultado hacia los data items que dependen de ella."
+        )
+    else:
+        effect_expression = stmt.source_text.strip() or None
+        base_diagnostic = "CALCULATION_SOURCE_TEXT_ONLY"
+        explanation = (
+            f"{stmt.kind.value} no tiene un nodo de expresion dedicado en el ASG; la "
+            "formula se conserva via source_text (verbatim, aqui usado como "
+            "expression del effect). No se evalua ni se propaga su resultado."
+        )
     return [
         ctx.build(
             SemanticEffectKind.COMPUTE_VALUE,
             SemanticSupportStatus.PARTIALLY_SUPPORTED,
-            ordinal=0,
+            ordinal=index,
             reads=stmt.variables_read,
-            writes=stmt.target_data_items,
-            target_data_items=stmt.target_data_items,
-            expression=stmt.expression,
-            diagnostic_codes=["COMPUTE_EXPRESSION_NOT_EVALUATED"],
-            explanation=(
-                "La expresion se conserva como texto normalizado; no se evalua ni se "
-                "propaga su resultado hacia los data items que dependen de ella."
+            writes=[target],
+            target_data_items=[target],
+            expression=effect_expression,
+            diagnostic_codes=(
+                [base_diagnostic]
+                if len(targets) == 1
+                else [base_diagnostic, "MULTIPLE_TARGET_ASSIGNMENT"]
             ),
+            explanation=explanation,
         )
+        for index, target in enumerate(targets)
     ]
 
 
@@ -648,7 +696,11 @@ _STATEMENT_NORMALIZERS: dict[StatementKind, Callable[[_NormalizeContext], list[S
     StatementKind.EVALUATE: _normalize_if_evaluate,
     StatementKind.MOVE: _normalize_move,
     StatementKind.SET: _normalize_set,
-    StatementKind.COMPUTE: _normalize_compute,
+    StatementKind.COMPUTE: _normalize_calculation,
+    StatementKind.ADD: _normalize_calculation,
+    StatementKind.SUBTRACT: _normalize_calculation,
+    StatementKind.MULTIPLY: _normalize_calculation,
+    StatementKind.DIVIDE: _normalize_calculation,
     StatementKind.GO_TO: _normalize_go_to,
     StatementKind.PERFORM: _normalize_perform,
     StatementKind.EXEC_SQL: _normalize_exec_sql,
@@ -662,7 +714,7 @@ def _normalize_statement(ctx: _NormalizeContext) -> list[SemanticEffect]:
     normalizer = _STATEMENT_NORMALIZERS.get(ctx.stmt.kind)
     if normalizer is None:
         # Defensivo, nunca alcanzable en la practica: StatementKind es un
-        # enum cerrado y sus 11 valores estan cubiertos arriba.
+        # enum cerrado y sus 15 valores estan cubiertos arriba.
         return [
             ctx.build(
                 SemanticEffectKind.UNSUPPORTED_STATEMENT,

@@ -1,7 +1,13 @@
 # generado por gen_semantic_coverage_yaml.py -- ver docs/SEMANTIC_COVERAGE.md
 # NO editar a mano; regenerar via el script y validar con SemanticCoverageManifest.model_validate().
+# NOTA (Fase 15B3-C2-B1, correccion pre-commit): gen_semantic_coverage_yaml.py no
+# existe en este checkout (busqueda exhaustiva confirmada, ver informe de fase) --
+# los constructs ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE de este archivo se
+# actualizaron a mano para esta fase, validados contra SemanticCoverageManifest
+# y reconciliados contra V2_DETECTOR_REGISTRY (tests/pipeline/
+# test_semantic_coverage_registry.py::test_real_semantic_coverage_yaml_is_fully_reconciled).
 schema_version: '1.0'
-manifest_edition: fase-15b2-a-2026.08.01
+manifest_edition: fase-15b3-c2-b1-2026.08.11
 constructs:
 - construct_id: ADD
   display_name: Add (aritmetica sin COMPUTE)
@@ -14,44 +20,92 @@ constructs:
       reference: io.proleap.cobol.asg.metamodel.procedure.add.AddStatement
       description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
   - layer: JAVA_STATEMENT_EXTRACTION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
-      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
-      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    status: SUPPORTED
+    notes: 'Fase 15B3-C2-B1: StatementExtractor.convertAdd() interpreta TO/TO...GIVING
+      estructuralmente (kind=ADD); ADD CORRESPONDING permanece RECOGNIZED_NOT_INTERPRETED
+      (ver limitations); ROUNDED/ON SIZE ERROR se registran via unsupported_constructs
+      sin bloquear el camino feliz.'
     evidence:
     - kind: JAVA_TEST
-      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::addBasicCapturesTargetAndRead
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::addGivingCapturesDistinctTargetNeverTheToOperand
   - layer: CANONICAL_REPRESENTATION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+    status: SUPPORTED
+    notes: target_data_items/variables_read estructurados; expression queda null por
+      diseno (sin nodo ASG de expresion dedicado para este verbo); source_text
+      preservado verbatim como unica evidencia textual.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: SEMANTIC_GRAPH
     status: NOT_SUPPORTED
+    notes: Sin nodo/relacion propia; ancla via el Decision existente (IF/EVALUATE)
+      cuando esta condicionado, sin cambios de metamodelo.
   - layer: DATA_FLOW
-    status: NOT_SUPPORTED
-    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+    status: SUPPORTED
+    notes: SemanticEffectKind.COMPUTE_VALUE (un unico normalizador compartido con
+      COMPUTE/SUBTRACT/MULTIPLY/DIVIDE); propagacion se bloquea en COMPUTED_VALUE.
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py::test_add_without_expression_produces_compute_value_using_source_text
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
     status: NOT_APPLICABLE
   - layer: DETECTOR
-    status: NOT_SUPPORTED
-  - layer: EVIDENCE
-    status: NOT_SUPPORTED
-    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
-  - layer: PROVENANCE
     status: PARTIALLY_SUPPORTED
-    notes: source_file/line se preservan aunque kind=OTHER.
+    notes: 'V2_CALCULATION (detect_calculation) productiviza ADD SOLO cuando esta bajo
+      Decision (IF/EVALUATE); un ADD incondicional queda reconocido (SemanticEffect
+      COMPUTE_VALUE) pero no productivizado, con warning persistido en
+      CandidateArtifact.warnings (nunca silencioso). detect_calculation no distingue
+      StatementKind de origen (validado explicitamente con MULTIPLY; el mismo
+      detector cubre ADD por construccion).'
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_arithmetic_verb_also_detects_calculation_candidate
+  - layer: EVIDENCE
+    status: PARTIALLY_SUPPORTED
+    notes: Citable (evidence_ids no vacios) unicamente cuando el candidato
+      CALCULATION correspondiente se productiviza (condicionado).
+  - layer: PROVENANCE
+    status: SUPPORTED
+    notes: source_file/line_start/line_end preservados (kind=ADD, ya no OTHER).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::noAbsolutePathsAndArithmeticStatementsAreUniquelyIdentified
   - layer: FUNCTIONAL_VALIDATION
-    status: NOT_SUPPORTED
-  java_statement_kind: OTHER
+    status: PARTIALLY_SUPPORTED
+    notes: Ground truth sintetico cubre CALCULATION via COMPUTE
+      (gt-positive-calculation-if-compute-multiplication); ADD comparte el mismo
+      detector/family sin caso de ground truth dedicado a este verbo
+      especificamente.
+  java_statement_kind: ADD
+  detectors:
+  - detector_id: V2_CALCULATION
+    rule_families:
+    - CALCULATION
+    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
+      decision_id=None y warning persistido, nunca 06-candidates.json.
+  rule_families:
+  - rule_family: CALCULATION
+    status: PARTIALLY_SUPPORTED
+    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
+      pero no productivizado en 15B3-C2-B1 (diferido a 15B3-C2-B2).
   fixtures:
-  - parser/src/test/resources/fixtures/comprehensive.cbl
+  - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
-  - ADD no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  - ADD CORRESPONDING no se expande (RECOGNIZED_NOT_INTERPRETED); target_data_items
+    queda vacio, con diagnostico explicito via unsupported_constructs.
+  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
+    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - El JAR de ProLeap expone 4 clases ASG distintas para variantes de ADD (AddStatementImpl, AddToStatementImpl,
     AddToGivingStatementImpl, AddCorrespondingStatementImpl, confirmadas por inspeccion directa del JAR);
-    las 4 colapsan al mismo construct_id=ADD, sin distincion de variante en unsupported_constructs mas
-    alla del nombre de clase.
+    las 4 colapsan al mismo construct_id=ADD.
+  - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control (el
+    camino feliz aritmetico si se interpreta).
+  - ROUNDED no ajusta el valor numerico (solo presencia registrada via
+    unsupported_constructs).
   domain_reviewed: false
   diagnostics: []
 - construct_id: BARE_EXIT
@@ -356,15 +410,26 @@ constructs:
     status: NOT_APPLICABLE
   - layer: DETECTOR
     status: PARTIALLY_SUPPORTED
-    notes: V2_STATE_CHANGE puede capturar el efecto de un COMPUTE sobre un dato ordinario, pero termina
-      en UnifiedRuleFamily.UNKNOWN.
+    notes: 'Fase 15B3-C2-B1: V2_CALCULATION productiviza COMPUTE SOLO bajo Decision;
+      incondicional queda reconocido (SemanticEffect COMPUTE_VALUE) pero no
+      productivizado, con warning persistido en CandidateArtifact.warnings.
+      Correccion: V2_STATE_CHANGE NUNCA captura el efecto de un COMPUTE
+      (_handle_compute_value siempre invalida, nunca produce un literal).'
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_compute_detects_one_deterministic_calculation_candidate
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
   - layer: EVIDENCE
     status: SUPPORTED
     evidence:
     - kind: CONTRACT_TEST
       reference: tests/pipeline/test_evidence_catalog.py
-    notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
-      en esta capa.
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
+    notes: Evidencia del mecanismo generico compartido, mas confirmacion end-to-end
+      (evidence_ids no vacios, ContextPackage/RuleDraft/Guardrail reales) para
+      CALCULATION condicionado especificamente.
   - layer: PROVENANCE
     status: SUPPORTED
     evidence:
@@ -373,14 +438,41 @@ constructs:
     notes: Evidencia del mecanismo generico compartido; no existe test dedicado a este constructo especifico
       en esta capa.
   - layer: FUNCTIONAL_VALIDATION
-    status: NOT_SUPPORTED
-    notes: Ningun caso de ground truth sintetico ejercita COMPUTE especificamente en este cierre.
+    status: SUPPORTED
+    notes: 'Fase 15B3-C2-B1: gt-positive-calculation-if-compute-multiplication
+      (ground truth sintetico, GTCALC001) mas confirmacion end-to-end hermetica
+      (JAR/Neo4j real) via CHECK-CALCULO-COMPUTE-PARA.'
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/fixtures/gt_calculation_001.cbl
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
   java_statement_kind: COMPUTE
   propagation_support: 'Barrera COMPUTED_VALUE: el valor numerico resultante nunca se propaga como literal.'
+  detectors:
+  - detector_id: V2_CALCULATION
+    rule_families:
+    - CALCULATION
+    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
+      decision_id=None y warning persistido, nunca 06-candidates.json.
+  rule_families:
+  - rule_family: CALCULATION
+    status: PARTIALLY_SUPPORTED
+    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
+      pero no productivizado en 15B3-C2-B1 (diferido a 15B3-C2-B2).
   fixtures:
+  - config/ground_truth/fixtures/gt_calculation_001.cbl
+  - parser/src/test/resources/fixtures/arithmetic.cbl
   - parser/src/test/resources/fixtures/comprehensive.cbl
   - parser/src/test/resources/fixtures/normalized_expression.cbl
-  limitations: []
+  limitations:
+  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
+    15B3-C2-B1 (diferido a 15B3-C2-B2).
+  - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control.
+  - ROUNDED (Store.isRounded()) no se captura ni ajusta el valor numerico (gap
+    preexistente a 15B3-C2-B1, no corregido en esta fase -- a diferencia de
+    ADD/SUBTRACT/MULTIPLY/DIVIDE, que si registran su presencia via
+    unsupported_constructs).
   domain_reviewed: false
   diagnostics: []
 - construct_id: CONDITIONS_COMPOUND
@@ -565,40 +657,88 @@ constructs:
       reference: io.proleap.cobol.asg.metamodel.procedure.divide.DivideStatement
       description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
   - layer: JAVA_STATEMENT_EXTRACTION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
-      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
-      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    status: SUPPORTED
+    notes: 'Fase 15B3-C2-B1: StatementExtractor.convertDivide() interpreta
+      INTO/INTO...GIVING/BY...GIVING estructuralmente (kind=DIVIDE); REMAINDER
+      queda PARTIALLY_INTERPRETED (ver limitations); ROUNDED/ON SIZE ERROR se
+      registran via unsupported_constructs sin bloquear el camino feliz.'
     evidence:
     - kind: JAVA_TEST
-      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::divideIntoCapturesTarget
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::divideRemainderCapturesQuotientOnlyNeverTheRemainderTarget
   - layer: CANONICAL_REPRESENTATION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+    status: SUPPORTED
+    notes: target_data_items/variables_read estructurados (cociente unicamente;
+      el resto de REMAINDER nunca se agrega como target, ver limitations);
+      expression queda null por diseno, source_text preservado verbatim.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: SEMANTIC_GRAPH
     status: NOT_SUPPORTED
+    notes: Sin nodo/relacion propia; ancla via el Decision existente (IF/EVALUATE)
+      cuando esta condicionado, sin cambios de metamodelo.
   - layer: DATA_FLOW
-    status: NOT_SUPPORTED
-    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+    status: SUPPORTED
+    notes: SemanticEffectKind.COMPUTE_VALUE (un unico normalizador compartido con
+      COMPUTE/ADD/SUBTRACT/MULTIPLY); propagacion se bloquea en COMPUTED_VALUE.
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py::test_subtract_multiply_divide_all_produce_compute_value_never_a_kind_per_verb
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
     status: NOT_APPLICABLE
   - layer: DETECTOR
-    status: NOT_SUPPORTED
-  - layer: EVIDENCE
-    status: NOT_SUPPORTED
-    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
-  - layer: PROVENANCE
     status: PARTIALLY_SUPPORTED
-    notes: source_file/line se preservan aunque kind=OTHER.
+    notes: 'V2_CALCULATION (detect_calculation) productiviza DIVIDE (cociente) SOLO
+      cuando esta bajo Decision; un DIVIDE incondicional queda reconocido
+      (SemanticEffect COMPUTE_VALUE) pero no productivizado, con warning
+      persistido en CandidateArtifact.warnings. El resto de REMAINDER nunca se
+      productiviza (no es target).'
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_compute_detects_one_deterministic_calculation_candidate
+  - layer: EVIDENCE
+    status: PARTIALLY_SUPPORTED
+    notes: Citable (evidence_ids no vacios) unicamente cuando el candidato
+      CALCULATION correspondiente se productiviza (condicionado, cociente).
+  - layer: PROVENANCE
+    status: SUPPORTED
+    notes: source_file/line_start/line_end preservados (kind=DIVIDE, ya no OTHER).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: FUNCTIONAL_VALIDATION
-    status: NOT_SUPPORTED
-  java_statement_kind: OTHER
+    status: PARTIALLY_SUPPORTED
+    notes: Ground truth sintetico cubre CALCULATION via COMPUTE
+      (gt-positive-calculation-if-compute-multiplication); DIVIDE comparte el
+      mismo detector/family sin caso de ground truth dedicado a este verbo.
+  java_statement_kind: DIVIDE
+  detectors:
+  - detector_id: V2_CALCULATION
+    rule_families:
+    - CALCULATION
+    notes: Condicionado -> CALCULATION productiva (cociente); incondicional ->
+      shadow con decision_id=None y warning persistido.
+  rule_families:
+  - rule_family: CALCULATION
+    status: PARTIALLY_SUPPORTED
+    notes: Productiva solo condicionado (bajo Decision, cociente unicamente);
+      incondicional reconocido pero no productivizado en 15B3-C2-B1.
   fixtures:
-  - parser/src/test/resources/fixtures/comprehensive.cbl
+  - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
-  - DIVIDE no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
+    15B3-C2-B1 (diferido a 15B3-C2-B2).
+  - 'DIVIDE REMAINDER: el resto (Remainder.getRemainderCall()) NUNCA se agrega a
+    target_data_items (evita writes=[cociente,resto] ambiguo); se registra via
+    unsupported_constructs, PARTIALLY_INTERPRETED -- productizacion diferida.'
+  - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control (el
+    camino feliz aritmetico si se interpreta).
+  - ROUNDED no ajusta el valor numerico (solo presencia registrada via
+    unsupported_constructs).
   domain_reviewed: false
   diagnostics: []
 - construct_id: ELSE
@@ -1844,40 +1984,94 @@ constructs:
       reference: io.proleap.cobol.asg.metamodel.procedure.multiply.MultiplyStatement
       description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
   - layer: JAVA_STATEMENT_EXTRACTION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
-      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
-      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    status: SUPPORTED
+    notes: 'Fase 15B3-C2-B1: StatementExtractor.convertMultiply() interpreta
+      BY/BY...GIVING estructuralmente (kind=MULTIPLY); sin variante CORRESPONDING
+      (no existe en la gramatica COBOL estandar para este verbo); ROUNDED/ON SIZE
+      ERROR se registran via unsupported_constructs sin bloquear el camino feliz.'
     evidence:
     - kind: JAVA_TEST
-      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::multiplyBasicCapturesTarget
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::multiplyGivingCapturesTargetAndBothOperandsRead
   - layer: CANONICAL_REPRESENTATION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+    status: SUPPORTED
+    notes: target_data_items/variables_read estructurados; expression queda null por
+      diseno, source_text preservado verbatim.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: SEMANTIC_GRAPH
     status: NOT_SUPPORTED
+    notes: Sin nodo/relacion propia; ancla via el Decision existente (IF/EVALUATE)
+      cuando esta condicionado, sin cambios de metamodelo.
   - layer: DATA_FLOW
-    status: NOT_SUPPORTED
-    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+    status: SUPPORTED
+    notes: SemanticEffectKind.COMPUTE_VALUE (un unico normalizador compartido con
+      COMPUTE/ADD/SUBTRACT/DIVIDE); propagacion se bloquea en COMPUTED_VALUE.
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py::test_subtract_multiply_divide_all_produce_compute_value_never_a_kind_per_verb
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
     status: NOT_APPLICABLE
   - layer: DETECTOR
-    status: NOT_SUPPORTED
-  - layer: EVIDENCE
-    status: NOT_SUPPORTED
-    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
-  - layer: PROVENANCE
     status: PARTIALLY_SUPPORTED
-    notes: source_file/line se preservan aunque kind=OTHER.
+    notes: 'V2_CALCULATION (detect_calculation) productiviza MULTIPLY SOLO cuando
+      esta bajo Decision; un MULTIPLY incondicional queda reconocido (SemanticEffect
+      COMPUTE_VALUE) pero no productivizado, con warning persistido en
+      CandidateArtifact.warnings. Verbo usado explicitamente para demostrar que
+      detect_calculation no distingue StatementKind (no solo COMPUTE).'
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_multiply_arithmetic_verb_also_detects_calculation_candidate
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
+  - layer: EVIDENCE
+    status: SUPPORTED
+    notes: Citable (evidence_ids no vacios) cuando el candidato CALCULATION se
+      productiviza -- confirmado end-to-end (ContextPackage/RuleDraft/Guardrail
+      reales) con el JAR/Neo4j real, no solo tests unitarios.
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
+  - layer: PROVENANCE
+    status: SUPPORTED
+    notes: source_file/line_start/line_end preservados (kind=MULTIPLY, ya no OTHER).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: FUNCTIONAL_VALIDATION
-    status: NOT_SUPPORTED
-  java_statement_kind: OTHER
+    status: SUPPORTED
+    notes: Confirmado end-to-end (JAR/Neo4j real, hermetico) via
+      CHECK-CALCULO-MULTIPLY-PARA -- unico de los 4 verbos nuevos con un caso E2E
+      productivo dedicado (los demas comparten el mismo detector, validado a
+      nivel unitario).
+    evidence:
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_enhanced_candidates_e2e.py::test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidates
+  java_statement_kind: MULTIPLY
+  detectors:
+  - detector_id: V2_CALCULATION
+    rule_families:
+    - CALCULATION
+    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
+      decision_id=None y warning persistido.
+  rule_families:
+  - rule_family: CALCULATION
+    status: PARTIALLY_SUPPORTED
+    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
+      pero no productivizado en 15B3-C2-B1.
   fixtures:
-  - parser/src/test/resources/fixtures/comprehensive.cbl
+  - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
-  - MULTIPLY no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
+    15B3-C2-B1 (diferido a 15B3-C2-B2).
+  - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control (el
+    camino feliz aritmetico si se interpreta).
+  - ROUNDED no ajusta el valor numerico (solo presencia registrada via
+    unsupported_constructs).
   domain_reviewed: false
   diagnostics: []
 - construct_id: OCCURS
@@ -2905,43 +3099,91 @@ constructs:
       reference: io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractStatement
       description: clase ASG real confirmada por inspeccion directa del JAR resuelto (jar tf)
   - layer: JAVA_STATEMENT_EXTRACTION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: Sin converter dedicado en StatementExtractor.convertOne(); cae a convertOther(), kind=OTHER,
-      y se reporta en unsupported_constructs (confirmado explicitamente para ADD por el test citado; SUBTRACT/MULTIPLY/DIVIDE
-      comparten el mismo camino de codigo -- ausencia identica de un case dedicado).
+    status: SUPPORTED
+    notes: 'Fase 15B3-C2-B1: StatementExtractor.convertSubtract() interpreta
+      FROM/FROM...GIVING estructuralmente (kind=SUBTRACT); SUBTRACT CORRESPONDING
+      permanece RECOGNIZED_NOT_INTERPRETED (ver limitations); ROUNDED/ON SIZE
+      ERROR se registran via unsupported_constructs sin bloquear el camino feliz.'
     evidence:
     - kind: JAVA_TEST
-      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/CanonicalProgramExtractorTest.java::unsupportedAddIsReportedGobackIsNotUnsupportedAnymore
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::subtractBasicCapturesTargetAndRead
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java::subtractGivingCapturesDistinctTarget
   - layer: CANONICAL_REPRESENTATION
-    status: RECOGNIZED_NOT_INTERPRETED
-    notes: kind=OTHER; source_text preservado, sin target_data_items ni expression estructurados.
+    status: SUPPORTED
+    notes: target_data_items/variables_read estructurados; expression queda null por
+      diseno, source_text preservado verbatim.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: SEMANTIC_GRAPH
     status: NOT_SUPPORTED
+    notes: Sin nodo/relacion propia; ancla via el Decision existente (IF/EVALUATE)
+      cuando esta condicionado, sin cambios de metamodelo.
   - layer: DATA_FLOW
-    status: NOT_SUPPORTED
-    notes: Sin variables_read/written estructurados; SemanticEffectKind.UNSUPPORTED_STATEMENT.
+    status: SUPPORTED
+    notes: SemanticEffectKind.COMPUTE_VALUE (un unico normalizador compartido con
+      COMPUTE/ADD/MULTIPLY/DIVIDE); propagacion se bloquea en COMPUTED_VALUE.
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_semantic_effects_analyzer.py::test_subtract_multiply_divide_all_produce_compute_value_never_a_kind_per_verb
   - layer: CONTROL_FLOW
     status: NOT_APPLICABLE
   - layer: INTERPROCEDURAL
     status: NOT_APPLICABLE
   - layer: DETECTOR
-    status: NOT_SUPPORTED
-  - layer: EVIDENCE
-    status: NOT_SUPPORTED
-    notes: Nunca citable como evidencia de un claim (source_text no estructurado).
-  - layer: PROVENANCE
     status: PARTIALLY_SUPPORTED
-    notes: source_file/line se preservan aunque kind=OTHER.
+    notes: 'V2_CALCULATION (detect_calculation) productiviza SUBTRACT SOLO cuando
+      esta bajo Decision; un SUBTRACT incondicional queda reconocido (SemanticEffect
+      COMPUTE_VALUE) pero no productivizado, con warning persistido en
+      CandidateArtifact.warnings. detect_calculation no distingue StatementKind
+      de origen (validado explicitamente con MULTIPLY; el mismo detector cubre
+      SUBTRACT por construccion).'
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_v2_detectors.py::test_conditioned_arithmetic_verb_also_detects_calculation_candidate
+  - layer: EVIDENCE
+    status: PARTIALLY_SUPPORTED
+    notes: Citable (evidence_ids no vacios) unicamente cuando el candidato
+      CALCULATION correspondiente se productiviza (condicionado).
+  - layer: PROVENANCE
+    status: SUPPORTED
+    notes: source_file/line_start/line_end preservados (kind=SUBTRACT, ya no OTHER).
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/ArithmeticStatementExtractorTest.java
   - layer: FUNCTIONAL_VALIDATION
-    status: NOT_SUPPORTED
-  java_statement_kind: OTHER
+    status: PARTIALLY_SUPPORTED
+    notes: Ground truth sintetico cubre CALCULATION via COMPUTE
+      (gt-positive-calculation-if-compute-multiplication); SUBTRACT comparte el
+      mismo detector/family sin caso de ground truth dedicado a este verbo.
+  java_statement_kind: SUBTRACT
+  detectors:
+  - detector_id: V2_CALCULATION
+    rule_families:
+    - CALCULATION
+    notes: Condicionado -> CALCULATION productiva; incondicional -> shadow con
+      decision_id=None y warning persistido.
+  rule_families:
+  - rule_family: CALCULATION
+    status: PARTIALLY_SUPPORTED
+    notes: Productiva solo condicionado (bajo Decision); incondicional reconocido
+      pero no productivizado en 15B3-C2-B1.
   fixtures:
-  - parser/src/test/resources/fixtures/comprehensive.cbl
+  - parser/src/test/resources/fixtures/arithmetic.cbl
   limitations:
+  - Calculos incondicionales (sin Decision envolvente) no se productivizan en
+    15B3-C2-B1 (diferido a 15B3-C2-B2).
   - El JAR de ProLeap expone 4 clases ASG distintas para variantes de SUBTRACT (SubtractStatementImpl,
     SubtractFromStatementImpl, SubtractFromGivingStatementImpl, SubtractCorrespondingStatementImpl, confirmadas
     por inspeccion directa del JAR); las 4 colapsan al mismo construct_id=SUBTRACT.
-  - SUBTRACT no tiene converter dedicado; usar COMPUTE es la unica forma soportada de aritmetica interpretada.
+  - ON SIZE ERROR/NOT ON SIZE ERROR no interpretan su branch de control (el
+    camino feliz aritmetico si se interpreta).
+  - ROUNDED no ajusta el valor numerico (solo presencia registrada via
+    unsupported_constructs).
+  - SUBTRACT CORRESPONDING no se expande (RECOGNIZED_NOT_INTERPRETED);
+    target_data_items queda vacio, con diagnostico explicito via
+    unsupported_constructs.
   domain_reviewed: false
   diagnostics: []
 - construct_id: UNSTRING
@@ -3265,26 +3507,26 @@ summary:
       NOT_APPLICABLE: 10
       UNKNOWN: 1
     JAVA_STATEMENT_EXTRACTION:
-      RECOGNIZED_NOT_INTERPRETED: 5
+      SUPPORTED: 38
       NOT_SUPPORTED: 16
       NOT_APPLICABLE: 1
-      SUPPORTED: 34
       PARTIALLY_SUPPORTED: 1
+      RECOGNIZED_NOT_INTERPRETED: 1
     CANONICAL_REPRESENTATION:
-      RECOGNIZED_NOT_INTERPRETED: 11
+      SUPPORTED: 36
       NOT_SUPPORTED: 9
       NOT_APPLICABLE: 1
-      SUPPORTED: 32
       PARTIALLY_SUPPORTED: 4
+      RECOGNIZED_NOT_INTERPRETED: 7
     SEMANTIC_GRAPH:
       NOT_SUPPORTED: 45
       NOT_APPLICABLE: 2
       SUPPORTED: 9
       PARTIALLY_SUPPORTED: 1
     DATA_FLOW:
-      NOT_SUPPORTED: 21
+      SUPPORTED: 21
+      NOT_SUPPORTED: 17
       NOT_APPLICABLE: 10
-      SUPPORTED: 17
       PARTIALLY_SUPPORTED: 9
     CONTROL_FLOW:
       NOT_APPLICABLE: 43
@@ -3297,17 +3539,18 @@ summary:
       SUPPORTED: 6
       NOT_SUPPORTED: 1
     DETECTOR:
-      NOT_SUPPORTED: 33
-      PARTIALLY_SUPPORTED: 5
+      PARTIALLY_SUPPORTED: 9
+      NOT_SUPPORTED: 29
       SUPPORTED: 19
     EVIDENCE:
-      NOT_SUPPORTED: 35
-      SUPPORTED: 20
-      PARTIALLY_SUPPORTED: 2
+      PARTIALLY_SUPPORTED: 5
+      NOT_SUPPORTED: 31
+      SUPPORTED: 21
     PROVENANCE:
-      PARTIALLY_SUPPORTED: 15
+      SUPPORTED: 40
+      PARTIALLY_SUPPORTED: 11
       NOT_SUPPORTED: 6
-      SUPPORTED: 36
     FUNCTIONAL_VALIDATION:
-      NOT_SUPPORTED: 42
-      PARTIALLY_SUPPORTED: 15
+      PARTIALLY_SUPPORTED: 18
+      NOT_SUPPORTED: 37
+      SUPPORTED: 2

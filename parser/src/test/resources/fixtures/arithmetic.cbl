@@ -1,0 +1,58 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ARITH001.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-A                PIC 9(7)V99.
+       01 WS-B                PIC 9(7)V99.
+       01 WS-C                PIC 9(7)V99.
+       01 WS-D                PIC 9(7)V99.
+       01 WS-GROUP-1.
+           05 WS-G1-AMT       PIC 9(7)V99.
+           05 WS-G1-QTY       PIC 9(5).
+       01 WS-GROUP-2.
+           05 WS-G1-AMT       PIC 9(7)V99.
+           05 WS-G1-QTY       PIC 9(5).
+       PROCEDURE DIVISION.
+       ADD-BASIC-PARA.
+           ADD WS-A TO WS-B.
+       ADD-MULTI-PARA.
+           ADD WS-A WS-B TO WS-C.
+       ADD-GIVING-PARA.
+           ADD WS-A TO WS-B GIVING WS-C.
+       ADD-GIVING-ROUNDED-PARA.
+           ADD WS-A TO WS-B GIVING WS-C ROUNDED.
+       ADD-ON-SIZE-ERROR-PARA.
+           ADD WS-A TO WS-B
+               ON SIZE ERROR
+                   MOVE 'E' TO WS-C
+           END-ADD.
+       ADD-CORRESPONDING-PARA.
+           ADD CORRESPONDING WS-GROUP-1 TO WS-GROUP-2.
+       SUBTRACT-BASIC-PARA.
+           SUBTRACT WS-A FROM WS-B.
+       SUBTRACT-GIVING-PARA.
+           SUBTRACT WS-A FROM WS-B GIVING WS-C.
+       SUBTRACT-CORRESPONDING-PARA.
+           SUBTRACT CORRESPONDING WS-GROUP-1 FROM WS-GROUP-2.
+       MULTIPLY-BASIC-PARA.
+           MULTIPLY WS-A BY WS-B.
+       MULTIPLY-GIVING-PARA.
+           MULTIPLY WS-A BY WS-B GIVING WS-C.
+       DIVIDE-INTO-PARA.
+           DIVIDE WS-A INTO WS-B.
+       DIVIDE-INTO-GIVING-PARA.
+           DIVIDE WS-A INTO WS-B GIVING WS-C.
+       DIVIDE-BY-GIVING-PARA.
+           DIVIDE WS-A BY WS-B GIVING WS-C.
+       DIVIDE-REMAINDER-PARA.
+           DIVIDE WS-A INTO WS-B GIVING WS-C REMAINDER WS-D.
+       CONDITIONED-COMPUTE-PARA.
+           IF WS-A > 0
+               COMPUTE WS-C = WS-A * WS-B
+           END-IF.
+       CONDITIONED-MULTIPLY-PARA.
+           IF WS-A > 0
+               MULTIPLY WS-A BY WS-B GIVING WS-C
+           END-IF.
+       UNCONDITIONAL-COMPUTE-PARA.
+           COMPUTE WS-D = WS-A + WS-B.
