@@ -199,7 +199,7 @@ def _write_prompt_files(tmp_path: Path) -> dict[str, Path]:
     )
     writer_user.write_text(
         "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\n"
-        "{{EVIDENCE_CATALOG_JSON}}\n\nDevuelve solo JSON.",
+        "{{EVIDENCE_CATALOG_JSON}}\n\n{{ALLOWED_CLAIM_FIELDS_JSON}}\n\nDevuelve solo JSON.",
         encoding="utf-8",
     )
     repair_system.write_text("Corrige el RuleDraft rechazado.", encoding="utf-8")

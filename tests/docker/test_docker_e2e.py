@@ -541,3 +541,141 @@ def test_docker_e2e_full_pipeline_reaches_completed_without_internet(
         # test pueda repetirse contra la misma instancia Neo4j sin
         # depender de limpieza manual.
         _delete_nodes_for_hash(settings, source_package_hash)
+
+
+def _install_invalid_then_repaired_rule_draft_fake_client(
+    monkeypatch: pytest.MonkeyPatch, module: Any
+) -> list[list[Any]]:
+    """Fase 15B4-HOTFIX-1: reproduce herméticamente el fallo real
+    (`claims.0.field (enum)` agotando la reparación estructural) contra
+    el pipeline COMPLETO -- Java real, Neo4j real, sin LLM real. La
+    respuesta inicial usa un valor de `field` fuera del `ClaimField`
+    enum (`"outcome"`, nunca un miembro real); la respuesta de
+    reparación usa un miembro válido (`"condition"`), demostrando que el
+    ciclo de reparación converge en el primer intento ahora que ambos
+    prompts reciben `ALLOWED_CLAIM_FIELDS_JSON` explícito. El
+    `ContextPackage`/catálogo de evidencia solo se puede extraer del
+    mensaje de la llamada INICIAL (`rule_writer_user.md` incrusta el
+    ContextPackage completo); el prompt de reparación nunca lo repite
+    -- los alias ya resueltos se reutilizan tal cual en la respuesta de
+    reparación."""
+    calls: list[list[Any]] = []
+    state: dict[str, str] = {}
+
+    class _InvalidThenRepairedFakeClient:
+        def __init__(self, profile: Any, **kwargs: Any) -> None:
+            self.profile = profile
+
+        async def __aenter__(self) -> _InvalidThenRepairedFakeClient:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+        async def complete(self, messages: list[Any]) -> dict[str, Any]:
+            calls.append(messages)
+            if len(calls) == 1:
+                user_message = next(m for m in messages if m.role == "user")
+                context_package_dict = _extract_context_package_json(user_message.content)
+                package = ContextPackage.model_validate(context_package_dict)
+                catalog = build_evidence_catalog(package)
+                decision_evidence_id = _evidence_id_for_kind(context_package_dict, "decision")
+                return_code_evidence_id = _evidence_id_for_kind(
+                    context_package_dict, "return_code_effect"
+                )
+                state["decision_evidence_id"] = decision_evidence_id
+                state["decision_alias"] = next(
+                    entry.alias
+                    for entry in catalog.entries
+                    if entry.evidence_id == decision_evidence_id
+                )
+                state["return_code_alias"] = next(
+                    entry.alias
+                    for entry in catalog.entries
+                    if entry.evidence_id == return_code_evidence_id
+                )
+                return valid_payload(
+                    traceability=[state["decision_evidence_id"]],
+                    claims=[
+                        {
+                            "claim_id": "c1",
+                            "field": "outcome",
+                            "evidence_refs": [state["decision_alias"]],
+                        },
+                        {
+                            "claim_id": "c2",
+                            "field": "effect",
+                            "evidence_refs": [state["return_code_alias"]],
+                        },
+                    ],
+                )
+            return valid_payload(
+                traceability=[state["decision_evidence_id"]],
+                claims=[
+                    {
+                        "claim_id": "c1",
+                        "field": "condition",
+                        "evidence_refs": [state["decision_alias"]],
+                    },
+                    {
+                        "claim_id": "c2",
+                        "field": "effect",
+                        "evidence_refs": [state["return_code_alias"]],
+                    },
+                ],
+            )
+
+    monkeypatch.setattr(module, "OpenAICompatibleChatClient", _InvalidThenRepairedFakeClient)
+    return calls
+
+
+def test_docker_e2e_invalid_claim_field_enum_then_repaired_reaches_completed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fase 15B4-HOTFIX-1: reproducción end-to-end (sin proveedor real)
+    del incidente observado en la prueba manual -- `claims.0.field` con
+    un valor fuera del enum en la respuesta inicial. Antes del fix, el
+    prompt de escritura inicial nunca enumeraba los valores permitidos
+    de `field`; después del fix (`ALLOWED_CLAIM_FIELDS_JSON`, derivado
+    del `ClaimField` real, en ambos prompts) un único intento de
+    reparación converge y la corrida completa llega a COMPLETED."""
+    require_jar()
+    poison_calls = _install_poisoned_transport(monkeypatch)
+
+    settings = build_settings(tmp_path)
+    fake_calls = _install_invalid_then_repaired_rule_draft_fake_client(
+        monkeypatch, rule_drafts_stage_module
+    )
+    guardrail_calls = install_fake_client(monkeypatch, guardrails_stage_module, [])
+
+    zip_path = write_package_zip(tmp_path / "package.zip", unique_marker=uuid.uuid4().hex)
+    source_package_hash = _compute_source_package_hash(zip_path)
+
+    pre_count = _count_nodes_for_hash(settings, source_package_hash)
+    assert pre_count == 0, (
+        f"el source_package_hash {source_package_hash} generado para esta ejecucion ya "
+        f"tenia {pre_count} nodos en Neo4j (coincidencia con una ejecucion anterior)"
+    )
+
+    try:
+        state = run_ingestion(zip_path, settings)
+
+        assert state.current_stage == PipelineStage.COMPLETED, state
+        rule_drafts_execution = next(
+            execution
+            for execution in state.stages
+            if execution.stage == PipelineStage.RULE_DRAFTS_GENERATED
+        )
+        assert rule_drafts_execution.status == StageStatus.SUCCEEDED
+        assert any(
+            "reparado tras 1 intento" in warning for warning in rule_drafts_execution.warnings
+        )
+
+        # Llamada inicial (rechazada por enum invalido) + exactamente 1
+        # intento de reparacion -- nunca agota los 2 disponibles, nunca
+        # cae a fail-closed.
+        assert len(fake_calls) == 2
+        assert len(guardrail_calls) == 0
+        assert len(poison_calls) == 0
+    finally:
+        _delete_nodes_for_hash(settings, source_package_hash)

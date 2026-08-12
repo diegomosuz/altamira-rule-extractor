@@ -24,9 +24,9 @@ otro):
 - claims: lista de objetos, al menos 1 elemento. Cada claim tiene
   EXACTAMENTE estas 3 claves, ninguna otra:
   - claim_id: string, no vacio.
-  - field: exactamente uno de estos valores (nunca otro): "title",
-    "context", "statement", "condition", "parameters", "effect",
-    "parameter_source", "traceability", "limitations".
+  - field: EXACTAMENTE uno de los valores listados en
+    ALLOWED_CLAIM_FIELDS del mensaje de usuario (nunca otro, sin alias
+    ni traducciones).
   - evidence_refs: lista de strings, al menos 1 elemento. Cada uno debe
     ser EXACTAMENTE un alias presente en el EVIDENCE_CATALOG provisto en
     el mensaje del usuario (p. ej. "E001"), nunca un evidence_id, nunca

@@ -38,6 +38,7 @@ from altamira_extractor.contracts.context_package import (
 )
 from altamira_extractor.contracts.enums import (
     BatchContextStatus,
+    ClaimField,
     CompletenessStatus,
     InclusionReason,
     PipelineStage,
@@ -250,7 +251,8 @@ def _write_prompt_files(tmp_path: Path) -> tuple[Path, Path]:
     )
     user_path.write_text(
         "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\n"
-        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\nDevuelve solo JSON.",
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\n"
+        "ALLOWED_CLAIM_FIELDS:\n{{ALLOWED_CLAIM_FIELDS_JSON}}\n\nDevuelve solo JSON.",
         encoding="utf-8",
     )
     return system_path, user_path
@@ -276,6 +278,7 @@ def _write_structure_repair_prompt_files(tmp_path: Path) -> None:
         "REJECTED:\n{{REJECTED_PAYLOAD_JSON}}\n\n"
         "ERRORS:\n{{VALIDATION_ERRORS_JSON}}\n\n"
         "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\n"
+        "ALLOWED_CLAIM_FIELDS:\n{{ALLOWED_CLAIM_FIELDS_JSON}}\n\n"
         "Devuelve el JSON corregido.",
         encoding="utf-8",
     )
@@ -667,6 +670,112 @@ def test_all_repair_attempts_invalid_fails_after_limit(
     assert "cand-1" in str(excinfo.value)
     assert "2 intento(s) de reparacion" in str(excinfo.value)
     assert not kwargs["rule_draft_dir"].exists()
+
+
+# --- Fase 15B4-HOTFIX-1: claims[].field fuera del ClaimField enum ---
+# (fallo real observado en prueba manual: "claims.0.field (enum)"
+# agotando los 2 intentos de reparacion estructural).
+
+
+def test_invalid_claim_field_enum_initial_first_repair_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regresion del incidente real: la respuesta inicial usa un valor
+    de `claims[0].field` fuera del `ClaimField` enum (nunca un alias ni
+    una traduccion de un miembro real); la reparacion converge en el
+    primer intento porque ahora recibe los valores permitidos
+    explicitamente (`ALLOWED_CLAIM_FIELDS_JSON`, Fase 15B4-HOTFIX-1)."""
+    invalid_enum_payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "outcome", "evidence_refs": [_decision_alias()]}]
+    )
+    calls = _install_fake_client(monkeypatch, [invalid_enum_payload, _valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    warnings = run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 2
+    assert warnings == ["1 draft(s)", "cand-1: reparado tras 1 intento(s) estructural(es)"]
+
+    # El prompt de reparacion debe comunicar los valores permitidos
+    # explicitamente, nunca dejar que el modelo los adivine de nuevo.
+    repair_user_message = calls[1][1].content
+    for member in ClaimField:
+        assert member.value in repair_user_message
+    assert "enum" in repair_user_message
+
+
+def test_hostile_model_invalid_claim_field_enum_persists_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Modelo hostil/simulado que nunca corrige `claims[0].field`
+    (siempre fuera del enum, incluso tras ver los valores permitidos):
+    debe agotar los 2 intentos y fallar cerrado -- nunca aceptar el
+    ultimo valor invalido, nunca fabricar un RuleDraft, nunca ampliar
+    el enum ni normalizar por similitud."""
+    invalid_enum_payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "outcome", "evidence_refs": [_decision_alias()]}]
+    )
+    still_invalid_payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "risk_outcome", "evidence_refs": [_decision_alias()]}]
+    )
+    calls = _install_fake_client(
+        monkeypatch, [invalid_enum_payload, still_invalid_payload, still_invalid_payload]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    with pytest.raises(RuleDraftGenerationError) as excinfo:
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 3
+    assert "claims.0.field (enum)" in str(excinfo.value)
+    assert not kwargs["rule_draft_dir"].exists()
+
+
+def test_valid_claim_field_enum_initial_response_has_zero_repairs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cuando el modelo usa, desde el primer intento, un miembro real de
+    `ClaimField`, la etapa valida sin ejecutar ninguna reparacion
+    innecesaria -- probado contra TODOS los miembros reales del enum,
+    nunca una lista hardcodeada en el test."""
+    for member in ClaimField:
+        payload = _valid_payload(
+            claims=[
+                {"claim_id": "c1", "field": member.value, "evidence_refs": [_decision_alias()]}
+            ]
+        )
+        calls = _install_fake_client(monkeypatch, [payload])
+        kwargs = _base_kwargs(tmp_path, packages=[_package(f"cand-{member.value}")])
+
+        warnings = run_rule_drafts_generated_stage(**kwargs)
+
+        assert len(calls) == 1
+        assert warnings == ["1 draft(s)"]
+
+
+def test_allowed_claim_fields_prompt_placeholder_derived_from_real_enum(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El helper que alimenta `{{ALLOWED_CLAIM_FIELDS_JSON}}` en el
+    prompt inicial y en el de reparacion debe leer directamente del
+    `ClaimField` real -- nunca una copia mantenida a mano. Si en el
+    futuro se agrega/quita un miembro del enum, ambos prompts deben
+    reflejarlo automaticamente sin tocar ningun archivo .md."""
+    invalid_enum_payload = _valid_payload(
+        claims=[{"claim_id": "c1", "field": "outcome", "evidence_refs": [_decision_alias()]}]
+    )
+    calls = _install_fake_client(monkeypatch, [invalid_enum_payload, _valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    run_rule_drafts_generated_stage(**kwargs)
+
+    expected_values = [member.value for member in ClaimField]
+    expected_json = json.dumps(expected_values, ensure_ascii=False)
+
+    initial_user_message = calls[0][1].content
+    repair_user_message = calls[1][1].content
+    assert expected_json in initial_user_message
+    assert expected_json in repair_user_message
 
 
 def test_final_error_exposes_sanitized_loc_type_msg(
@@ -1135,10 +1244,11 @@ def test_writer_prompt_hash_change_forces_regeneration(
 
 def test_real_structure_repair_prompts_render_without_error() -> None:
     """Carga y renderiza los archivos REALES del repositorio (nunca un
-    fixture ficticio): confirma que los 4 placeholders declarados (checkpoint
+    fixture ficticio): confirma que los 5 placeholders declarados (checkpoint
     correctivo: catalogo de alias, un unico EVIDENCE_CATALOG_JSON en vez de
-    las dos listas independientes anteriores) existen exactamente una vez y
-    que la sustitucion completa no levanta `PromptTemplateError`."""
+    las dos listas independientes anteriores; y ALLOWED_CLAIM_FIELDS_JSON,
+    Fase 15B4-HOTFIX-1) existen exactamente una vez y que la sustitucion
+    completa no levanta `PromptTemplateError`."""
     system = load_prompt_template(
         REAL_STRUCTURE_REPAIR_SYSTEM_PATH,
         relative_path="prompts/rule_structure_repair_system.md",
@@ -1152,6 +1262,7 @@ def test_real_structure_repair_prompts_render_without_error() -> None:
             "{{REJECTED_PAYLOAD_JSON}}": 1,
             "{{VALIDATION_ERRORS_JSON}}": 1,
             "{{EVIDENCE_CATALOG_JSON}}": 1,
+            "{{ALLOWED_CLAIM_FIELDS_JSON}}": 1,
         },
     )
     assert system.template_text
@@ -1162,6 +1273,7 @@ def test_real_structure_repair_prompts_render_without_error() -> None:
             "{{REJECTED_PAYLOAD_JSON}}": "{}",
             "{{VALIDATION_ERRORS_JSON}}": "{}",
             "{{EVIDENCE_CATALOG_JSON}}": "{}",
+            "{{ALLOWED_CLAIM_FIELDS_JSON}}": "[]",
         },
     )
     assert "{{" not in rendered.effective_text

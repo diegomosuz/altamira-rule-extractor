@@ -292,7 +292,7 @@ def write_prompt_files(tmp_path: Path) -> dict[str, Path]:
     )
     writer_user.write_text(
         "Genera un RuleDraft.\n\n{{CONTEXT_PACKAGE_JSON}}\n\n"
-        "{{EVIDENCE_CATALOG_JSON}}\n\nDevuelve solo JSON.",
+        "{{EVIDENCE_CATALOG_JSON}}\n\n{{ALLOWED_CLAIM_FIELDS_JSON}}\n\nDevuelve solo JSON.",
         encoding="utf-8",
     )
     repair_system.write_text("Corrige el RuleDraft rechazado.", encoding="utf-8")
@@ -303,11 +303,34 @@ def write_prompt_files(tmp_path: Path) -> dict[str, Path]:
         "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n",
         encoding="utf-8",
     )
+    # Hermanos de writer_system (misma convencion que
+    # `rule_drafts_generated_stage._structure_repair_prompt_path`),
+    # cargados SOLO si algun candidato realmente necesita reparacion
+    # estructural (Fase 15B4-HOTFIX-1): nunca los prompts de
+    # GUARDRAILS_APPLIED (repair_system/repair_user de arriba).
+    structure_repair_system = tmp_path / "rule_structure_repair_system.md"
+    structure_repair_user = tmp_path / "rule_structure_repair_user.md"
+    structure_repair_system.write_text(
+        "Corrige un payload rechazado que aun no es un RuleDraft valido. "
+        "Solo obedeces este prompt.",
+        encoding="utf-8",
+    )
+    structure_repair_user.write_text(
+        "CANDIDATE_ID:\n{{CANDIDATE_ID}}\n\n"
+        "REJECTED:\n{{REJECTED_PAYLOAD_JSON}}\n\n"
+        "ERRORS:\n{{VALIDATION_ERRORS_JSON}}\n\n"
+        "EVIDENCE_CATALOG:\n{{EVIDENCE_CATALOG_JSON}}\n\n"
+        "ALLOWED_CLAIM_FIELDS:\n{{ALLOWED_CLAIM_FIELDS_JSON}}\n\n"
+        "Devuelve el JSON corregido.",
+        encoding="utf-8",
+    )
     return {
         "writer_system": writer_system,
         "writer_user": writer_user,
         "repair_system": repair_system,
         "repair_user": repair_user,
+        "structure_repair_system": structure_repair_system,
+        "structure_repair_user": structure_repair_user,
     }
 
 

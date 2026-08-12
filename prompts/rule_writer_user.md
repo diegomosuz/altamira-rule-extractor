@@ -28,7 +28,12 @@ Incluye:
 - trazabilidad;
 - limitaciones;
 - claims, cada uno con: claim_id, field y evidence_refs (lista no vacía
-  de alias del catálogo).
+  de alias del catálogo). field debe ser EXACTAMENTE uno de estos
+  valores (nunca otro, sin alias ni traducciones):
+  {{ALLOWED_CLAIM_FIELDS_JSON}}
+  Si un claim no puede expresarse con ninguno de esos valores, no
+  inventes uno nuevo: omite ese claim o reformúlalo usando un valor
+  permitido.
 
 No agregues claves fuera del schema. No incluyas evidence_ids ni
 evidence_paths en ningún claim.

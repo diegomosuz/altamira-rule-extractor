@@ -62,7 +62,7 @@ import jsonschema
 from ..config import Settings
 from ..contracts.context_manifest import ContextDirectoryManifest
 from ..contracts.context_package import ContextPackage
-from ..contracts.enums import PipelineStage, StageStatus
+from ..contracts.enums import ClaimField, PipelineStage, StageStatus
 from ..contracts.rule_draft import RuleDraft
 from ..contracts.rule_draft_manifest import RuleDraftDirectoryManifest, RuleDraftRecord
 from ..contracts.run_state import StageExecution
@@ -89,6 +89,12 @@ logger = logging.getLogger("altamira_extractor.pipeline.rule_drafts_generated_st
 _DIR_NAME = "08-rule-drafts"
 _MANIFEST_FILENAME = "rule-draft-manifest.json"
 _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
+# Checkpoint correctivo (Fase 15B4-HOTFIX-1): claims[].field es un
+# ClaimField (enum). Single source of truth para el prompt inicial y el
+# de reparacion estructural -- nunca una lista de valores mantenida a
+# mano en un archivo .md, que podria desincronizarse silenciosamente si
+# el Enum cambia.
+_ALLOWED_CLAIM_FIELDS_PLACEHOLDER = "{{ALLOWED_CLAIM_FIELDS_JSON}}"
 # Catalogo de alias de evidencia (checkpoint correctivo): unico
 # placeholder compartido por el prompt de escritura inicial y el de
 # reparacion estructural -- reemplaza las dos listas independientes
@@ -159,6 +165,14 @@ def _reread_and_verify_context_directory(
     return manifest, context_manifest_hash, packages
 
 
+def _allowed_claim_fields_json() -> str:
+    """Unica fuente de los valores permitidos de `claims[].field`, leida
+    directamente del Enum contractual real (`ClaimField`) -- nunca de
+    una lista mantenida a mano en un prompt. Usada tanto por el prompt
+    de escritura inicial como por el de reparacion estructural."""
+    return json.dumps([member.value for member in ClaimField], ensure_ascii=False)
+
+
 def _load_writer_prompts(
     settings: Settings,
 ) -> tuple[str, str, str, str]:
@@ -175,6 +189,7 @@ def _load_writer_prompts(
             expected_placeholder_counts={
                 _CONTEXT_PACKAGE_PLACEHOLDER: 1,
                 _EVIDENCE_CATALOG_PLACEHOLDER: 1,
+                _ALLOWED_CLAIM_FIELDS_PLACEHOLDER: 1,
             },
         )
     except PromptTemplateError as exc:
@@ -213,6 +228,7 @@ def _load_structure_repair_prompts(settings: Settings) -> tuple[str, str]:
                 _REJECTED_PAYLOAD_PLACEHOLDER: 1,
                 _VALIDATION_ERRORS_PLACEHOLDER: 1,
                 _EVIDENCE_CATALOG_PLACEHOLDER: 1,
+                _ALLOWED_CLAIM_FIELDS_PLACEHOLDER: 1,
             },
         )
     except PromptTemplateError as exc:
@@ -435,9 +451,14 @@ async def _generate_one_draft(
         )
 
     catalog_json = catalog.to_prompt_json()
+    allowed_claim_fields_json = _allowed_claim_fields_json()
     rendered = render_prompt(
         user_template_text,
-        {_CONTEXT_PACKAGE_PLACEHOLDER: context_json, _EVIDENCE_CATALOG_PLACEHOLDER: catalog_json},
+        {
+            _CONTEXT_PACKAGE_PLACEHOLDER: context_json,
+            _EVIDENCE_CATALOG_PLACEHOLDER: catalog_json,
+            _ALLOWED_CLAIM_FIELDS_PLACEHOLDER: allowed_claim_fields_json,
+        },
     )
     messages = [
         ChatMessage(role="system", content=system_text),
@@ -482,6 +503,7 @@ async def _generate_one_draft(
                         exc.validation_errors
                     ),
                     _EVIDENCE_CATALOG_PLACEHOLDER: catalog_json,
+                    _ALLOWED_CLAIM_FIELDS_PLACEHOLDER: allowed_claim_fields_json,
                 },
             )
             repair_messages = [
