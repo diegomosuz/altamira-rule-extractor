@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from altamira_extractor.contracts.candidate_promotion_assessment import (
     CandidateSource,
     UnifiedRuleFamily,
@@ -129,11 +131,13 @@ def test_known_family_mapping_return_code_and_level_88() -> None:
     assert references[0].rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
 
 
-def test_unknown_family_mapping_state_change_rule_never_maps_to_state_transition() -> None:
+def test_unknown_family_mapping_state_change_rule_without_semantic_tag_lookup() -> None:
     """`V2RuleType.STATE_CHANGE_RULE` (intraprograma, siempre PARTIAL) NUNCA
-    se mapea a `STATE_TRANSITION` (interprocedural, Fase 8) pese a la
-    semejanza textual del nombre -- son conceptos estructuralmente
-    distintos, ver docstring de `_V2_RULE_FAMILY_BY_TYPE`."""
+    se mapea a `STATE_TRANSITION` sin evidencia de relevancia funcional
+    (`semantic_tag_by_data_item` ausente/`None`, mismo comportamiento que
+    antes de Fase 15B3-C8-FIX-1) -- nunca se adivina por semejanza
+    textual del nombre. Con el mapping presente y un tag funcional, ver
+    `test_state_change_rule_maps_to_state_transition_when_target_tag_is_functional`."""
     from altamira_extractor.contracts.v2_shadow_candidates import V2CandidateSupport
 
     artifact = v2_artifact(
@@ -148,6 +152,147 @@ def test_unknown_family_mapping_state_change_rule_never_maps_to_state_transition
     )
     references = adapt_v2_candidates(artifact, source_artifact_hash=HASH)
     assert references[0].rule_family == UnifiedRuleFamily.UNKNOWN
+
+
+def test_calculation_rule_maps_to_calculation_family() -> None:
+    """Fase 15B3-C8-FIX-1: `V2RuleType.CALCULATION_RULE` estaba ausente
+    de `_V2_RULE_FAMILY_BY_TYPE` (omision, nunca una decision deliberada
+    -- a diferencia de `STATE_CHANGE_RULE`), cayendo silenciosamente a
+    `UNKNOWN` via el fallback de `.get(...)`. Debe comportarse igual
+    conceptualmente que `enhanced_candidate_integration._LOCAL_RULE_
+    FAMILY_BY_TYPE[CALCULATION_RULE] = CALCULATION` -- sin gate
+    adicional (a diferencia de STATE_CHANGE_RULE)."""
+    from altamira_extractor.contracts.v2_shadow_candidates import V2CandidateSupport
+
+    artifact = v2_artifact(
+        candidates=[
+            v2_candidate(
+                candidate_id="v2::calc",
+                rule_type=V2RuleType.CALCULATION_RULE,
+                support=V2CandidateSupport.PARTIAL,
+                resolved_literal=None,
+            )
+        ]
+    )
+    references = adapt_v2_candidates(artifact, source_artifact_hash=HASH)
+    assert references[0].rule_family == UnifiedRuleFamily.CALCULATION
+
+
+@pytest.mark.parametrize("functional_tag", ["status", "status_flag"])
+def test_state_change_rule_maps_to_state_transition_when_target_tag_is_functional(
+    functional_tag: str,
+) -> None:
+    """Replica EXACTAMENTE el gate productivo de
+    `enhanced_candidate_integration.py`: `STATE_CHANGE_RULE` se promueve
+    a `STATE_TRANSITION` unicamente cuando el `semantic_tag` real del
+    target (resuelto por el llamador, nunca inferido aqui) esta en
+    `{status, status_flag}`."""
+    from altamira_extractor.contracts.v2_shadow_candidates import V2CandidateSupport
+
+    artifact = v2_artifact(
+        candidates=[
+            v2_candidate(
+                candidate_id="v2::state",
+                rule_type=V2RuleType.STATE_CHANGE_RULE,
+                support=V2CandidateSupport.PARTIAL,
+                resolved_literal=None,
+                program="PROG1",
+                target_variable="WS-ESTADO-OPERACION",
+            )
+        ]
+    )
+    references = adapt_v2_candidates(
+        artifact,
+        source_artifact_hash=HASH,
+        semantic_tag_by_data_item={("PROG1", "WS-ESTADO-OPERACION"): functional_tag},
+    )
+    assert references[0].rule_family == UnifiedRuleFamily.STATE_TRANSITION
+
+
+def test_state_change_rule_stays_unknown_when_target_tag_nonfunctional() -> None:
+    """Un `semantic_tag` real pero fuera de `{status, status_flag}`
+    (p. ej. `return_code`) nunca demuestra relevancia de STATE_TRANSITION
+    -- permanece `UNKNOWN`, exactamente como el gate productivo."""
+    from altamira_extractor.contracts.v2_shadow_candidates import V2CandidateSupport
+
+    artifact = v2_artifact(
+        candidates=[
+            v2_candidate(
+                candidate_id="v2::state",
+                rule_type=V2RuleType.STATE_CHANGE_RULE,
+                support=V2CandidateSupport.PARTIAL,
+                resolved_literal=None,
+                program="PROG1",
+                target_variable="WS-CONTADOR",
+            )
+        ]
+    )
+    references = adapt_v2_candidates(
+        artifact,
+        source_artifact_hash=HASH,
+        semantic_tag_by_data_item={("PROG1", "WS-CONTADOR"): "return_code"},
+    )
+    assert references[0].rule_family == UnifiedRuleFamily.UNKNOWN
+
+
+def test_state_change_rule_stays_unknown_when_mapping_has_no_entry_for_target() -> None:
+    """`semantic_tag_by_data_item` presente pero SIN entrada para este
+    `(program, target_qualified_name)` (DataItem sin semantic_tag
+    asignado) se trata igual que ausencia total de informacion --
+    `UNKNOWN`, nunca se asume relevancia por falta de contraevidencia."""
+    from altamira_extractor.contracts.v2_shadow_candidates import V2CandidateSupport
+
+    artifact = v2_artifact(
+        candidates=[
+            v2_candidate(
+                candidate_id="v2::state",
+                rule_type=V2RuleType.STATE_CHANGE_RULE,
+                support=V2CandidateSupport.PARTIAL,
+                resolved_literal=None,
+                program="PROG1",
+                target_variable="WS-INDICADOR-PROCESO",
+            )
+        ]
+    )
+    references = adapt_v2_candidates(
+        artifact,
+        source_artifact_hash=HASH,
+        semantic_tag_by_data_item={("PROG1", "WS-OTHER-ITEM"): "status"},
+    )
+    assert references[0].rule_family == UnifiedRuleFamily.UNKNOWN
+
+
+def test_is_functional_state_transition_tag_direct() -> None:
+    from altamira_extractor.pipeline.candidate_source_adapters import (
+        is_functional_state_transition_tag,
+    )
+
+    assert is_functional_state_transition_tag("status") is True
+    assert is_functional_state_transition_tag("status_flag") is True
+    assert is_functional_state_transition_tag("return_code") is False
+    assert is_functional_state_transition_tag(None) is False
+
+
+def test_interprocedural_by_reference_rule_maps_to_by_reference_output_family() -> None:
+    """Mapping existente (`_INTERPROCEDURAL_RULE_FAMILY_BY_TYPE`) nunca
+    tocado por Fase 15B3-C8-FIX-1 -- confirmacion explicita de no
+    regresion."""
+    from altamira_extractor.contracts.interprocedural_rule_candidates import (
+        InterproceduralRuleType,
+    )
+
+    artifact = interprocedural_artifact(
+        candidates=[
+            interprocedural_candidate(
+                candidate_id="ipr::by_ref",
+                rule_type=InterproceduralRuleType.BY_REFERENCE_RULE,
+                target="WS-STATUS",
+                output_literal="OK00",
+            )
+        ]
+    )
+    references = adapt_interprocedural_candidates(artifact, source_artifact_hash=HASH)
+    assert references[0].rule_family == UnifiedRuleFamily.BY_REFERENCE_OUTPUT
 
 
 def test_adapters_never_mutate_input_artifacts() -> None:

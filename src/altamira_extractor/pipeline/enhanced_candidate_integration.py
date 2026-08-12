@@ -45,15 +45,23 @@ cierto tal cual esta escrito -- lo que cambia es que ESTE modulo, aparte
 de ese artefacto, ahora sabe reconocer los casos donde la relevancia SI
 esta demostrada.
 
-`rule_family=STATE_TRANSITION` aqui es deliberadamente DISTINTO del
-mapping de Fase 9 (`candidate_source_adapters._V2_RULE_FAMILY_BY_TYPE`,
-que mapea `STATE_CHANGE_RULE -> UNKNOWN` y documenta explicitamente que
-nunca cambia): Fase 9 cataloga equivalencia ESTRUCTURAL sin evaluar
-relevancia funcional (su UNKNOWN sigue siendo correcto para ese
-proposito distinto); este modulo, tras la verificacion ADICIONAL de
-semantic_tag, cataloga PROMOCION PRODUCTIVA -- dos preguntas diferentes,
-dos mappings deliberadamente distintos, `_LOCAL_RULE_FAMILY_BY_TYPE` no
-reemplaza ni contradice al de Fase 9.
+`rule_family=STATE_TRANSITION` aqui usa el MISMO criterio que el
+adaptador de Fase 9 (`candidate_source_adapters.adapt_v2_candidates` /
+`is_functional_state_transition_tag`) -- `semantic_tag in {status,
+status_flag}` -- pero DELIBERADAMENTE como dos copias independientes,
+nunca una importada desde la otra (Fase 15B3-C8-FIX-1, correccion de
+layering: este modulo es pipeline PRODUCTIVO, `candidate_source_
+adapters.py` es tooling de QUALIFICATION/Fase 9 -- el productivo nunca
+depende de qualification, aunque ambos deban seguir la misma regla de
+negocio). `_STATE_TRANSITION_SEMANTIC_TAGS` (mas abajo) es la copia
+LOCAL de este modulo; la equivalencia con la copia de
+`candidate_source_adapters.py` esta garantizada por
+`tests/pipeline/test_enhanced_candidate_integration.py::
+test_state_transition_semantic_tags_match_qualification_adapter` (test
+de paridad explicito, nunca una importacion cruzada). `_LOCAL_RULE_
+FAMILY_BY_TYPE` sigue siendo un dict local (este modulo ademas resuelve
+`decision_id`/`condition` reales contra el grafo, cosa que el adaptador
+de Fase 9 no hace).
 
 Deliberadamente fuera de alcance: `InterproceduralRuleType.
 BY_REFERENCE_RULE` (anclado a un `call_site_id`, no a una `Decision`,
@@ -167,7 +175,15 @@ _PROMOTABLE_RULE_FAMILIES = frozenset(
 
 # Fase 15B3-C1, seccion 6: unico criterio de relevancia funcional para
 # promover STATE_CHANGE_RULE -- reutiliza los tags ya declarados en
-# config/semantic-tags.yml (allowed_tags), nunca un enum nuevo.
+# config/semantic-tags.yml (allowed_tags), nunca un enum nuevo. Copia
+# LOCAL deliberada (Fase 15B3-C8-FIX-1, correccion de layering): este
+# modulo es pipeline PRODUCTIVO y NUNCA debe depender de
+# `candidate_source_adapters.py` (tooling de QUALIFICATION/Fase 9), pese
+# a que ambos apliquen exactamente el mismo criterio -- paridad
+# garantizada por
+# `test_enhanced_candidate_integration.py::
+# test_state_transition_semantic_tags_match_qualification_adapter`,
+# nunca por una importacion compartida.
 _STATE_TRANSITION_SEMANTIC_TAGS = frozenset({"status", "status_flag"})
 
 

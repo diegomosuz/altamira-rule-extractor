@@ -42,9 +42,10 @@ from ..contracts.candidate_promotion_assessment import (
     CandidateSource,
     SourceAvailability,
 )
-from ..contracts.enums import PipelineStage, StageStatus
+from ..contracts.enums import NodeLabel, PipelineStage, StageStatus
 from ..contracts.interprocedural_rule_candidates import InterproceduralRuleCandidatesArtifact
 from ..contracts.run_state import RunState
+from ..contracts.semantic_graph import SemanticGraph
 from ..contracts.v2_shadow_candidates import V2ShadowCandidatesArtifact
 from .artifact_store import atomic_write_json
 from .candidate_promotion_assessment_analyzer import analyze_candidate_promotion_assessment
@@ -126,6 +127,56 @@ def _load_v1_candidates(
     return artifact, SourceAvailability.AVAILABLE, _hash_bytes(raw_bytes), None
 
 
+def _index_semantic_tags_by_data_item(semantic_graph: SemanticGraph) -> dict[tuple[str, str], str]:
+    """`(program_name, qualified_name) -> semantic_tag` para cada
+    DataItem del grafo -- duplicacion MINIMA y deliberada de la seccion
+    DataItem de `v2_detector_context._index_graph` (nunca importada
+    directamente: ese modulo construye un `V2DetectorContext` completo,
+    con `statements`/`SemanticEffects`/`SemanticPropagation`/V1 que este
+    servicio no necesita solo para resolver un semantic_tag). Ver
+    `tests/pipeline/test_candidate_promotion_assessment_service.py::
+    test_index_semantic_tags_by_data_item_matches_v2_detector_context`
+    para la prueba de equivalencia exigida entre ambos caminos. Nodos sin
+    `qualified_name`/`semantic_tag` string validos se omiten, nunca
+    fabrican una entrada con valor `None`."""
+    program_node_id_by_name: dict[str, str] = {}
+    for node in semantic_graph.nodes:
+        if NodeLabel.PROGRAM in node.labels:
+            name = node.properties.get("name")
+            if isinstance(name, str):
+                program_node_id_by_name[name] = node.id
+
+    semantic_tag_by_data_item: dict[tuple[str, str], str] = {}
+    for program_name, program_node_id in program_node_id_by_name.items():
+        prefix = f"{program_node_id}::data::"
+        for node in semantic_graph.nodes:
+            if NodeLabel.DATA_ITEM not in node.labels or not node.id.startswith(prefix):
+                continue
+            qualified_name = node.properties.get("qualified_name")
+            semantic_tag = node.properties.get("semantic_tag")
+            if isinstance(qualified_name, str) and isinstance(semantic_tag, str):
+                semantic_tag_by_data_item[(program_name, qualified_name)] = semantic_tag
+    return semantic_tag_by_data_item
+
+
+def _load_semantic_tag_by_data_item(run_dir: Path) -> dict[tuple[str, str], str]:
+    """Tolerante a ausencia/invalidez (mismo principio que el resto de
+    este servicio): `04-semantic-graph.json` ausente o invalido produce
+    `{}`, nunca una excepcion -- el gate de `STATE_CHANGE_RULE` en
+    `candidate_source_adapters.py` ya trata un mapping vacio igual que
+    uno `None` (siempre `UNKNOWN`, nunca relevancia asumida)."""
+    semantic_graph_path = run_dir / "artifacts" / _SEMANTIC_GRAPH_FILENAME
+    if semantic_graph_path.is_symlink() or not semantic_graph_path.is_file():
+        return {}
+    try:
+        semantic_graph = SemanticGraph.model_validate_json(
+            semantic_graph_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    return _index_semantic_tags_by_data_item(semantic_graph)
+
+
 def _load_v2_candidates(
     run_dir: Path, run_id: str
 ) -> tuple[V2ShadowCandidatesArtifact | None, SourceAvailability, str | None, str | None]:
@@ -182,6 +233,7 @@ def compute_candidate_promotion_assessment_artifact(
 
     v1_candidates, v1_availability, v1_hash, v1_diagnostic = _load_v1_candidates(run_dir)
     v2_candidates, v2_availability, v2_hash, v2_diagnostic = _load_v2_candidates(run_dir, run_id)
+    semantic_tag_by_data_item = _load_semantic_tag_by_data_item(run_dir)
     (
         interprocedural_candidates,
         interprocedural_availability,
@@ -236,6 +288,7 @@ def compute_candidate_promotion_assessment_artifact(
             run_id=run_id,
             source_package_hash=source_package_hash,
             source_artifact_hashes=source_artifact_hashes,
+            semantic_tag_by_data_item=semantic_tag_by_data_item,
         )
     except Exception as exc:  # noqa: BLE001 - se reclasifica como error de dominio explicito
         raise CandidatePromotionAssessmentError(

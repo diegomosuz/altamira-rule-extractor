@@ -111,10 +111,14 @@ def analyze_candidate_promotion_assessment(
     run_id: str,
     source_package_hash: str,
     source_artifact_hashes: Mapping[str, str],
+    semantic_tag_by_data_item: Mapping[tuple[str, str], str] | None = None,
 ) -> CandidatePromotionAssessmentArtifact:
     """Punto de entrada del analizador puro (Fase 9). Determinista:
     misma entrada siempre produce el mismo
-    `CandidatePromotionAssessmentArtifact`."""
+    `CandidatePromotionAssessmentArtifact`. `semantic_tag_by_data_item`
+    (Fase 15B3-C8-FIX-1) alimenta unicamente el gate de
+    `STATE_CHANGE_RULE` en `adapt_v2_candidates` -- ausente/`None`
+    preserva el comportamiento anterior (`UNKNOWN` siempre)."""
     v1_references = adapt_v1_candidates(
         v1_candidates,
         source_artifact_hash=source_artifact_hash_by_source.get(
@@ -126,6 +130,7 @@ def analyze_candidate_promotion_assessment(
         source_artifact_hash=source_artifact_hash_by_source.get(
             CandidateSource.V2, source_package_hash
         ),
+        semantic_tag_by_data_item=semantic_tag_by_data_item,
     )
     interprocedural_references = adapt_interprocedural_candidates(
         interprocedural_candidates,

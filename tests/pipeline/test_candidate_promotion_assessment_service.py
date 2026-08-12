@@ -21,6 +21,7 @@ from altamira_extractor.contracts.candidate_promotion_assessment import (
     SourceAvailability,
 )
 from altamira_extractor.contracts.canonical import (
+    CanonicalDataItem,
     CanonicalParagraph,
     CanonicalProgram,
     CanonicalStatement,
@@ -486,4 +487,244 @@ def test_no_partial_artifact_created_on_failure(tmp_path: Path) -> None:
     run_dir = tmp_path / "does-not-exist"
     with pytest.raises(CandidatePromotionAssessmentError):
         compute_candidate_promotion_assessment_artifact(run_dir, "does-not-exist")
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B3-C8-FIX-1: indexador de semantic_tag por DataItem, alimentando el
+# gate de STATE_CHANGE_RULE en candidate_source_adapters.adapt_v2_candidates.
+# ---------------------------------------------------------------------------
+
+
+def test_index_semantic_tags_by_data_item_reads_qualified_name_and_tag(tmp_path: Path) -> None:
+    from altamira_extractor.pipeline.candidate_promotion_assessment_service import (
+        _index_semantic_tags_by_data_item,
+    )
+
+    run_dir = tmp_path / _RUN_ID
+    _write_full_valid_run(run_dir)
+    graph = SemanticGraph.model_validate_json(
+        (run_dir / "artifacts" / "04-semantic-graph.json").read_text(encoding="utf-8")
+    )
+    index = _index_semantic_tags_by_data_item(graph)
+    assert index == {("PROG1", "WS-COD-RETORNO"): "return_code"}
+
+
+def test_index_semantic_tags_by_data_item_omits_untagged_data_items() -> None:
+    from altamira_extractor.pipeline.candidate_promotion_assessment_service import (
+        _index_semantic_tags_by_data_item,
+    )
+
+    graph = SemanticGraph(
+        source_package_hash=_HASH,
+        nodes=sorted(
+            [
+                GraphNode(
+                    id=_PROGRAM_NODE_ID, labels=[NodeLabel.PROGRAM], properties={"name": "PROG1"}
+                ),
+                GraphNode(
+                    id=_DATA_ITEM_NODE_ID,
+                    labels=[NodeLabel.DATA_ITEM],
+                    properties={"qualified_name": "WS-COD-RETORNO"},
+                ),
+            ],
+            key=lambda n: n.id,
+        ),
+    )
+    assert _index_semantic_tags_by_data_item(graph) == {}
+
+
+def test_load_semantic_tag_by_data_item_tolerant_to_absent_graph(tmp_path: Path) -> None:
+    from altamira_extractor.pipeline.candidate_promotion_assessment_service import (
+        _load_semantic_tag_by_data_item,
+    )
+
+    run_dir = tmp_path / _RUN_ID
+    _write_full_valid_run(run_dir)
+    (run_dir / "artifacts" / "04-semantic-graph.json").unlink()
+    assert _load_semantic_tag_by_data_item(run_dir) == {}
+
+
+def test_load_semantic_tag_by_data_item_tolerant_to_invalid_graph(tmp_path: Path) -> None:
+    from altamira_extractor.pipeline.candidate_promotion_assessment_service import (
+        _load_semantic_tag_by_data_item,
+    )
+
+    run_dir = tmp_path / _RUN_ID
+    _write_full_valid_run(run_dir)
+    (run_dir / "artifacts" / "04-semantic-graph.json").write_text(
+        "{not valid json", encoding="utf-8"
+    )
+    assert _load_semantic_tag_by_data_item(run_dir) == {}
+
+
+def test_index_semantic_tags_by_data_item_matches_v2_detector_context(tmp_path: Path) -> None:
+    """Prueba de equivalencia exigida (Fase 15B3-C8-FIX-1, seccion 5):
+    `_index_semantic_tags_by_data_item` (duplicacion minima y deliberada
+    de la seccion DataItem de `v2_detector_context._index_graph`, sin
+    construir el `V2DetectorContext` completo) debe producir el MISMO
+    semantic_tag que `ctx.data_item_node_by_key[...].properties
+    ['semantic_tag']` para el mismo `SemanticGraph`."""
+    from altamira_extractor.contracts.canonical import CanonicalParagraph, CanonicalProgram
+    from altamira_extractor.pipeline.candidate_promotion_assessment_service import (
+        _index_semantic_tags_by_data_item,
+    )
+
+    from .v2_shadow_helpers import build_ctx, build_semantic_graph
+
+    program = CanonicalProgram(
+        program_name="PROG1",
+        source_file="a.cbl",
+        source_hash=_HASH,
+        source_package_hash=_HASH,
+        source_format=SourceFormat.FIXED,
+        encoding="UTF-8",
+        paragraphs=[
+            CanonicalParagraph(
+                name="A", source_text="A.", location_kind=LocationKind.UNKNOWN, statements=[]
+            )
+        ],
+    )
+    data_item_tags = {"WS-ESTADO-OPERACION": "status", "WS-CONTADOR": None}
+    ctx = build_ctx(program=program, data_item_tags=data_item_tags)
+    graph = build_semantic_graph(program=program, data_item_tags=data_item_tags)
+
+    via_service = _index_semantic_tags_by_data_item(graph)
+    via_ctx = {
+        key: node.properties.get("semantic_tag")
+        for key, node in ctx.data_item_node_by_key.items()
+        if isinstance(node.properties.get("semantic_tag"), str)
+    }
+    assert via_service == via_ctx == {("PROG1", "WS-ESTADO-OPERACION"): "status"}
+
+
+def test_service_promotes_state_change_to_state_transition_when_target_tag_functional(
+    tmp_path: Path,
+) -> None:
+    """End-to-end (Fase 15B3-C8-FIX-1): un `MOVE` literal dentro de un
+    `IF`, escribiendo a un DataItem etiquetado `status` (NUNCA
+    `return_code`, que `detect_state_change` excluye explicitamente),
+    debe producir un `candidate_references` V2 con
+    `rule_family=STATE_TRANSITION` -- nunca `UNKNOWN` -- via el pipeline
+    real `compute_candidate_promotion_assessment_artifact` (sin mocks)."""
+    run_dir = tmp_path / _RUN_ID
+    _write_run_state(
+        run_dir,
+        stages=(
+            PipelineStage.PARSED,
+            PipelineStage.SEMANTIC_GRAPH_BUILT,
+            PipelineStage.CANDIDATES_DETECTED,
+        ),
+    )
+    if_stmt = CanonicalStatement(
+        statement_id="P1::A::0::IF",
+        kind=StatementKind.IF,
+        source_text="IF CONDICION",
+        location_kind=LocationKind.EXACT,
+        source_file="a.cbl",
+        line_start=10,
+        line_end=10,
+        expression="CONDICION",
+    )
+    move = CanonicalStatement(
+        statement_id="P1::A::1::MOVE",
+        kind=StatementKind.MOVE,
+        source_text="MOVE 'R' TO WS-ESTADO-OPERACION",
+        location_kind=LocationKind.EXACT,
+        source_file="a.cbl",
+        line_start=11,
+        line_end=11,
+        target_data_items=["WS-ESTADO-OPERACION"],
+        variables_written=["WS-ESTADO-OPERACION"],
+        assigned_literal="R",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, move],
+        variables_written=["WS-ESTADO-OPERACION"],
+    )
+    program = CanonicalProgram(
+        program_name="PROG1",
+        source_file="a.cbl",
+        source_hash=_HASH,
+        source_package_hash=_HASH,
+        source_format=SourceFormat.FIXED,
+        encoding="UTF-8",
+        data_items=[
+            CanonicalDataItem(
+                name="WS-ESTADO-OPERACION",
+                qualified_name="WS-ESTADO-OPERACION",
+                level=1,
+                location_kind=LocationKind.UNKNOWN,
+            )
+        ],
+        paragraphs=[paragraph],
+    )
+    canonical_dir = run_dir / "artifacts" / "02-canonical"
+    canonical_dir.mkdir(parents=True)
+    atomic_write_json(canonical_dir / "a.cbl.json", program)
+
+    data_item_node_id = f"{_PROGRAM_NODE_ID}::data::WS-ESTADO-OPERACION"
+    graph = SemanticGraph(
+        source_package_hash=_HASH,
+        nodes=sorted(
+            [
+                GraphNode(
+                    id=_PROGRAM_NODE_ID, labels=[NodeLabel.PROGRAM], properties={"name": "PROG1"}
+                ),
+                GraphNode(
+                    id=_PARAGRAPH_NODE_ID,
+                    labels=[NodeLabel.PARAGRAPH],
+                    properties={"name": "A", "line_start": 1, "line_end": 20},
+                ),
+                GraphNode(
+                    id=_DECISION_NODE_ID,
+                    labels=[NodeLabel.DECISION],
+                    properties={
+                        "line_start": 10,
+                        "line_end": 10,
+                        "expression": "CONDICION",
+                        "outcome_code": None,
+                        "rule_type": None,
+                    },
+                ),
+                GraphNode(
+                    id=data_item_node_id,
+                    labels=[NodeLabel.DATA_ITEM],
+                    properties={"qualified_name": "WS-ESTADO-OPERACION", "semantic_tag": "status"},
+                ),
+            ],
+            key=lambda node: node.id,
+        ),
+        relationships=sorted(
+            [
+                GraphRelationship(
+                    type=RelationshipType.CONTAINS,
+                    from_id=_PROGRAM_NODE_ID,
+                    to_id=_PARAGRAPH_NODE_ID,
+                ),
+                GraphRelationship(
+                    type=RelationshipType.HAS_DECISION,
+                    from_id=_PARAGRAPH_NODE_ID,
+                    to_id=_DECISION_NODE_ID,
+                ),
+            ],
+            key=lambda rel: (rel.type.value, rel.from_id, rel.to_id),
+        ),
+    )
+    atomic_write_json(run_dir / "artifacts" / "04-semantic-graph.json", graph)
+    _write_v1_candidates(run_dir)
+
+    artifact = compute_candidate_promotion_assessment_artifact(run_dir, _RUN_ID)
+
+    state_transition_refs = [
+        r for r in artifact.candidate_references if r.rule_family.value == "STATE_TRANSITION"
+    ]
+    assert len(state_transition_refs) == 1
+    assert state_transition_refs[0].program == "PROG1"
+    unknown_refs = [r for r in artifact.candidate_references if r.rule_family.value == "UNKNOWN"]
+    assert unknown_refs == []
     assert not (run_dir / "diagnostics").exists()

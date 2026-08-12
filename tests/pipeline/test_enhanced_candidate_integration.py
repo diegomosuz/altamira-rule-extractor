@@ -1858,3 +1858,32 @@ def test_same_decision_same_target_same_formula_deduplicates_to_one_candidate() 
     )
     assert key_a == key_b, "misma Decision + mismo target + misma formula debe deduplicarse"
     assert key_a != key_different_target, "target distinto nunca debe colisionar"
+
+
+def test_state_transition_semantic_tags_match_qualification_adapter() -> None:
+    """Fase 15B3-C8-FIX-1 (correccion de layering): este modulo
+    (pipeline PRODUCTIVO) y `candidate_source_adapters.py` (tooling de
+    QUALIFICATION/Fase 9) mantienen DOS copias independientes de
+    `_STATE_TRANSITION_SEMANTIC_TAGS` -- deliberadamente, para que el
+    productivo nunca dependa de qualification -- pero deben seguir
+    EXACTAMENTE la misma regla de negocio (`semantic_tag in {status,
+    status_flag}`). Este test es la UNICA garantia de paridad entre
+    ambas copias; su fallo indica que divergieron y deben corregirse
+    juntas."""
+    from altamira_extractor.pipeline import (
+        candidate_source_adapters,
+        enhanced_candidate_integration,
+    )
+
+    assert (
+        enhanced_candidate_integration._STATE_TRANSITION_SEMANTIC_TAGS
+        == candidate_source_adapters._STATE_TRANSITION_SEMANTIC_TAGS
+        == frozenset({"status", "status_flag"})
+    )
+    for tag in ("status", "status_flag", "return_code", "indicator", None):
+        productive_result = tag in enhanced_candidate_integration._STATE_TRANSITION_SEMANTIC_TAGS
+        qualification_result = candidate_source_adapters.is_functional_state_transition_tag(tag)
+        assert productive_result == qualification_result, (
+            f"gate diverge para tag={tag!r}: productivo={productive_result}, "
+            f"qualification={qualification_result}"
+        )
