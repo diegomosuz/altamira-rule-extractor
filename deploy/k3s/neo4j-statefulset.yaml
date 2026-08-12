@@ -1,0 +1,163 @@
+# StatefulSet + Service de Neo4j (Fase 15B4-B). Instancia unica,
+# sin clustering/HA -- fuera del alcance de este release (ver
+# docs/ARCHITECTURE.md, runner.py: el pipeline reemplaza
+# transaccionalmente el subgrafo gestionado en cada carga, nunca
+# depende de HA de Neo4j para su propia consistencia).
+#
+# Imagen offline (Fase 15B4-B2, corrige el enfoque de 15B4-A2/15B4-B):
+# "neo4j:5-community" es una referencia flotante (solo fija el major
+# "5"); referenciarla por DIGEST puro (`neo4j@sha256:...`) TAMPOCO es
+# seguro para el flujo offline -- auditado empiricamente con un
+# `docker save`/inspeccion real de archive (scratch, fuera del repo):
+# el indice OCI embebido asocia la anotacion `io.containerd.image.name`
+# a la imagen (NUNCA solo el digest). Que `ctr images import`
+# (containerd) efectivamente use esa anotacion para nombrar la imagen
+# registrada es comportamiento documentado de containerd -- esa
+# importacion real no se ejecuto en esta fase (sin instalar containerd,
+# ver Fase 15B4-C para la verificacion end-to-end contra un cluster
+# real). Para la imagen original esa anotacion resuelve a
+# `docker.io/library/neo4j:5-community` -- exactamente la referencia
+# flotante que se queria evitar, no el digest del manifest.
+#
+# Solucion adoptada: alias LOCAL, controlado por este release, creado
+# ANTES de `docker save` (`docker tag neo4j:5-community
+# altamira-dependencies/neo4j:5.26.28`) -- verificado que produce
+# `io.containerd.image.name=docker.io/altamira-dependencies/neo4j:5.26.28`
+# en el archive resultante (mismo Id de imagen, mismo digest de
+# contenido, sin pull adicional). Este NO es un repositorio publico
+# real -- es unicamente un nombre transportable que el bundle define y
+# controla.
+#
+#   SOURCE_IMAGE=neo4j:5-community
+#   DETECTED_NEO4J_VERSION=5.26.28 (via NEO4J_TARBALL/NEO4J_SHA256
+#     dentro de la imagen, ver auditoria Fase 15B4-A2 Seccion 6)
+#   SOURCE_REPO_DIGEST=sha256:362542416de6c09a971484d1893878016cc3b5cdec166e54b1c824a220ecd6b9
+#   OFFLINE_BUNDLE_REFERENCE=altamira-dependencies/neo4j:5.26.28
+#
+# "5.26.28" refleja UNICAMENTE la version detectada dentro de la
+# imagen ya probada -- nunca se afirma que exista un tag publico
+# oficial "neo4j:5.26.28-community" (nunca verificado contra un
+# registry real en esta fase, sin acceso a Internet).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j
+  namespace: altamira-rule-extractor
+  labels:
+    app.kubernetes.io/name: altamira-rule-extractor
+    app.kubernetes.io/component: neo4j
+spec:
+  serviceName: neo4j
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: altamira-rule-extractor
+      app.kubernetes.io/component: neo4j
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: altamira-rule-extractor
+        app.kubernetes.io/component: neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: "altamira-dependencies/neo4j:5.26.28"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: bolt
+              containerPort: 7687
+            # HTTP/Browser: nunca expuesto fuera del cluster (Service
+            # interno unicamente, ver mas abajo) -- se conserva porque
+            # el propio arranque/health interno de la imagen oficial
+            # lo utiliza.
+            - name: http
+              containerPort: 7474
+          env:
+            - name: NEO4J_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: altamira-config
+                  key: NEO4J_USER
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: altamira-secrets
+                  key: NEO4J_PASSWORD
+            # La imagen oficial UNICAMENTE interpreta NEO4J_AUTH
+            # (nunca NEO4J_USER/NEO4J_PASSWORD como settings propios,
+            # ver comentario ya existente en docker-compose.yml) --
+            # $(...) es sustitucion nativa de Kubernetes contra
+            # variables YA declaradas en este mismo contenedor, nunca
+            # un secreto adicional expuesto en claro en el manifest.
+            - name: NEO4J_AUTH
+              value: "$(NEO4J_USER)/$(NEO4J_PASSWORD)"
+          volumeMounts:
+            - name: neo4j-data
+              mountPath: /data
+          readinessProbe:
+            # Mismo mecanismo ya probado en docker-compose.yml -- sin
+            # dependencia HTTP externa, nunca en /ready de la app (ver
+            # Fase 15B4-A2 Seccion 12/14).
+            exec:
+              command:
+                - cypher-shell
+                - -u
+                - "$(NEO4J_USER)"
+                - -p
+                - "$(NEO4J_PASSWORD)"
+                - "RETURN 1"
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command:
+                - cypher-shell
+                - -u
+                - "$(NEO4J_USER)"
+                - -p
+                - "$(NEO4J_PASSWORD)"
+                - "RETURN 1"
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            # INITIAL BASELINE TO VALIDATE -- ver app-deployment.yaml.
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: neo4j-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Service interno unicamente -- ni 7474 ni 7687 deben exponerse fuera
+# del cluster (ver docs/REVERSE_PROXY_SECURITY_REQUIREMENTS.md).
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+  namespace: altamira-rule-extractor
+  labels:
+    app.kubernetes.io/name: altamira-rule-extractor
+    app.kubernetes.io/component: neo4j
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: altamira-rule-extractor
+    app.kubernetes.io/component: neo4j
+  ports:
+    - name: bolt
+      port: 7687
+      targetPort: bolt
+    - name: http
+      port: 7474
+      targetPort: http

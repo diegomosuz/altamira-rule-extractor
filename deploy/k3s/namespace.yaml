@@ -1,0 +1,9 @@
+# Namespace dedicado (Fase 15B4-B): todos los recursos de este directorio
+# usan el mismo namespace, evitando colisiones con otras cargas del
+# cliente. Cambiar el nombre requiere actualizarlo consistentemente en
+# TODOS los manifests de deploy/k3s/ (namespace: altamira-rule-extractor
+# aparece en cada uno) -- no hay templating engine, ver docs/release/.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: altamira-rule-extractor

@@ -50,6 +50,19 @@ RUN pip install --no-cache-dir --upgrade pip wheel \
 ########################################
 FROM python:3.12-slim-bookworm AS runtime
 
+# Identidad de release (Fase 15B4-B): metadata pura, nunca leida por la
+# aplicacion en runtime (sin endpoint /version en esta fase, ver
+# docs/release/). Defaults de desarrollo seguros -- un build local sin
+# --build-arg sigue funcionando exactamente igual que antes de esta
+# fase, solo con labels genericos "dev"/"unknown".
+ARG APP_VERSION=0.0.0-dev
+ARG GIT_SHA=unknown
+
+LABEL org.opencontainers.image.title="altamira-rule-extractor" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.source="https://github.com/diegomosuz/altamira-rule-extractor"
+
 # JRE 17 headless (no el JDK completo: no se compila nada en runtime).
 # Fijado a slim-bookworm deliberadamente: variantes "slim" mas recientes
 # (trixie) solo ofrecen paquetes openjdk-21+ via apt, no 17.

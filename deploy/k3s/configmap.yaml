@@ -1,0 +1,65 @@
+# ConfigMap minimo (Fase 15B4-B): NUNCA las ~55 variables de Settings --
+# unicamente las que realmente requieren override para K3s (paths,
+# environment, log level, host/URI de Neo4j no secreto, concurrencia,
+# flag enhanced, modo de seguridad). Todo lo demas conserva su default
+# seguro ya definido en src/altamira_extractor/config.py. Ningun
+# secreto vive aqui -- ver secret.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: altamira-config
+  namespace: altamira-rule-extractor
+data:
+  ALTAMIRA_ENVIRONMENT: "production"
+  ALTAMIRA_LOG_LEVEL: "INFO"
+
+  # data_dir/runs_dir apuntan al PVC persistente montado en /app/data
+  # (ver app-deployment.yaml); incoming_dir se redirige a un emptyDir
+  # separado y efimero (nunca sobrevive un restart, por diseno --
+  # coincide con el ciclo de vida real de un upload en proceso).
+  ALTAMIRA_DATA_DIR: "/app/data"
+  ALTAMIRA_RUNS_DIR: "/app/data/runs"
+  ALTAMIRA_INCOMING_DIR: "/app/incoming-ephemeral"
+
+  # Concurrencia del executor local (api/executor.py): DEBE permanecer
+  # en 1 -- RunExecutor coordina un unico registro de runs activos EN
+  # MEMORIA, valido solo dentro de un unico proceso Uvicorn/replica.
+  # NUNCA subir este valor sin revisar tambien replicas en
+  # app-deployment.yaml (ver docs/release/ "Known Limitations").
+  ALTAMIRA_API_MAX_WORKERS: "1"
+
+  # Decision de producto (15B4-B Seccion 0.C): enhanced permanece
+  # opt-in. Cambiar a "true" es una decision consciente del operador
+  # del cliente, nunca el default de este release.
+  ALTAMIRA_ENHANCED_CANDIDATES_ENABLED: "false"
+
+  # Neo4j: host/puerto no son secretos (las credenciales SI lo son,
+  # ver secret.example.yaml). Nombre de Service interno del mismo
+  # namespace -- ver neo4j-statefulset.yaml.
+  NEO4J_URI: "bolt://neo4j:7687"
+  NEO4J_USER: "neo4j"
+  NEO4J_DATABASE: "neo4j"
+
+  # Placeholder -- reemplazar por el hostname real publicado por el
+  # reverse proxy del cliente antes de produccion (ver
+  # docs/REVERSE_PROXY_SECURITY_REQUIREMENTS.md, requisito 6). El
+  # default "*" de Settings es permisivo y nunca debe usarse en
+  # produccion real.
+  ALTAMIRA_TRUSTED_HOSTS: "altamira.internal.example.com"
+
+  # TLS termina en el reverse proxy externo (nunca en este Service,
+  # que permanece ClusterIP). Activar solo si el proxy del cliente
+  # efectivamente fuerza HTTPS end-to-end.
+  ALTAMIRA_HSTS_ENABLED: "false"
+
+  # config/security.yaml YA NO vive en este ConfigMap (Fase 15B4-B2):
+  # en modo TRUSTED_PROXY_HEADERS (default de release, ver
+  # docs/release/RELEASE_PROFILES.md "Security Profile") el archivo
+  # contiene un campo genuinamente secreto
+  # (trusted_proxy_required_marker_value) -- el archivo completo se
+  # trata como una unica unidad y vive en secret.example.yaml, nunca
+  # partido entre ConfigMap/Secret (el loader nunca fusiona dos
+  # fuentes). DISABLED_DEV (sin ese secreto) queda reservado
+  # exclusivamente para desarrollo local -- ver
+  # config/security.example.yaml, NUNCA usado por estos manifests de
+  # release.

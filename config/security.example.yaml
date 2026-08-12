@@ -2,9 +2,23 @@
 #
 # Este archivo se versiona; config/security.yaml (el archivo REAL que
 # la aplicacion carga en produccion) NUNCA se versiona y NUNCA existe
-# en este repositorio. La AUSENCIA de config/security.yaml hace que la
-# aplicacion arranque en DISABLED_DEV de todos modos (ver
-# contracts/security_config.py::default_disabled_dev_security_config).
+# en este repositorio.
+#
+# CORRECCION (Fase 15B4-B, "cierre Fase 15B1" ya cambio este
+# comportamiento y este archivo habia quedado desactualizado): la
+# AUSENCIA de config/security.yaml, o un archivo presente pero
+# invalido, YA NO resuelve en silencio a DISABLED_DEV -- deja
+# `app.state.security_misconfigured=True`, `/health` sigue en 200 pero
+# `/ready` falla (503, reason=security_misconfigured) y ninguna ruta
+# que dependa de identidad/sesion entrega datos (ver
+# api/app.py::create_app, security/fastapi_deps.py). Un despliegue
+# real (incluyendo K3s, ver deploy/k3s/configmap.yaml) DEBE proveer un
+# config/security.yaml valido -- copiar este ejemplo es la forma
+# minima de arrancar en DISABLED_DEV explicito.
+# `contracts/security_config.py::default_disabled_dev_security_config`
+# sigue existiendo como valor por defecto tipado (usado por tests y
+# como referencia de forma), pero el arranque de la app YA NO lo
+# invoca automaticamente ante ausencia de archivo.
 #
 # Sin identidades reales. Sin emails reales. Sin secretos.
 

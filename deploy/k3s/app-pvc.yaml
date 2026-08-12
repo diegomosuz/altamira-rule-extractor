@@ -1,0 +1,27 @@
+# PVC unico para todo el estado persistente de la app (data/runs/,
+# que a su vez contiene audit/ y activation/ POR RUN -- confirmado por
+# lectura directa de pipeline/unified_activation_store.py, nunca un
+# arbol separado top-level; ver docs/release/). data/incoming/ es
+# deliberadamente efimero (emptyDir en app-deployment.yaml), nunca
+# parte de este PVC.
+#
+# storageClassName omitido a proposito: usa la StorageClass default
+# del cluster K3s del cliente (tipicamente "local-path"). Si el
+# cliente requiere una StorageClass especifica, agregar
+# `storageClassName: <nombre>` antes de aplicar.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: altamira-app-data
+  namespace: altamira-rule-extractor
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Baseline inicial a validar (ver docs/release/, Seccion
+      # "Client Volume Qualification") -- NUNCA un maximo certificado.
+      # El corpus real medido en C8 es pequeno (max. 408 LOC/run); un
+      # cliente con volumen de produccion real debe ajustar este valor
+      # tras su propia prueba de aceptacion.
+      storage: 10Gi

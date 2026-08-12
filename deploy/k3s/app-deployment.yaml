@@ -1,0 +1,159 @@
+# Deployment + Service de la app (Fase 15B4-B).
+#
+# replicas: 1 es OBLIGATORIO, nunca ajustable via HPA -- RunExecutor
+# (api/executor.py) coordina un unico registro de runs activos EN
+# MEMORIA, valido solo dentro de un unico proceso. Multiples replicas
+# (o --workers>1 dentro de una sola replica) romperian las garantias
+# de "un run activo"/"capacidad acotada" sin ninguna coordinacion
+# cross-proceso (confirmado en Fase 15B4-A2 Seccion 15; ver tambien
+# CMD del Dockerfile, que fija --workers 1). NO agregar
+# HorizontalPodAutoscaler.
+#
+# strategy: Recreate (no RollingUpdate) -- el PVC altamira-app-data es
+# ReadWriteOnce (un unico nodo escritor). Con replicas:1 + RWO, un
+# RollingUpdate intentaria programar el pod nuevo mientras el viejo
+# todavia retiene el volumen, quedando indefinidamente Pending. Recreate
+# garantiza que el pod anterior libera el PVC por completo antes de
+# crear el nuevo.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: altamira-app
+  namespace: altamira-rule-extractor
+  labels:
+    app.kubernetes.io/name: altamira-rule-extractor
+    app.kubernetes.io/component: app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: altamira-rule-extractor
+      app.kubernetes.io/component: app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: altamira-rule-extractor
+        app.kubernetes.io/component: app
+    spec:
+      securityContext:
+        # fsGroup asegura que el PVC (aprovisionado por el CSI driver
+        # del cliente, tipicamente con ownership root:root inicial)
+        # quede escribible por el grupo 10001 (altamira) sin depender
+        # de un initContainer -- coincide con el usuario/grupo fijado
+        # en el Dockerfile (groupadd/useradd --uid/--gid 10001).
+        fsGroup: 10001
+      containers:
+        - name: app
+          # Placeholder de release -- el proceso de release
+          # (scripts/release/) reemplaza esta referencia por la imagen
+          # inmutable real (digest incluido) antes de entregar el
+          # bundle al cliente. Nunca ":latest".
+          image: altamira-rule-extractor-app:1.17.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: altamira-config
+            - secretRef:
+                # La clave "security.yaml" de este Secret tiene un
+                # nombre invalido como variable de entorno (contiene
+                # un punto) -- Kubernetes la omite silenciosamente de
+                # envFrom (evento informativo, nunca fatal); se
+                # consume EXCLUSIVAMENTE via el volumen montado mas
+                # abajo, nunca como env var.
+                name: altamira-secrets
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+            - name: incoming-ephemeral
+              mountPath: /app/incoming-ephemeral
+            - name: security-config
+              mountPath: /app/config/security.yaml
+              subPath: security.yaml
+              readOnly: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            # INITIAL BASELINE TO VALIDATE -- nunca capacidad
+            # certificada ni maximo recomendado (ver docs/release/,
+            # "Client Volume Qualification"). Basado en corridas C8
+            # reales (4-12s, hasta 408 LOC/run medido).
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: app-data
+          persistentVolumeClaim:
+            claimName: altamira-app-data
+        - name: incoming-ephemeral
+          emptyDir: {}
+        - name: security-config
+          # Fase 15B4-B2: fuente cambiada de ConfigMap a Secret --
+          # security.yaml contiene un secreto real
+          # (trusted_proxy_required_marker_value) bajo
+          # authentication_mode=TRUSTED_PROXY_HEADERS (default de este
+          # release, ver secret.example.yaml).
+          secret:
+            secretName: altamira-secrets
+            items:
+              - key: security.yaml
+                path: security.yaml
+---
+# ClusterIP por defecto -- nunca NodePort/LoadBalancer por defecto
+# (ver docs/REVERSE_PROXY_SECURITY_REQUIREMENTS.md, requisito 1):
+# app:8000 no debe exponerse directamente a red no confiable. La
+# exposicion externa es responsabilidad de un reverse proxy/Ingress
+# YA EXISTENTE del cliente -- este release no crea ninguno.
+apiVersion: v1
+kind: Service
+metadata:
+  name: altamira-app
+  namespace: altamira-rule-extractor
+  labels:
+    app.kubernetes.io/name: altamira-rule-extractor
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: altamira-rule-extractor
+    app.kubernetes.io/component: app
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
