@@ -789,3 +789,72 @@ def detect_enhanced_candidates(
         converted, v1_candidates, source_package_hash=source_package_hash
     )
     return merged_candidates, sorted(set(discard_warnings) | set(merge_warnings))
+
+
+def suppress_superseded_v1_return_code_ghosts(
+    candidates: list[RuleCandidate],
+) -> tuple[list[RuleCandidate], list[str]]:
+    """Fase 15B4-CANDIDATE-QUALITY-3B (corrige la duplicacion demostrada
+    en Fase 15B4-CANDIDATE-QUALITY-3): opera sobre la lista FINAL ya
+    fusionada (V1+V2, ambos `RuleCandidate`) -- nunca sobre
+    `_ConvertedCandidate` ni `v1_candidates` por separado, para
+    mantenerse como un post-procesamiento estrecho e independiente de
+    `_merge_candidates` (sin tocar).
+
+    Root cause: `Decision.outcome_code` (`semantic_graph_builder.py`)
+    exige un unico literal resuelto en TODO el subarbol de la decision;
+    con mas de uno (rama que escribe codigo+mensaje, o un IF/ELSE con
+    dos codigos distintos) queda `None`, y el candidato V1 (Q0)
+    resultante nunca coincide por `functional_identity_key` con ningun
+    candidato V2 (que si resuelve el literal real por sentencia) --
+    ambos sobreviven como candidatos productivos separados aunque
+    describan el mismo hecho.
+
+    Omite EXCLUSIVAMENTE un candidato V1 `RETURN_CODE` "ghost" -- sin
+    `outcome_code` ni `evidence_ids` propios -- cuando existe al menos
+    un candidato V2 `V2_RETURN_CODE_PROPAGATION` deterministico
+    (`outcome_code`/`evidence_ids` reales) sobre la MISMA
+    `paragraph_id`/`decision_id`. Conserva TODOS los refinamientos V2
+    encontrados, sin fusionarlos entre si: un ghost con N outcomes V2
+    distintos produce N candidatos finales, nunca uno solo arbitrario.
+    Nunca suprime un V1 con `outcome_code`/`evidence_ids` propios, de
+    otra `rule_family`, sin decision_id, o cuyo unico "refinamiento"
+    sea de otra familia/detector/no-deterministico."""
+    refinements_by_decision: dict[tuple[str, str], list[RuleCandidate]] = defaultdict(list)
+    for candidate in candidates:
+        if (
+            candidate.candidate_source == CandidateSource.V2
+            and candidate.detector_id == "V2_RETURN_CODE_PROPAGATION"
+            and candidate.rule_family == UnifiedRuleFamily.RETURN_CODE
+            and candidate.decision_id is not None
+            and candidate.outcome_code
+            and candidate.evidence_ids
+        ):
+            key = (candidate.paragraph_id, candidate.decision_id)
+            refinements_by_decision[key].append(candidate)
+
+    superseded_ids: set[str] = set()
+    warnings: list[str] = []
+    for candidate in candidates:
+        if (
+            candidate.candidate_source != CandidateSource.V1
+            or candidate.rule_family != UnifiedRuleFamily.RETURN_CODE
+            or candidate.decision_id is None
+            or candidate.outcome_code
+            or candidate.evidence_ids
+        ):
+            continue
+        refinements = refinements_by_decision.get((candidate.paragraph_id, candidate.decision_id))
+        if not refinements:
+            continue
+        superseded_ids.add(candidate.candidate_id)
+        refinement_ids = sorted(r.candidate_id for r in refinements)
+        warnings.append(
+            f"candidato V1 {candidate.candidate_id!r} (RETURN_CODE, sin outcome/evidencia "
+            f"propia) omitido: superseded por {len(refinements)} refinamiento(s) V2 "
+            f"V2_RETURN_CODE_PROPAGATION deterministico(s) sobre la misma decision: "
+            f"{', '.join(refinement_ids)}"
+        )
+
+    filtered = [c for c in candidates if c.candidate_id not in superseded_ids]
+    return filtered, sorted(warnings)

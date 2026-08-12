@@ -40,7 +40,10 @@ from ..contracts.run_state import StageExecution
 from ..contracts.semantic_enrichment import SemanticEnrichmentArtifact
 from .artifact_store import atomic_write_json
 from .candidate_detector import detect_candidates, load_q0_query
-from .enhanced_candidate_integration import detect_enhanced_candidates
+from .enhanced_candidate_integration import (
+    detect_enhanced_candidates,
+    suppress_superseded_v1_return_code_ghosts,
+)
 from .errors import CandidateDetectionError, GraphLoadError, Neo4jError, SemanticConfigError
 from .neo4j_repository import Neo4jRepository
 from .semantic_graph_load_stage import load_and_validate_semantic_graph
@@ -263,7 +266,13 @@ def _build_candidate_artifact(
         for candidate in enhanced_candidates:
             by_id[candidate.candidate_id] = candidate
         candidates = sorted(by_id.values(), key=lambda c: c.candidate_id)
-        warnings = enhanced_warnings
+        # Fase 15B4-CANDIDATE-QUALITY-3B: post-procesamiento estrecho,
+        # posterior a la fusion V1/V2 de arriba -- omite unicamente un V1
+        # RETURN_CODE "ghost" (sin outcome/evidencia propia) cuando algun
+        # V2_RETURN_CODE_PROPAGATION deterministico ya lo superseded sobre
+        # la misma decision (ver docstring de la funcion).
+        candidates, ghost_warnings = suppress_superseded_v1_return_code_ghosts(candidates)
+        warnings = sorted(set(enhanced_warnings) | set(ghost_warnings))
 
     return CandidateArtifact(
         run_id=run_id,

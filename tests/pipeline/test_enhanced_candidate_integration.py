@@ -35,6 +35,7 @@ from altamira_extractor.pipeline.enhanced_candidate_integration import (
     _merge_candidates,
     detect_enhanced_candidates,
     functional_identity_key,
+    suppress_superseded_v1_return_code_ghosts,
 )
 
 from .v2_shadow_helpers import (
@@ -918,6 +919,208 @@ def test_return_code_without_level88_sibling_remains_productive() -> None:
     assert len(candidates) == 1
     assert candidates[0].rule_family == UnifiedRuleFamily.RETURN_CODE
     assert candidates[0].evidence_ids == ["effect::1", "fact::1"]
+    assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B4-CANDIDATE-QUALITY-3B: V1 RETURN_CODE ghost superseded por
+# refinamientos V2 V2_RETURN_CODE_PROPAGATION deterministicos (corrige la
+# duplicacion demostrada en Fase 15B4-CANDIDATE-QUALITY-3: CORREGIDO 14->27,
+# 13 pares V1-ghost/V2-real sobre la MISMA decision, nunca fusionados por
+# functional_identity_key porque el V1 ghost tiene effect="").
+# ---------------------------------------------------------------------------
+
+
+def _rule_candidate(
+    *,
+    candidate_id: str,
+    paragraph_id: str = "program::AR::op::PROG1::1::abc123::paragraph::A",
+    decision_id: str | None = "dec-1",
+    condition: str | None = "CONDICION",
+    outcome_code: str | None = None,
+    rule_family: UnifiedRuleFamily = UnifiedRuleFamily.RETURN_CODE,
+    detector_id: str = "q0-return-code-decision",
+    candidate_source: CandidateSource = CandidateSource.V1,
+    evidence_ids: list[str] | None = None,
+) -> RuleCandidate:
+    return RuleCandidate(
+        candidate_id=candidate_id,
+        paragraph_id=paragraph_id,
+        paragraph_name="A",
+        decision_id=decision_id,
+        detector_id=detector_id,
+        detector_version="1.0",
+        detector_score=1.0,
+        condition=condition,
+        outcome_code=outcome_code,
+        rule_type=None,
+        line_start=10,
+        source_file=SRC,
+        source_package_hash=HASH,
+        candidate_source=candidate_source,
+        rule_family=rule_family,
+        evidence_ids=sorted(evidence_ids) if evidence_ids else [],
+    )
+
+
+def _v1_ghost(
+    candidate_id: str = "candidate::q0-return-code-decision::1.0::dec-1",
+) -> RuleCandidate:
+    return _rule_candidate(candidate_id=candidate_id)
+
+
+def _v2_refinement(candidate_id: str, *, outcome_code: str, evidence_id: str) -> RuleCandidate:
+    return _rule_candidate(
+        candidate_id=candidate_id,
+        outcome_code=outcome_code,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        candidate_source=CandidateSource.V2,
+        evidence_ids=[evidence_id],
+    )
+
+
+def test_ghost_a_single_v1_ghost_with_single_v2_refinement_suppresses_ghost() -> None:
+    ghost = _v1_ghost()
+    refinement = _v2_refinement("candidate::enhanced::x1", outcome_code="0005", evidence_id="e1")
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts([ghost, refinement])
+
+    assert [c.candidate_id for c in result] == [refinement.candidate_id]
+    assert len(warnings) == 1
+    assert ghost.candidate_id in warnings[0]
+    assert refinement.candidate_id in warnings[0]
+
+
+def test_ghost_b_single_v1_ghost_with_two_distinct_v2_outcomes_keeps_both_never_merges() -> None:
+    ghost = _v1_ghost()
+    r1 = _v2_refinement("candidate::enhanced::x1", outcome_code="0001", evidence_id="e1")
+    r2 = _v2_refinement("candidate::enhanced::x2", outcome_code="9999", evidence_id="e2")
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts([ghost, r1, r2])
+
+    assert sorted(c.candidate_id for c in result) == sorted([r1.candidate_id, r2.candidate_id])
+    assert not any(c.candidate_id == ghost.candidate_id for c in result)
+    assert len(warnings) == 1
+
+
+def test_ghost_c_v1_with_concrete_effect_is_never_suppressed() -> None:
+    v1_concrete = _v1_ghost()
+    v1_concrete = v1_concrete.model_copy(update={"outcome_code": "0005"})
+    refinement = _v2_refinement("candidate::enhanced::x1", outcome_code="0005", evidence_id="e1")
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts([v1_concrete, refinement])
+
+    assert sorted(c.candidate_id for c in result) == sorted(
+        [v1_concrete.candidate_id, refinement.candidate_id]
+    )
+    assert warnings == []
+
+
+def test_ghost_d_v1_ghost_without_any_v2_refinement_remains() -> None:
+    ghost = _v1_ghost()
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts([ghost])
+
+    assert [c.candidate_id for c in result] == [ghost.candidate_id]
+    assert warnings == []
+
+
+def test_ghost_e_v1_ghost_with_v2_other_family_is_never_suppressed() -> None:
+    ghost = _v1_ghost()
+    other_family_v2 = _rule_candidate(
+        candidate_id="candidate::enhanced::x1",
+        outcome_code="0005",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        candidate_source=CandidateSource.V2,
+        evidence_ids=["e1"],
+    )
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts([ghost, other_family_v2])
+
+    assert sorted(c.candidate_id for c in result) == sorted(
+        [ghost.candidate_id, other_family_v2.candidate_id]
+    )
+    assert warnings == []
+
+
+def test_ghost_f_same_decision_different_paragraph_is_never_suppressed() -> None:
+    ghost = _v1_ghost()
+    refinement_other_paragraph = _v2_refinement(
+        "candidate::enhanced::x1", outcome_code="0005", evidence_id="e1"
+    ).model_copy(
+        update={"paragraph_id": "program::AR::op::PROG1::1::abc123::paragraph::OTHER"}
+    )
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts(
+        [ghost, refinement_other_paragraph]
+    )
+
+    assert sorted(c.candidate_id for c in result) == sorted(
+        [ghost.candidate_id, refinement_other_paragraph.candidate_id]
+    )
+    assert warnings == []
+
+
+def test_ghost_g_v2_without_evidence_is_never_suppressed() -> None:
+    ghost = _v1_ghost()
+    v2_no_evidence = _rule_candidate(
+        candidate_id="candidate::enhanced::x1",
+        outcome_code="0005",
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        candidate_source=CandidateSource.V2,
+        evidence_ids=[],
+    )
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts([ghost, v2_no_evidence])
+
+    assert sorted(c.candidate_id for c in result) == sorted(
+        [ghost.candidate_id, v2_no_evidence.candidate_id]
+    )
+    assert warnings == []
+
+
+def test_ghost_cross_program_same_paragraph_and_decision_text_never_suppresses() -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-3B-SAFETY-CHECK: aunque dos programas
+    distintos usaran el MISMO nombre textual de paragraph/decision
+    (p. ej. ambos "MAIN"), `identifiers.py::paragraph_id` embebe el
+    `program_id` completo (que a su vez incluye `source_hash[:12]`)
+    como prefijo literal, y ningun componente de `program_id`/
+    `paragraph_name` puede contener el separador "::" (identificadores
+    COBOL: solo alfanumerico y guion) -- dos programas reales NUNCA
+    producen el mismo `paragraph_id`/`decision_id`. Se construyen aqui
+    con `paragraph_id`/`decision_id` realistas de DOS programas
+    distintos (mismo sufijo "paragraph::MAIN", prefijo `program_id`
+    distinto) para demostrar que el predicado de la Seccion 2 nunca los
+    trata como la misma decision."""
+    ghost = _v1_ghost().model_copy(
+        update={
+            "paragraph_id": "program::AR::op::PROGRAM_A::1.0::aaaaaaaaaaaa::paragraph::MAIN",
+            "decision_id": (
+                "program::AR::op::PROGRAM_A::1.0::aaaaaaaaaaaa::paragraph::MAIN"
+                "::decision::10::1"
+            ),
+        }
+    )
+    refinement_other_program = _v2_refinement(
+        "candidate::enhanced::x1", outcome_code="0005", evidence_id="e1"
+    ).model_copy(
+        update={
+            "paragraph_id": "program::AR::op::PROGRAM_B::1.0::bbbbbbbbbbbb::paragraph::MAIN",
+            "decision_id": (
+                "program::AR::op::PROGRAM_B::1.0::bbbbbbbbbbbb::paragraph::MAIN"
+                "::decision::10::1"
+            ),
+        }
+    )
+
+    result, warnings = suppress_superseded_v1_return_code_ghosts(
+        [ghost, refinement_other_program]
+    )
+
+    assert sorted(c.candidate_id for c in result) == sorted(
+        [ghost.candidate_id, refinement_other_program.candidate_id]
+    )
     assert warnings == []
 
 
