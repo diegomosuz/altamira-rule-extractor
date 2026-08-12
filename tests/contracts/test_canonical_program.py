@@ -197,6 +197,21 @@ def test_sql_access_location_kind_is_enforced() -> None:
         make_sql_access(source_file=None, location_kind=LocationKind.EXACT)
 
 
+# --- Fase 15B3-C5-B: declared_value (declaration provenance) ---------------
+
+
+def test_data_item_declared_value_defaults_to_none_and_is_backward_compatible() -> None:
+    """JSON historico (sin declared_value) sigue parseando identico."""
+    item = make_data_item()
+    assert item.declared_value is None
+
+
+def test_data_item_declared_value_round_trips() -> None:
+    item = make_data_item(declared_value="3")
+    restored = CanonicalDataItem.model_validate_json(item.model_dump_json())
+    assert restored.declared_value == "3"
+
+
 # --- Fase 15B3-C3-B: direccion de host variables ----------------------------
 
 

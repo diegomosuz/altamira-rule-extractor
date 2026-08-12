@@ -607,6 +607,77 @@ constructs:
   limitations: []
   domain_reviewed: false
   diagnostics: []
+- construct_id: DATA_ITEM_VALUE
+  display_name: Clausula VALUE de un DataItem ordinario (declared value provenance)
+  category: DATA_STRUCTURE
+  layers:
+  - layer: PROLEAP_PARSER
+    status: SUPPORTED
+    evidence:
+    - kind: JAVA_TEST
+      reference: io.proleap.cobol.asg.metamodel.data.datadescription.ValueClause
+  - layer: JAVA_STATEMENT_EXTRACTION
+    status: NOT_APPLICABLE
+    notes: DATA DIVISION, no PROCEDURE DIVISION; ningun StatementKind involucrado.
+  - layer: CANONICAL_REPRESENTATION
+    status: PARTIALLY_SUPPORTED
+    notes: CanonicalDataItem.declared_value (Fase 15B3-C5-B) captura unicamente VALUE
+      simple (un unico ValueInterval, sin THRU). VALUE con multiples intervalos o
+      THRU deja declared_value=None, con un aviso en unsupported_constructs
+      (kind=DATA_ITEM_VALUE) -- nunca un valor parcial/adivinado. declared_value
+      es EXCLUSIVAMENTE el valor DECLARADO (DECLARED_INITIAL_VALUE) -- nunca el
+      valor efectivo/runtime, nunca constant propagation, nunca proven-constant.
+    evidence:
+    - kind: JAVA_TEST
+      reference: parser/src/test/java/com/altamira/extractor/parser/cobol/DeclaredValueExtractionTest.java
+  - layer: SEMANTIC_GRAPH
+    status: NOT_SUPPORTED
+    notes: declared_value nunca se agrega al grafo Neo4j; 0 NodeLabel/RelationshipType/property nuevos.
+  - layer: DATA_FLOW
+    status: NOT_SUPPORTED
+    notes: declared_value NUNCA arranca ni participa en semantic propagation (una
+      declaracion no es una sentencia ejecutada en PROCEDURE DIVISION). Una
+      escritura posterior (MOVE/SET/COMPUTE/...) nunca invalida declared_value
+      porque este nunca afirma valor efectivo/runtime.
+  - layer: CONTROL_FLOW
+    status: NOT_APPLICABLE
+  - layer: INTERPROCEDURAL
+    status: NOT_APPLICABLE
+  - layer: DETECTOR
+    status: NOT_APPLICABLE
+    notes: C5-B no crea ni modifica ningun detector; enriquece Decisions ya
+      detectadas por familias existentes (enrichment, nunca gate).
+  - layer: EVIDENCE
+    status: SUPPORTED
+    notes: EvidenceEntry(kind=declared_value_context) agregado a Decision.evidence_ids
+      unicamente cuando un operand de la Decision resuelve SIN ambiguedad (mismo
+      SymbolTable de identifiers.py, por qualified_name o simple_name unico) a un
+      CanonicalDataItem con declared_value no nulo. details.value_semantics=
+      DECLARED_INITIAL_VALUE, details.effective_runtime_value_proven=false siempre.
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_declared_value_provenance.py
+  - layer: PROVENANCE
+    status: SUPPORTED
+    notes: source_file/line del CanonicalDataItem declarante (nunca de la Decision).
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_declared_value_provenance.py
+  - layer: FUNCTIONAL_VALIDATION
+    status: PARTIALLY_SUPPORTED
+    notes: Ground truth sintetico dedicado; enriquece una regla RETURN_CODE ya productiva
+      (default V1/Q0, sin flag), nunca crea una familia nueva.
+    evidence:
+    - kind: SYNTHETIC_FIXTURE
+      reference: config/ground_truth/synthetic_engineering.yaml
+  fixtures:
+  - parser/src/test/resources/fixtures/declared-value.cbl
+  limitations:
+  - No prueba inmutabilidad -- declared_value nunca implica que el DataItem conserve ese valor en runtime.
+  - No representa Level 78 (fuera de alcance de esta fase).
+  - No representa VALUE con multiples intervalos ni THRU (fuera del subconjunto simple soportado).
+  domain_reviewed: false
+  diagnostics: []
 - construct_id: DISPLAY
   display_name: DISPLAY identifier/literal [UPON mnemonic] [WITH NO ADVANCING]
   category: OUTPUT
@@ -3597,43 +3668,43 @@ constructs:
   diagnostics: []
 issues: []
 summary:
-  construct_count: 57
+  construct_count: 58
   domain_reviewed_count: 0
   issue_count: 0
   counts_by_layer_and_status:
     PROLEAP_PARSER:
-      SUPPORTED: 46
+      SUPPORTED: 47
       NOT_APPLICABLE: 10
       UNKNOWN: 1
     JAVA_STATEMENT_EXTRACTION:
       SUPPORTED: 38
       NOT_SUPPORTED: 16
-      NOT_APPLICABLE: 1
+      NOT_APPLICABLE: 2
       PARTIALLY_SUPPORTED: 1
       RECOGNIZED_NOT_INTERPRETED: 1
     CANONICAL_REPRESENTATION:
       SUPPORTED: 36
       NOT_SUPPORTED: 9
       NOT_APPLICABLE: 1
-      PARTIALLY_SUPPORTED: 4
+      PARTIALLY_SUPPORTED: 5
       RECOGNIZED_NOT_INTERPRETED: 7
     SEMANTIC_GRAPH:
-      NOT_SUPPORTED: 45
+      NOT_SUPPORTED: 46
       NOT_APPLICABLE: 2
       SUPPORTED: 9
       PARTIALLY_SUPPORTED: 1
     DATA_FLOW:
       SUPPORTED: 21
-      NOT_SUPPORTED: 17
+      NOT_SUPPORTED: 18
       NOT_APPLICABLE: 10
       PARTIALLY_SUPPORTED: 9
     CONTROL_FLOW:
-      NOT_APPLICABLE: 43
+      NOT_APPLICABLE: 44
       NOT_SUPPORTED: 9
       SUPPORTED: 4
       UNKNOWN: 1
     INTERPROCEDURAL:
-      NOT_APPLICABLE: 49
+      NOT_APPLICABLE: 50
       PARTIALLY_SUPPORTED: 1
       SUPPORTED: 6
       NOT_SUPPORTED: 1
@@ -3641,15 +3712,16 @@ summary:
       PARTIALLY_SUPPORTED: 7
       NOT_SUPPORTED: 29
       SUPPORTED: 21
+      NOT_APPLICABLE: 1
     EVIDENCE:
       PARTIALLY_SUPPORTED: 5
       NOT_SUPPORTED: 31
-      SUPPORTED: 21
+      SUPPORTED: 22
     PROVENANCE:
-      SUPPORTED: 40
+      SUPPORTED: 41
       PARTIALLY_SUPPORTED: 11
       NOT_SUPPORTED: 6
     FUNCTIONAL_VALIDATION:
-      PARTIALLY_SUPPORTED: 18
+      PARTIALLY_SUPPORTED: 19
       NOT_SUPPORTED: 37
       SUPPORTED: 2

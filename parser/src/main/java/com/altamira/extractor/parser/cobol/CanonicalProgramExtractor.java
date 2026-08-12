@@ -188,18 +188,49 @@ public final class CanonicalProgramExtractor {
         String qualifiedName = qualifiedNameOf(entry);
         String pic = pictureOf(entry);
         String usage = usageOf(entry);
+        String declaredValue = declaredValueOf(entry, qualifiedName, ctx);
 
         ParserRuleContext entryCtx = entry.getCtx();
         if (entryCtx == null || entryCtx.getStart() == null) {
-            return new CanonicalDataItem(name, qualifiedName, level, pic, usage, null, null, LocationKind.UNKNOWN);
+            return new CanonicalDataItem(
+                    name, qualifiedName, level, pic, usage, declaredValue, null, null, LocationKind.UNKNOWN);
         }
         int line = entryCtx.getStart().getLine();
         if (ctx.programLocationKind == LocationKind.EXACT) {
-            return new CanonicalDataItem(
-                    name, qualifiedName, level, pic, usage, ctx.sourceFileForExact, line, LocationKind.EXACT);
+            return new CanonicalDataItem(name, qualifiedName, level, pic, usage, declaredValue,
+                    ctx.sourceFileForExact, line, LocationKind.EXACT);
         }
         return new CanonicalDataItem(
-                name, qualifiedName, level, pic, usage, null, line, LocationKind.PREPROCESSED_STREAM);
+                name, qualifiedName, level, pic, usage, declaredValue, null, line, LocationKind.PREPROCESSED_STREAM);
+    }
+
+    /**
+     * Valor declarado (Fase 15B3-C5-B, "declared value provenance"):
+     * solo para una clausula VALUE con exactamente un ValueInterval sin
+     * THRU -- nunca un valor parcial/adivinado para VALUE multi-intervalo
+     * o VALUE...THRU (queda None, con un aviso en unsupported_constructs
+     * describiendo que la VALUE clause existe pero excede el subconjunto
+     * simple soportado). Reutiliza literalTextOf (misma normalizacion de
+     * constantes figurativas ya usada por extractConditionValues, nunca
+     * reimplementada aqui).
+     */
+    private static String declaredValueOf(DataDescriptionEntry entry, String qualifiedName, ExtractionContext ctx) {
+        if (!(entry instanceof DataDescriptionEntryGroup group)) {
+            return null;
+        }
+        ValueClause valueClause = group.getValueClause();
+        if (valueClause == null) {
+            return null;
+        }
+        List<ValueInterval> intervals = valueClause.getValueIntervals();
+        if (intervals.size() != 1 || intervals.get(0).getToValueStmt() != null) {
+            ctx.unsupported(
+                    "data item " + qualifiedName + " tiene una clausula VALUE con multiples intervalos o "
+                            + "THRU; fuera del subconjunto VALUE simple soportado por declared_value "
+                            + "(kind=DATA_ITEM_VALUE)");
+            return null;
+        }
+        return literalTextOf(intervals.get(0).getFromValueStmt());
     }
 
     // --- Condiciones nivel 88 (Fase 3 de la ampliacion semantica) -------

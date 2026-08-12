@@ -13,10 +13,12 @@ codigo ya existente para dejar de duplicar imports cruzados entre etapas.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 
-from ..contracts.canonical import CanonicalParagraph, CanonicalStatement
+from ..contracts.canonical import CanonicalDataItem, CanonicalParagraph, CanonicalStatement
 from ..contracts.enums import StatementKind
 
 DECISION_STATEMENT_KINDS = (StatementKind.IF, StatementKind.EVALUATE)
@@ -95,3 +97,45 @@ def decision_id_for(para_id: str, *, ordinal: int, line_start: int | None) -> st
     es 1-based sobre `decision_statements_in_order`."""
     line_part = str(line_start) if line_start is not None else "unknown"
     return f"{para_id}::decision::{line_part}::{ordinal}"
+
+
+@dataclass(frozen=True)
+class ResolvedSymbol:
+    identity_key: str
+    qualified_name: str | None
+    ambiguous: bool
+
+
+@dataclass(frozen=True)
+class SymbolTable:
+    """Resolucion de un nombre COBOL crudo (Fase 5, `semantic_propagation_
+    analyzer.py`; reutilizado sin cambios por `context_package_builder.py`
+    desde Fase 15B3-C5-B): exacto por `qualified_name`, o por `name` simple
+    UNICAMENTE cuando es unico en todo el programa. Sin normalizacion de
+    mayusculas/minusculas (ver `normalize_identifier` para el caso
+    contrario, usado en otras identidades de este modulo)."""
+
+    by_qualified_name: dict[str, CanonicalDataItem]
+    by_simple_name: dict[str, list[CanonicalDataItem]]
+
+    def resolve(self, raw_name: str) -> ResolvedSymbol:
+        if raw_name in self.by_qualified_name:
+            return ResolvedSymbol(identity_key=raw_name, qualified_name=raw_name, ambiguous=False)
+        candidates = self.by_simple_name.get(raw_name, [])
+        if len(candidates) == 1:
+            qualified_name = candidates[0].qualified_name
+            return ResolvedSymbol(
+                identity_key=qualified_name, qualified_name=qualified_name, ambiguous=False
+            )
+        if len(candidates) > 1:
+            return ResolvedSymbol(identity_key=raw_name, qualified_name=None, ambiguous=True)
+        return ResolvedSymbol(identity_key=raw_name, qualified_name=None, ambiguous=False)
+
+
+def build_symbol_table(data_items: Iterable[CanonicalDataItem]) -> SymbolTable:
+    by_qualified: dict[str, CanonicalDataItem] = {}
+    by_simple: dict[str, list[CanonicalDataItem]] = defaultdict(list)
+    for item in data_items:
+        by_qualified[item.qualified_name] = item
+        by_simple[item.name].append(item)
+    return SymbolTable(by_qualified_name=by_qualified, by_simple_name=dict(by_simple))

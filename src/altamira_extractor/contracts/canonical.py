@@ -89,6 +89,13 @@ class CanonicalDataItem(AltamiraBaseModel):
     level: int = Field(ge=1, le=88)
     pic: str | None = None
     usage: str | None = None
+    # Valor declarado mediante una clausula VALUE simple (un unico
+    # ValueInterval, sin THRU) en DATA DIVISION -- nunca el valor
+    # efectivo/runtime (Fase 15B3-C5-B, "declared value provenance"). VALUE
+    # con multiples intervalos o THRU deja este campo en None (nunca un
+    # valor parcial/adivinado); ver CanonicalProgram.unsupported_constructs
+    # para esos casos.
+    declared_value: str | None = None
     source_file: RelativePath | None = None
     line: int | None = Field(default=None, ge=1)
     location_kind: LocationKind

@@ -290,3 +290,33 @@ este documento ni modifica ninguno de los modelos aquí definidos.
 - La ausencia de prueba suficiente siempre produce `UNRESOLVED_COPY`/
   `INVALIDATED_VALUE`/`BLOCKED_PROPAGATION`, nunca una inferencia
   optimista.
+
+## `declared_value` (Fase 15B3-C5-B) NUNCA es un seed de propagación
+
+`CanonicalDataItem.declared_value` (una cláusula `VALUE` simple de DATA
+DIVISION, sin `THRU` ni múltiples intervalos) es **declaración**, nunca
+**ejecución**: `semantic_propagation_analyzer.py` no lo lee, no lo usa
+como valor inicial de ningún `_Environment`, y no lo modifica — cero
+cambios de código en este módulo. Tres conceptos deliberadamente
+distintos:
+
+- **`DECLARED_INITIAL_VALUE`**: lo único que `declared_value` puede
+  demostrar — el texto literal de la cláusula `VALUE` tal como aparece
+  en el código fuente.
+- **`EFFECTIVE_RUNTIME_VALUE`**: el valor real del DataItem en un punto
+  de ejecución dado — nunca demostrado por `declared_value` ni por este
+  analizador.
+- **`PROVEN_CONSTANT_VALUE`**: que `DECLARED_INITIAL_VALUE ==
+  EFFECTIVE_RUNTIME_VALUE` esté garantizado — requeriría CFG/análisis
+  interprocedural que este proyecto no implementa; fuera de alcance.
+
+Un `MOVE`/`SET`/`COMPUTE` posterior sobre el mismo DataItem **nunca
+invalida** `declared_value` (no hay nada que invalidar: `declared_value`
+nunca afirmó ser el valor efectivo) y, simétricamente, `declared_value`
+**nunca** alimenta `DIRECT_LITERAL`/`PROPAGATED_LITERAL`/`ASSIGN_LITERAL`
+ni ningún otro `PropagationFactKind`. El enriquecimiento evidencial que
+consume `declared_value` (`context_package_builder.
+_enrich_decision_with_declared_value_evidence`, `EvidenceEntry(kind=
+"declared_value_context")`) vive enteramente fuera de este módulo, en
+`CONTEXTS_BUILT` — una etapa posterior y completamente independiente de
+`SemanticPropagationArtifact`.

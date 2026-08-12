@@ -136,6 +136,32 @@ cases:
       COMPUTE incondicional, _convert_unconditional_calculation productiviza el
       candidato con decision_id=None/condition=None. Confirmado con el JAR real:
       target_data_items=[WS-COMISION], parent_statement_id=None, unsupported_constructs=[].'
+- case_id: gt-positive-declared-value-return-code
+  kind: POSITIVE
+  program: GTDVAL01
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_declared_value_return_code_001.cbl
+    sha256: 99c8332c59ea33c7f8b82a27fb159c9bb3fa8f7b5b8a5d7bdfaf003b2c81429a
+  description: 'WS-RIESGO-MAXIMO PIC 9 VALUE 3, IF WS-RIESGO > WS-RIESGO-MAXIMO MOVE
+    ''PE04'' TO WS-COD-RETORNO END-IF: decision IF ordinaria cuyo operando WS-RIESGO-MAXIMO
+    tiene una clausula VALUE declarada (Fase 15B3-C5-B, "declared value provenance").
+    Prueba que la nueva evidencia declared_value_context enriquece la Decision de
+    una regla RETURN_CODE YA productiva (default V1/Q0, sin flag) sin alterar
+    candidate_id/condition/effect/rule_family.'
+  expected_rules:
+  - expectation_id: gt-positive-declared-value-return-code::q0
+    rule_family: RETURN_CODE
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'WS-COD-RETORNO coincide con return-code-name de config/semantic-tags.yml
+      (contiene "COD" seguido de "RETORNO", que contiene "RET"). Mismo patron estructural
+      que gt-positive-return-code-if-else (Decision-[:LEADS_TO]->DataItem semantic_tag=return_code).
+      Adicionalmente (Fase 15B3-C5-B): CanonicalDataItem(WS-RIESGO-MAXIMO).declared_value=''3''
+      (VALUE simple sin THRU); context_package_builder._enrich_decision_with_declared_value_evidence
+      resuelve el operand sin ambiguedad y agrega EvidenceEntry(kind=declared_value_context,
+      value_semantics=DECLARED_INITIAL_VALUE, effective_runtime_value_proven=false) a
+      decision.evidence_ids -- nunca sustituye WS-RIESGO-MAXIMO por 3 en condition. Confirmado
+      E2E con JAR real, Neo4j efimero y fake LLM (tests/test_hermetic_declared_value_provenance_e2e.py).'
 - case_id: gt-positive-level88-return-code-nested-set
   kind: POSITIVE
   program: GTL88001
@@ -270,7 +296,7 @@ cases:
       ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
       heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 11
-  positive_case_count: 9
+  case_count: 12
+  positive_case_count: 10
   negative_case_count: 2
-  expected_rule_count: 9
+  expected_rule_count: 10

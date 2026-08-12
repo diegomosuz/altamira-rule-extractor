@@ -22,7 +22,8 @@ nivel de directorio.
 Fase 15B3-C3-C-B: tambien se carga `artifacts/02-canonical/` una vez
 (mismo patron que `candidates_detected_stage._load_canonical_programs_
 for_enhanced_detection`) para el enriquecimiento evidencial de Decisions
-SQLCODE -- ver `_load_canonical_paragraphs_for_sql_causal_evidence`.
+SQLCODE y (Fase 15B3-C5-B) declared_value -- ver
+`_load_canonical_indices_for_context_enrichment`.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ import json
 import os
 import secrets
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import jsonschema
@@ -40,7 +42,7 @@ from jsonschema.exceptions import SchemaError
 
 from ..config import Settings
 from ..contracts.candidate import CandidateArtifact
-from ..contracts.canonical import CanonicalParagraph, CanonicalProgram
+from ..contracts.canonical import CanonicalDataItem, CanonicalParagraph, CanonicalProgram
 from ..contracts.context_manifest import ContextDirectoryManifest, ContextRecord, QueryRecord
 from ..contracts.context_package import ContextPackage
 from ..contracts.enums import PipelineStage, StageStatus
@@ -217,21 +219,35 @@ def _swap_context_directory(temp_dir: Path, target_dir: Path) -> None:
         shutil.rmtree(backup_dir, ignore_errors=True)
 
 
-def _load_canonical_paragraphs_for_sql_causal_evidence(
+@dataclass(frozen=True)
+class _CanonicalEnrichmentIndex:
+    paragraphs: dict[tuple[str, str], CanonicalParagraph]
+    # (program_name, data_items) por source_file -- program_name viaja
+    # explicito desde CanonicalProgram (nunca parseado de un id) para que
+    # context_package_builder.py pueda escopar la identidad de
+    # declared_value_context por programa (correccion pre-commit
+    # 15B3-C5-B "declaration provenance identity").
+    data_items_by_source_file: dict[str, tuple[str, list[CanonicalDataItem]]]
+
+
+def _load_canonical_indices_for_context_enrichment(
     canonical_dir: Path,
-) -> dict[tuple[str, str], CanonicalParagraph]:
-    """Indice para el enriquecimiento SQLCODE, nunca bloqueante:
-    ausente/vacio -> indice vacio; corrupcion real de un archivo
-    presente SI propaga error. Colision de clave -> se descarta (nunca
-    elige una arbitraria)."""
+) -> _CanonicalEnrichmentIndex:
+    """Indices para el enriquecimiento evidencial de Decisions (SQLCODE,
+    Fase 15B3-C3-C-B, y declared_value, Fase 15B3-C5-B), nunca
+    bloqueantes: ausente/vacio -> indices vacios; corrupcion real de un
+    archivo presente SI propaga error. Colision de clave de paragraph ->
+    se descarta (nunca elige una arbitraria); data_items_by_source_file
+    no tiene ese riesgo (una clave por CanonicalProgram, ya unica)."""
     if not canonical_dir.is_dir():
-        return {}
+        return _CanonicalEnrichmentIndex({}, {})
     json_paths = sorted(
         path for path in canonical_dir.rglob("*.json") if path.is_file() and not path.is_symlink()
     )
     if not json_paths:
-        return {}
-    index: dict[tuple[str, str], CanonicalParagraph] = {}
+        return _CanonicalEnrichmentIndex({}, {})
+    paragraphs: dict[tuple[str, str], CanonicalParagraph] = {}
+    data_items_by_source_file: dict[str, tuple[str, list[CanonicalDataItem]]] = {}
     collisions: set[tuple[str, str]] = set()
     for json_path in json_paths:
         try:
@@ -241,16 +257,17 @@ def _load_canonical_paragraphs_for_sql_causal_evidence(
                 f"artifacts/02-canonical/{json_path.name}: JSON invalido o incompatible con "
                 f"CanonicalProgram: {exc}"
             ) from exc
+        data_items_by_source_file[program.source_file] = (program.program_name, program.data_items)
         for paragraph in program.paragraphs:
             key = (program.source_file, paragraph.name)
             if key in collisions:
                 continue
-            if key in index:
-                del index[key]
+            if key in paragraphs:
+                del paragraphs[key]
                 collisions.add(key)
                 continue
-            index[key] = paragraph
-    return index
+            paragraphs[key] = paragraph
+    return _CanonicalEnrichmentIndex(paragraphs, data_items_by_source_file)
 
 
 def run_contexts_built_stage(
@@ -327,7 +344,7 @@ def run_contexts_built_stage(
 
         packages: list[ContextPackage] = []
         if candidate_artifact.candidates:
-            canonical_paragraphs = _load_canonical_paragraphs_for_sql_causal_evidence(
+            canonical_index = _load_canonical_indices_for_context_enrichment(
                 artifacts_dir / "02-canonical"
             )
 
@@ -337,7 +354,8 @@ def run_contexts_built_stage(
                     candidate_artifact.candidates,
                     queries=query_set,
                     settings=settings,
-                    canonical_paragraphs=canonical_paragraphs,
+                    canonical_paragraphs=canonical_index.paragraphs,
+                    data_items_by_source_file=canonical_index.data_items_by_source_file,
                 )
 
             packages = repository.run_in_read_transaction(_work)

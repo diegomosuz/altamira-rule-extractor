@@ -41,7 +41,7 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..contracts.candidate import RuleCandidate
 from ..contracts.candidate_promotion_assessment import UnifiedRuleFamily
-from ..contracts.canonical import CanonicalParagraph, CanonicalStatement
+from ..contracts.canonical import CanonicalDataItem, CanonicalParagraph, CanonicalStatement
 from ..contracts.context_package import (
     ApplicableParameterRow,
     BatchContext,
@@ -68,12 +68,19 @@ from ..contracts.enums import (
     BatchContextStatus,
     CompletenessStatus,
     InclusionReason,
+    LocationKind,
     StatementKind,
     TableEffectOperation,
 )
 from .cypher_query_loader import LoadedContextQuery
 from .errors import ContextBuildError
-from .identifiers import DECISION_STATEMENT_KINDS, decision_id_for, decision_statements_in_order
+from .identifiers import (
+    DECISION_STATEMENT_KINDS,
+    SymbolTable,
+    build_symbol_table,
+    decision_id_for,
+    decision_statements_in_order,
+)
 from .parameter_predicate_resolver import (
     aggregate_applicability,
     entry_matches_comparisons,
@@ -127,15 +134,36 @@ def build_context_packages(
     queries: ContextQuerySet,
     settings: Settings,
     canonical_paragraphs: Mapping[tuple[str, str], CanonicalParagraph] | None = None,
+    data_items_by_source_file: Mapping[str, tuple[str, Sequence[CanonicalDataItem]]]
+    | None = None,
 ) -> list[ContextPackage]:
     """`canonical_paragraphs`: opcional, mapa `(source_file,
     paragraph_name) -> CanonicalParagraph` para el enriquecimiento
     SQLCODE (`_enrich_decision_with_sql_causal_evidence`); su ausencia
-    nunca impide construir un `ContextPackage`."""
+    nunca impide construir un `ContextPackage`. `data_items_by_source_file`
+    (Fase 15B3-C5-B): opcional, mapa `source_file -> (program_name,
+    CanonicalDataItem[])` del programa dueno, para el enriquecimiento
+    `declared_value_context` (`_enrich_decision_with_declared_value_evidence`)
+    -- `program_name` viaja explicito desde `CanonicalProgram` (nunca
+    reconstruido parseando `paragraph_id`/`candidate_id`/`decision_id`,
+    correccion pre-commit "declaration provenance identity"); su ausencia
+    tampoco impide construir un `ContextPackage`. `SymbolTable` se
+    construye una unica vez por `source_file` (nunca por candidato)."""
     paragraphs = canonical_paragraphs or {}
+    program_names: dict[str, str] = {}
+    symbol_tables: dict[str, SymbolTable] = {}
+    for source_file, (program_name, items) in (data_items_by_source_file or {}).items():
+        program_names[source_file] = program_name
+        symbol_tables[source_file] = build_symbol_table(items)
     return [
         _build_one_context_package(
-            tx, candidate, queries=queries, settings=settings, canonical_paragraphs=paragraphs
+            tx,
+            candidate,
+            queries=queries,
+            settings=settings,
+            canonical_paragraphs=paragraphs,
+            program_name=program_names.get(candidate.source_file),
+            symbol_table=symbol_tables.get(candidate.source_file),
         )
         for candidate in candidates
     ]
@@ -158,6 +186,8 @@ def _build_one_context_package(
     queries: ContextQuerySet,
     settings: Settings,
     canonical_paragraphs: Mapping[tuple[str, str], CanonicalParagraph],
+    program_name: str | None = None,
+    symbol_table: SymbolTable | None = None,
 ) -> ContextPackage:
     evidence_entries: list[EvidenceEntry] = []
     unconditional_calculation = _is_unconditional_calculation(candidate)
@@ -181,6 +211,9 @@ def _build_one_context_package(
         decision, d4_evidence = _build_decision(tx, candidate, queries.q4)
         decision, d4_evidence = _enrich_decision_with_sql_causal_evidence(
             decision, d4_evidence, candidate, canonical_paragraphs
+        )
+        decision, d4_evidence = _enrich_decision_with_declared_value_evidence(
+            decision, d4_evidence, candidate, program_name, symbol_table
         )
     evidence_entries.extend(d4_evidence)
 
@@ -758,6 +791,117 @@ def _enrich_decision_with_sql_causal_evidence(
         update={"evidence_ids": sorted({*decision.evidence_ids, causal_evidence_id})}
     )
     return enriched_decision, [*evidence, causal_evidence]
+
+
+def _declared_value_evidence_id(
+    *,
+    source_package_hash: str,
+    program_name: str,
+    source_file: str,
+    line: int,
+    qualified_name: str,
+) -> str:
+    """Sin `candidate_id` (misma razon que `_sql_causal_evidence_id`):
+    identifica la DECLARACION del DataItem, no la Decision -- dos
+    Decisions distintas que referencian el mismo DataItem citan el mismo
+    id. `program_name` distingue programas (nunca `source_file` solo,
+    correccion pre-commit "declaration provenance identity"); `source_file`
+    + `line` (correccion pre-commit "strong declaration evidence identity")
+    identifican la declaracion FISICA exacta -- nunca solo el nombre del
+    DataItem dentro de un programa, sin asumir que `program_name` por si
+    solo sea globalmente unico. Solo se llama cuando `location_kind ==
+    EXACT` ya garantizo que `source_file`/`line` son reales (ver
+    `_enrich_decision_with_declared_value_evidence`)."""
+    payload = {
+        "logical_query": "DECLARED_VALUE_CONTEXT",
+        "source_package_hash": source_package_hash,
+        "program_name": program_name,
+        "source_file": source_file,
+        "line": line,
+        "data_item_qualified_name": qualified_name,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"evidence::{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _enrich_decision_with_declared_value_evidence(
+    decision: ContextPackageDecision,
+    evidence: list[EvidenceEntry],
+    candidate: RuleCandidate,
+    program_name: str | None,
+    symbol_table: SymbolTable | None,
+) -> tuple[ContextPackageDecision, list[EvidenceEntry]]:
+    """Por cada operand de la Decision (`decision.operands`, nunca por
+    substring de `expression`) que resuelve SIN ambiguedad a un
+    CanonicalDataItem con `declared_value` no nulo Y `location_kind ==
+    EXACT` (unico caso donde `source_file`/`line` del DataItem son reales
+    y confiables -- correccion pre-commit "no fabricar source location"),
+    agrega un `EvidenceEntry(kind="declared_value_context")` -- provenance
+    de DECLARACION unicamente, `effective_runtime_value_proven` siempre
+    `False` (nunca afirma valor efectivo/runtime, C5-A2 seccion 4). La
+    evidencia SIEMPRE cita `data_item.source_file`/`data_item.line`
+    (nunca `candidate.source_file` como fallback): un DataItem con
+    `location_kind` PREPROCESSED_STREAM/UNKNOWN nunca produce evidencia
+    citable, aunque `declared_value` siga poblado en el `CanonicalDataItem`
+    -- falso negativo aceptable, nunca una ubicacion fabricada. Operand
+    ausente/ambiguo/sin declared_value/sin program_name/sin ubicacion
+    confiable: se omite, la regla permanece valida sin cambios
+    (enrichment, nunca gate)."""
+    if symbol_table is None or program_name is None or not decision.operands:
+        return decision, evidence
+
+    new_entries: list[EvidenceEntry] = []
+    new_evidence_ids: set[str] = set()
+    for operand in decision.operands:
+        resolved = symbol_table.resolve(operand)
+        if resolved.ambiguous or resolved.qualified_name is None:
+            continue
+        data_item = symbol_table.by_qualified_name.get(resolved.qualified_name)
+        if data_item is None or data_item.declared_value is None:
+            continue
+        if (
+            data_item.location_kind != LocationKind.EXACT
+            or data_item.source_file is None
+            or data_item.line is None
+        ):
+            continue
+        evidence_id = _declared_value_evidence_id(
+            source_package_hash=candidate.source_package_hash,
+            program_name=program_name,
+            source_file=data_item.source_file,
+            line=data_item.line,
+            qualified_name=data_item.qualified_name,
+        )
+        if evidence_id in new_evidence_ids:
+            continue
+        new_evidence_ids.add(evidence_id)
+        new_entries.append(
+            EvidenceEntry(
+                evidence_id=evidence_id,
+                kind="declared_value_context",
+                source_file=data_item.source_file,
+                line_start=data_item.line,
+                line_end=data_item.line,
+                source_package_hash=candidate.source_package_hash,
+                details={
+                    "data_item_name": data_item.name,
+                    "data_item_qualified_name": data_item.qualified_name,
+                    "declared_value": data_item.declared_value,
+                    "value_semantics": "DECLARED_INITIAL_VALUE",
+                    "effective_runtime_value_proven": False,
+                    "level": data_item.level,
+                    "pic": data_item.pic,
+                    "usage": data_item.usage,
+                    "program_name": program_name,
+                },
+            )
+        )
+    if not new_entries:
+        return decision, evidence
+    enriched_decision = decision.model_copy(
+        update={"evidence_ids": sorted({*decision.evidence_ids, *new_evidence_ids})}
+    )
+    return enriched_decision, [*evidence, *new_entries]
 
 
 def _build_decision(

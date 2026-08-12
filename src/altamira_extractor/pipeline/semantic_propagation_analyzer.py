@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 
 from ..contracts.canonical import (
     CanonicalConditionName,
-    CanonicalDataItem,
     CanonicalParagraph,
     CanonicalProgram,
     CanonicalStatement,
@@ -57,54 +56,13 @@ from ..contracts.semantic_propagation import (
     SemanticPropagationSummary,
 )
 from .errors import SemanticPropagationError
+from .identifiers import SymbolTable, build_symbol_table
 
-# ---------------------------------------------------------------------------
-# Resolucion de simbolos (Fase 5): exacto por qualified_name, o por name
-# simple UNICAMENTE cuando es unico en todo el programa. Sin normalizacion
-# de mayusculas/minusculas (ningun punto ya auditado del pipeline Java o
-# Python normaliza casing de identificadores COBOL: se preserva el nombre
-# exacto que entrega ProLeap -- ver auditoria de Fase 1).
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _ResolvedSymbol:
-    identity_key: str
-    qualified_name: str | None
-    ambiguous: bool
-
-
-@dataclass(frozen=True)
-class _SymbolTable:
-    by_qualified_name: dict[str, CanonicalDataItem]
-    by_simple_name: dict[str, list[CanonicalDataItem]]
-
-    def resolve(self, raw_name: str) -> _ResolvedSymbol:
-        if raw_name in self.by_qualified_name:
-            return _ResolvedSymbol(identity_key=raw_name, qualified_name=raw_name, ambiguous=False)
-        candidates = self.by_simple_name.get(raw_name, [])
-        if len(candidates) == 1:
-            qualified_name = candidates[0].qualified_name
-            return _ResolvedSymbol(
-                identity_key=qualified_name, qualified_name=qualified_name, ambiguous=False
-            )
-        if len(candidates) > 1:
-            return _ResolvedSymbol(identity_key=raw_name, qualified_name=None, ambiguous=True)
-        # Cero candidatos: no es un data item declarado que este parser
-        # conserve (p. ej. un registro especial, o un nombre que el
-        # extractor no pudo resolver). Nunca se inventa un qualified_name;
-        # se usa el nombre crudo como identidad -- sigue siendo seguro
-        # porque no colisiona con ningun otro simbolo real.
-        return _ResolvedSymbol(identity_key=raw_name, qualified_name=None, ambiguous=False)
-
-
-def _build_symbol_table(program: CanonicalProgram) -> _SymbolTable:
-    by_qualified: dict[str, CanonicalDataItem] = {}
-    by_simple: dict[str, list[CanonicalDataItem]] = defaultdict(list)
-    for item in program.data_items:
-        by_qualified[item.qualified_name] = item
-        by_simple[item.name].append(item)
-    return _SymbolTable(by_qualified_name=by_qualified, by_simple_name=dict(by_simple))
+# Resolucion de simbolos (Fase 5, reubicada a identifiers.py en Fase
+# 15B3-C5-B para reutilizarse desde context_package_builder.py sin
+# duplicar el algoritmo): exacto por qualified_name, o por name simple
+# UNICAMENTE cuando es unico en todo el programa. Sin normalizacion de
+# mayusculas/minusculas (ver `SymbolTable`).
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +258,7 @@ class _ParagraphContext:
     paragraph: CanonicalParagraph
     children_by_parent: dict[str, list[CanonicalStatement]]
     effects_by_statement_id: dict[str, list[SemanticEffect]]
-    symbols: _SymbolTable
+    symbols: SymbolTable
     conditions_by_qualified_name: dict[str, CanonicalConditionName]
     collector: _Collector
     max_derivation_depth: int
@@ -1052,7 +1010,7 @@ def _conditions_by_qualified_name(
 def _analyze_program(
     program: CanonicalProgram, program_effects: ProgramSemanticEffects
 ) -> ProgramSemanticPropagation:
-    symbols = _build_symbol_table(program)
+    symbols = build_symbol_table(program.data_items)
     conditions_by_qualified_name = _conditions_by_qualified_name(program.condition_names)
     effects_by_statement_id: dict[str, list[SemanticEffect]] = defaultdict(list)
     for effect in program_effects.effects:
