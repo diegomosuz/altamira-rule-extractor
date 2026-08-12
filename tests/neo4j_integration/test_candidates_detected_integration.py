@@ -618,7 +618,10 @@ def test_enhanced_candidates_enabled_adds_level_88_candidate_via_real_neo4j(
     hacia un DataItem `return_code`). Igual que el caso B de
     `test_v2_detectors.py`: `V2_LEVEL_88_RETURN_CODE` y
     `V2_RETURN_CODE_PROPAGATION` (CONDITION_LITERAL, Fase 5 condicion #3)
-    disparan ambos sobre la misma Decision -- se conservan por separado."""
+    disparan ambos sobre la misma Decision, con `evidence_ids` identicos
+    -- desde Fase 15B4-CANDIDATE-QUALITY-2 la integracion productiva
+    reconoce que describen el mismo hecho y conserva unicamente
+    LEVEL_88_RETURN_CODE, con un warning de corroboracion."""
     graph, canonical_program = _graph_and_program_for_enhanced_level_88()
     repository = Neo4jRepository.connect(neo4j_test_settings)
     try:
@@ -646,11 +649,11 @@ def test_enhanced_candidates_enabled_adds_level_88_candidate_via_real_neo4j(
         canonical_dir=canonical_dir,
     )
 
-    assert warnings == ["detectados 2 candidato(s)"]
+    assert warnings == ["detectados 1 candidato(s)"]
     artifact = CandidateArtifact.model_validate_json(candidates_path.read_text(encoding="utf-8"))
-    assert len(artifact.candidates) == 2
-    families = {c.rule_family for c in artifact.candidates}
-    assert families == {UnifiedRuleFamily.RETURN_CODE, UnifiedRuleFamily.LEVEL_88_RETURN_CODE}
+    assert len(artifact.candidates) == 1
+    assert artifact.candidates[0].rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
+    assert any("corroborado por" in warning for warning in artifact.warnings), artifact.warnings
     for candidate in artifact.candidates:
         assert candidate.candidate_source == CandidateSource.V2
         assert candidate.outcome_code == "0005"

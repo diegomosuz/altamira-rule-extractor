@@ -307,10 +307,16 @@ def _case_b_program_and_decisions() -> tuple[CanonicalProgram, list[tuple[str, i
 def test_level_88_produces_a_promotable_rule_candidate() -> None:
     """Caso B: `V2_RETURN_CODE_PROPAGATION` (CONDITION_LITERAL como
     evidencia valida, Fase 5 condicion #3) y `V2_LEVEL_88_RETURN_CODE`
-    disparan ambos sobre la misma Decision -- Fase 9 exige conservar
-    ambos por separado (nunca fusionar solo por compartir decision/
-    target/literal si vienen de detectores distintos, ver
-    `test_v2_detectors.py::test_case_b_return_code_propagation_also_fires_and_is_related_not_merged`)."""
+    disparan ambos sobre la misma Decision, con `evidence_ids`
+    identicos -- a nivel de DETECTOR (`v2_detectors.py`) ambos siguen
+    produciendo su propio `V2ShadowCandidate` por separado (ver
+    `test_v2_detectors.py::test_case_b_return_code_propagation_also_fires_and_is_related_not_merged`,
+    sin cambios), pero desde Fase 15B4-CANDIDATE-QUALITY-2 la
+    INTEGRACION productiva (`enhanced_candidate_integration.py`) los
+    reconoce como el mismo hecho de negocio (evidencia exactamente
+    igual) y conserva unicamente el LEVEL_88_RETURN_CODE, con un
+    warning de corroboracion -- nunca las dos representaciones
+    redundantes en `06-candidates.json`."""
     program, decisions = _case_b_program_and_decisions()
     graph = _build_graph_with_source_file(
         program=program,
@@ -326,15 +332,14 @@ def test_level_88_produces_a_promotable_rule_candidate() -> None:
         source_package_hash=HASH,
     )
 
-    assert warnings == []
-    assert len(new_candidates) == 2
-    families = {candidate.rule_family for candidate in new_candidates}
-    assert families == {UnifiedRuleFamily.RETURN_CODE, UnifiedRuleFamily.LEVEL_88_RETURN_CODE}
+    assert len(new_candidates) == 1
+    assert len(warnings) == 1
+    assert "corroborado por" in warnings[0]
+    candidate = new_candidates[0]
+    assert candidate.rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
     decision_id = decision_node_id_for("PROG1", "PARA", 10, 1)
-    for candidate in new_candidates:
-        assert candidate.outcome_code == "0005"
-        assert candidate.decision_id == decision_id
-    assert len({candidate.candidate_id for candidate in new_candidates}) == 2
+    assert candidate.outcome_code == "0005"
+    assert candidate.decision_id == decision_id
 
 
 # ---------------------------------------------------------------------------
@@ -583,9 +588,14 @@ def test_rule_b_same_decision_different_effect_are_distinct_rules() -> None:
 
 
 def test_rule_c_same_decision_different_family_are_distinct_rules() -> None:
+    """Familias genuinamente distintas (no la pareja RETURN_CODE/
+    LEVEL_88_RETURN_CODE, que desde Fase 15B4-CANDIDATE-QUALITY-2 tiene
+    su propia excepcion estrecha -- ver
+    test_level88_return_code_pair_with_identical_evidence_merges_into_level88
+    mas abajo) -- deben seguir siendo reglas distintas."""
     item1 = _converted(rule_family=UnifiedRuleFamily.RETURN_CODE, source_v2_candidate_id="v2::a::1")
     item2 = _converted(
-        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE, source_v2_candidate_id="v2::b::1"
+        rule_family=UnifiedRuleFamily.STATE_TRANSITION, source_v2_candidate_id="v2::b::1"
     )
     assert item1.key != item2.key
 
@@ -596,7 +606,7 @@ def test_rule_c_same_decision_different_family_are_distinct_rules() -> None:
     assert len(candidates) == 2
     assert {c.rule_family for c in candidates} == {
         UnifiedRuleFamily.RETURN_CODE,
-        UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        UnifiedRuleFamily.STATE_TRANSITION,
     }
 
 
@@ -734,6 +744,181 @@ def test_rule_e_v1_candidate_order_never_affects_result() -> None:
     )
 
     assert forward == reversed_order
+
+
+# ---------------------------------------------------------------------------
+# Fase 15B4-CANDIDATE-QUALITY-2: corroboracion estrecha
+# LEVEL_88_RETURN_CODE / RETURN_CODE (corrige la duplicacion demostrada en
+# Fase 15B4-CANDIDATE-QUALITY-1 para el paquete real CONSALDO -- 13 hechos
+# funcionales producian 26 RuleCandidate).
+# ---------------------------------------------------------------------------
+
+
+def test_level88_return_code_pair_with_identical_evidence_merges_into_level88() -> None:
+    """Caso positivo: mismo program_id/paragraph_id/decision_id/
+    condition/outcome_code y evidence_ids EXACTAMENTE iguales -> se
+    fusiona en un unico candidato, conservando la identidad (key ->
+    candidate_id) del LEVEL_88_RETURN_CODE original -- nunca una
+    tercera identidad."""
+    level88 = _converted(
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        source_v2_candidate_id="v2::level88::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+    return_code = _converted(
+        rule_family=UnifiedRuleFamily.RETURN_CODE,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        source_v2_candidate_id="v2::rc::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+
+    candidates, warnings = _merge_candidates(
+        [return_code, level88], _empty_v1_candidates(), source_package_hash=HASH
+    )
+
+    assert len(candidates) == 1
+    merged = candidates[0]
+    assert merged.rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
+    assert merged.candidate_id == f"candidate::enhanced::{HASH}::{level88.key}"
+    assert merged.evidence_ids == ["effect::1", "fact::1"]
+    assert len(warnings) == 1
+    assert "v2::level88::1" in warnings[0]
+    assert "V2_RETURN_CODE_PROPAGATION" in warnings[0]
+    assert "v2::rc::1" in warnings[0]
+
+
+def test_level88_return_code_pair_with_different_evidence_never_merges() -> None:
+    """Mismos campos funcionales, evidence_ids distintos -> nunca se
+    fusiona (protege contra fusion sin evidencia identica real)."""
+    level88 = _converted(
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        source_v2_candidate_id="v2::level88::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+    return_code = _converted(
+        rule_family=UnifiedRuleFamily.RETURN_CODE,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        source_v2_candidate_id="v2::rc::1",
+        evidence_ids=("effect::2", "fact::2"),
+    )
+
+    candidates, warnings = _merge_candidates(
+        [return_code, level88], _empty_v1_candidates(), source_package_hash=HASH
+    )
+
+    assert len(candidates) == 2
+    assert {c.rule_family for c in candidates} == {
+        UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        UnifiedRuleFamily.RETURN_CODE,
+    }
+    assert warnings == []
+
+
+def test_level88_return_code_pair_with_different_decision_never_merges() -> None:
+    """Misma evidencia (construida sinteticamente), decision_id
+    distinto -> nunca se fusiona -- protege contra fusion basada
+    unicamente en evidencia."""
+    level88 = _converted(
+        decision_id="dec-1",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        source_v2_candidate_id="v2::level88::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+    return_code = _converted(
+        decision_id="dec-2",
+        rule_family=UnifiedRuleFamily.RETURN_CODE,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        source_v2_candidate_id="v2::rc::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+
+    candidates, warnings = _merge_candidates(
+        [return_code, level88], _empty_v1_candidates(), source_package_hash=HASH
+    )
+
+    assert len(candidates) == 2
+    assert warnings == []
+
+
+def test_level88_return_code_pair_with_different_outcome_never_merges() -> None:
+    """Mismo contexto estructural, outcome_code/effect distinto ->
+    nunca se fusiona."""
+    level88 = _converted(
+        outcome_code="0005",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        source_v2_candidate_id="v2::level88::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+    return_code = _converted(
+        outcome_code="9999",
+        rule_family=UnifiedRuleFamily.RETURN_CODE,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        source_v2_candidate_id="v2::rc::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+
+    candidates, warnings = _merge_candidates(
+        [return_code, level88], _empty_v1_candidates(), source_package_hash=HASH
+    )
+
+    assert len(candidates) == 2
+    assert warnings == []
+
+
+def test_other_family_pair_with_identical_evidence_never_merges() -> None:
+    """Dos candidatos V2 con evidencia identica pero una pareja de
+    familias que NO es exactamente (LEVEL_88_RETURN_CODE, RETURN_CODE)
+    -- nunca se fusionan. Demuestra que no se creo un mecanismo de
+    dedup generico cross-family."""
+    return_code = _converted(
+        rule_family=UnifiedRuleFamily.RETURN_CODE,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        source_v2_candidate_id="v2::rc::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+    state_transition = _converted(
+        rule_family=UnifiedRuleFamily.STATE_TRANSITION,
+        detector_id="V2_STATE_CHANGE",
+        source_v2_candidate_id="v2::st::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+
+    candidates, warnings = _merge_candidates(
+        [return_code, state_transition], _empty_v1_candidates(), source_package_hash=HASH
+    )
+
+    assert len(candidates) == 2
+    assert {c.rule_family for c in candidates} == {
+        UnifiedRuleFamily.RETURN_CODE,
+        UnifiedRuleFamily.STATE_TRANSITION,
+    }
+    assert warnings == []
+
+
+def test_return_code_without_level88_sibling_remains_productive() -> None:
+    """RETURN_CODE (via propagacion) sin ningun candidato hermano
+    LEVEL_88_RETURN_CODE sobre el mismo hecho -- sigue siendo
+    productivo, sin cambios. El fix nunca elimina la familia
+    RETURN_CODE general."""
+    return_code = _converted(
+        rule_family=UnifiedRuleFamily.RETURN_CODE,
+        detector_id="V2_RETURN_CODE_PROPAGATION",
+        source_v2_candidate_id="v2::rc::1",
+        evidence_ids=("effect::1", "fact::1"),
+    )
+
+    candidates, warnings = _merge_candidates(
+        [return_code], _empty_v1_candidates(), source_package_hash=HASH
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].rule_family == UnifiedRuleFamily.RETURN_CODE
+    assert candidates[0].evidence_ids == ["effect::1", "fact::1"]
+    assert warnings == []
 
 
 # ---------------------------------------------------------------------------

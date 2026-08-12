@@ -494,6 +494,79 @@ def _convert_unconditional_calculation(
     )
 
 
+_CORROBORATION_FAMILIES = frozenset(
+    {UnifiedRuleFamily.LEVEL_88_RETURN_CODE, UnifiedRuleFamily.RETURN_CODE}
+)
+
+
+def _corroboration_group_key(item: _ConvertedCandidate) -> str:
+    """Ancla comun, EXCLUSIVA del par LEVEL_88_RETURN_CODE/RETURN_CODE
+    (Fase 15B4-CANDIDATE-QUALITY-2): reutiliza `functional_identity_key`
+    real (nunca una funcion de hash nueva), sustituyendo unicamente el
+    componente `rule_family` por un valor fijo compartido -- asi ambos
+    miembros de un mismo hecho (misma paragraph_id/decision_id/
+    condition/outcome_code) calculan la MISMA ancla sin importar cual de
+    las dos familias tengan. Nunca se usa fuera de
+    `_corroborate_level88_return_code_pairs`."""
+    return functional_identity_key(
+        paragraph_id=item.paragraph_id,
+        decision_id=item.decision_id or "",
+        condition=item.condition or "",
+        effect=item.outcome_code or "",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+    )
+
+
+def _corroborate_level88_return_code_pairs(
+    converted: list[_ConvertedCandidate],
+) -> tuple[list[_ConvertedCandidate], list[str]]:
+    """Excepcion productiva ESTRECHA (Fase 15B4-CANDIDATE-QUALITY-2,
+    corrige la duplicacion demostrada en Fase 15B4-CANDIDATE-QUALITY-1):
+    un candidato `RETURN_CODE` (via `V2_RETURN_CODE_PROPAGATION`) se
+    omite del resultado UNICAMENTE cuando existe un candidato
+    `LEVEL_88_RETURN_CODE` con la MISMA paragraph_id/decision_id/
+    condition/outcome_code Y `evidence_ids` EXACTAMENTE iguales -- nunca
+    por similitud, nunca para ninguna otra pareja de `rule_family`. El
+    candidato `LEVEL_88_RETURN_CODE` (representacion mas especifica del
+    mecanismo `SET condicion-88 TO TRUE` -> `CONDITION_LITERAL` ->
+    padre `return_code`) se conserva intacto -- su `key`/`candidate_id`
+    NUNCA cambian -- como unica fuente de identidad del hecho fusionado.
+    `functional_identity_key` global permanece sin tocar; esta funcion
+    nunca se aplica a ninguna otra combinacion de familias."""
+    by_key: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
+    other: list[_ConvertedCandidate] = []
+    for item in converted:
+        if item.rule_family in _CORROBORATION_FAMILIES and item.decision_id is not None:
+            by_key[_corroboration_group_key(item)].append(item)
+        else:
+            other.append(item)
+
+    kept: list[_ConvertedCandidate] = list(other)
+    warnings: list[str] = []
+    for key in sorted(by_key):
+        members = by_key[key]
+        level88 = [m for m in members if m.rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE]
+        return_code = [m for m in members if m.rule_family == UnifiedRuleFamily.RETURN_CODE]
+        absorbed: set[str] = set()
+        for primary in level88:
+            for corroborator in return_code:
+                if (
+                    corroborator.source_v2_candidate_id not in absorbed
+                    and corroborator.evidence_ids == primary.evidence_ids
+                ):
+                    absorbed.add(corroborator.source_v2_candidate_id)
+                    warnings.append(
+                        f"candidato {primary.source_v2_candidate_id!r} (LEVEL_88_RETURN_CODE) "
+                        f"corroborado por {corroborator.detector_id} "
+                        f"({corroborator.source_v2_candidate_id!r}); RETURN_CODE redundante "
+                        "omitido, evidence_ids identicos"
+                    )
+                    break
+        kept.extend(level88)
+        kept.extend(m for m in return_code if m.source_v2_candidate_id not in absorbed)
+    return kept, sorted(set(warnings))
+
+
 def _merge_new_group(
     members: list[_ConvertedCandidate], *, source_package_hash: str
 ) -> RuleCandidate:
@@ -558,7 +631,13 @@ def _merge_candidates(
     entrada de la primera lista tiene `candidate_id` igual al de un
     `RuleCandidate` V1 existente (reemplazo por version con evidencia
     fusionada, regla D) o un `candidate_id` nuevo (regla A, sin
-    equivalente V1)."""
+    equivalente V1). Antes de agrupar (Fase 15B4-CANDIDATE-QUALITY-2):
+    `_corroborate_level88_return_code_pairs` omite un `RETURN_CODE`
+    redundante cuando un `LEVEL_88_RETURN_CODE` ya demuestra el MISMO
+    hecho con `evidence_ids` identicos -- excepcion estrecha, nunca
+    aplicable a otra pareja de familias."""
+    converted, corroboration_warnings = _corroborate_level88_return_code_pairs(converted)
+
     groups: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
     for item in converted:
         groups[item.key].append(item)
@@ -568,7 +647,7 @@ def _merge_candidates(
     }
 
     result: dict[str, RuleCandidate] = {}
-    warnings: list[str] = []
+    warnings: list[str] = list(corroboration_warnings)
     for key in sorted(groups):
         members = sorted(groups[key], key=lambda m: (m.detector_id, m.source_v2_candidate_id))
         v1_match = v1_by_key.get(key)

@@ -265,23 +265,22 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     # --- Caso 2: LEVEL_88_RETURN_CODE (CHECK-INVALIDO-PARA) ---------------
     # V2_RETURN_CODE_PROPAGATION y V2_LEVEL_88_RETURN_CODE disparan AMBOS
     # sobre el mismo SET condicion-88 TO TRUE (CONDITION_LITERAL es
-    # evidencia valida para ambos, Fase 5 condicion #3) -- se conservan
-    # como reglas separadas (familia distinta, regla C de la Fase
-    # 15B3-B1), nunca fusionadas entre si.
+    # evidencia valida para ambos, Fase 5 condicion #3) -- desde Fase
+    # 15B4-CANDIDATE-QUALITY-2, la integracion productiva reconoce que
+    # ambos describen el MISMO hecho (evidence_ids identicos) y conserva
+    # unicamente el LEVEL_88_RETURN_CODE (representacion mas especifica),
+    # con un warning de corroboracion -- nunca las dos representaciones
+    # redundantes.
     invalido_candidates = _by_paragraph("CHECK-INVALIDO-PARA")
-    assert len(invalido_candidates) == 2, artifact.candidates
-    invalido_families = {c.rule_family for c in invalido_candidates}
-    assert invalido_families == {
-        UnifiedRuleFamily.RETURN_CODE,
-        UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
-    }
-    level88 = [
-        c for c in invalido_candidates if c.rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
-    ]
-    assert len(level88) == 1
+    assert len(invalido_candidates) == 1, artifact.candidates
+    level88 = invalido_candidates
+    assert level88[0].rule_family == UnifiedRuleFamily.LEVEL_88_RETURN_CODE
     assert level88[0].outcome_code == "R003"
     assert level88[0].candidate_source == CandidateSource.V2
-    assert all(c.outcome_code == "R003" for c in invalido_candidates)
+    assert any(
+        "corroborado por" in warning and "V2_RETURN_CODE_PROPAGATION" in warning
+        for warning in artifact.warnings
+    ), artifact.warnings
 
     # --- Caso 15B3-C1: STATE_TRANSITION (CHECK-TRANSICION-PARA, target
     # WS-ESTADO-OPERACION tageado `status`) -------------------------------
@@ -381,10 +380,13 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     ), artifact.warnings
 
     # --- Caso 4: candidatos ampliados con evidence/provenance -------------
+    # 7, no 8 (Fase 15B4-CANDIDATE-QUALITY-2): CHECK-INVALIDO-PARA aporta
+    # ahora un unico candidato (LEVEL_88_RETURN_CODE, corroborado) en vez
+    # de dos representaciones redundantes del mismo hecho.
     enhanced_candidates = [
         c for c in artifact.candidates if c.candidate_source == CandidateSource.V2
     ]
-    assert len(enhanced_candidates) == 8, artifact.candidates
+    assert len(enhanced_candidates) == 7, artifact.candidates
     for enhanced_candidate in enhanced_candidates:
         assert enhanced_candidate.evidence_ids != []
         assert enhanced_candidate.source_file == "01-codigo/cobol/ENHRULE1.cbl"
