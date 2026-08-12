@@ -29,7 +29,6 @@ from ..contracts.enums import (
     DependencyType,
     NodeLabel,
     RelationshipType,
-    StatementKind,
 )
 from ..contracts.inventory import Inventory
 from ..contracts.semantic_enrichment import (
@@ -45,10 +44,16 @@ from .dependency_builder import (
 )
 from .dependency_builder import _SymbolIndex as SymbolIndex
 from .errors import SemanticGraphBuildError
-from .identifiers import ProgramIdentity, data_item_id, normalize_identifier, paragraph_id
+from .identifiers import (
+    DECISION_STATEMENT_KINDS,
+    ProgramIdentity,
+    data_item_id,
+    decision_id_for,
+    decision_statements_in_order,
+    normalize_identifier,
+    paragraph_id,
+)
 from .identifiers import table_id as compute_table_id
-
-_DECISION_STATEMENT_KINDS = (StatementKind.IF, StatementKind.EVALUATE)
 
 
 def _canonical_json(value: object) -> str:
@@ -200,7 +205,7 @@ def _collect_leads_to_candidates(
     frontier: list[CanonicalStatement] = list(by_parent.get(decision_statement_id, []))
     while frontier:
         statement = frontier.pop(0)
-        if statement.kind in _DECISION_STATEMENT_KINDS:
+        if statement.kind in DECISION_STATEMENT_KINDS:
             continue
         if statement.assigned_literal is not None and statement.target_data_items:
             result.append(statement)
@@ -515,13 +520,10 @@ def _build_decisions_and_leads_to(
     for paragraph in program.paragraphs:
         para_id = paragraph_id(program_id_value, paragraph.name)
         by_parent = _group_statements_by_parent(paragraph.statements)
-        decision_statements = [
-            s for s in paragraph.statements if s.kind in _DECISION_STATEMENT_KINDS
-        ]
+        decision_statements = decision_statements_in_order(paragraph)
 
         for ordinal, statement in enumerate(decision_statements, start=1):
-            line_part = str(statement.line_start) if statement.line_start is not None else "unknown"
-            decision_id = f"{para_id}::decision::{line_part}::{ordinal}"
+            decision_id = decision_id_for(para_id, ordinal=ordinal, line_start=statement.line_start)
 
             candidates = _collect_leads_to_candidates(statement.statement_id, by_parent)
             resolved_literals: set[str] = set()

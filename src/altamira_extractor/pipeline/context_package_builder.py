@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import neo4j
 from pydantic import ValidationError
@@ -41,6 +41,7 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..contracts.candidate import RuleCandidate
 from ..contracts.candidate_promotion_assessment import UnifiedRuleFamily
+from ..contracts.canonical import CanonicalParagraph, CanonicalStatement
 from ..contracts.context_package import (
     ApplicableParameterRow,
     BatchContext,
@@ -67,10 +68,12 @@ from ..contracts.enums import (
     BatchContextStatus,
     CompletenessStatus,
     InclusionReason,
+    StatementKind,
     TableEffectOperation,
 )
 from .cypher_query_loader import LoadedContextQuery
 from .errors import ContextBuildError
+from .identifiers import DECISION_STATEMENT_KINDS, decision_id_for, decision_statements_in_order
 from .parameter_predicate_resolver import (
     aggregate_applicability,
     entry_matches_comparisons,
@@ -123,9 +126,17 @@ def build_context_packages(
     *,
     queries: ContextQuerySet,
     settings: Settings,
+    canonical_paragraphs: Mapping[tuple[str, str], CanonicalParagraph] | None = None,
 ) -> list[ContextPackage]:
+    """`canonical_paragraphs`: opcional, mapa `(source_file,
+    paragraph_name) -> CanonicalParagraph` para el enriquecimiento
+    SQLCODE (`_enrich_decision_with_sql_causal_evidence`); su ausencia
+    nunca impide construir un `ContextPackage`."""
+    paragraphs = canonical_paragraphs or {}
     return [
-        _build_one_context_package(tx, candidate, queries=queries, settings=settings)
+        _build_one_context_package(
+            tx, candidate, queries=queries, settings=settings, canonical_paragraphs=paragraphs
+        )
         for candidate in candidates
     ]
 
@@ -146,6 +157,7 @@ def _build_one_context_package(
     *,
     queries: ContextQuerySet,
     settings: Settings,
+    canonical_paragraphs: Mapping[tuple[str, str], CanonicalParagraph],
 ) -> ContextPackage:
     evidence_entries: list[EvidenceEntry] = []
     unconditional_calculation = _is_unconditional_calculation(candidate)
@@ -167,6 +179,9 @@ def _build_one_context_package(
         decision, d4_evidence = None, []
     else:
         decision, d4_evidence = _build_decision(tx, candidate, queries.q4)
+        decision, d4_evidence = _enrich_decision_with_sql_causal_evidence(
+            decision, d4_evidence, candidate, canonical_paragraphs
+        )
     evidence_entries.extend(d4_evidence)
 
     effects, d5_evidence = _build_effects(
@@ -577,7 +592,172 @@ def _build_transactional_tables(
     return tables, evidence
 
 
-# --- D4: decision (Q4) ---
+# --- D4: decision (Q4) + SQLCODE causal evidence (Fase 15B3-C3-C-B) ---
+# Evidencial unicamente: nunca fabrica SQLCODE como DataItem, nunca usa
+# DATA_DEPENDS_ON (prohibe auto-dependencia; EXEC SQL y la Decision
+# suelen compartir paragraph).
+
+_SQL_CAUSAL_BARRIER_KINDS = frozenset(
+    {
+        StatementKind.CALL,
+        StatementKind.PERFORM,
+        StatementKind.GO_TO,
+        StatementKind.PROGRAM_TERMINATION,
+    }
+)
+
+
+def _is_sqlcode_decision(statement: CanonicalStatement) -> bool:
+    """Match exacto (case-insensitive) de ``SQLCODE`` en ``operands``,
+    nunca por substring (``WS-SQLCODE-FLAG`` no califica)."""
+    if statement.kind not in DECISION_STATEMENT_KINDS:
+        return False
+    return any(operand.strip().upper() == "SQLCODE" for operand in statement.operands)
+
+
+@dataclass(frozen=True)
+class _SqlCausalLinkage:
+    status: Literal["PROVEN", "AMBIGUOUS", "NOT_AVAILABLE"]
+    exec_sql_statement: CanonicalStatement | None = None
+
+
+def _statements_by_parent(
+    statements: Sequence[CanonicalStatement],
+) -> dict[str | None, list[CanonicalStatement]]:
+    grouped: dict[str | None, list[CanonicalStatement]] = {}
+    for statement in statements:
+        grouped.setdefault(statement.parent_statement_id, []).append(statement)
+    return grouped
+
+
+def _subtree_has_barrier_or_sql(
+    by_parent: Mapping[str | None, list[CanonicalStatement]], root_statement_id: str
+) -> bool:
+    """`True` si algun descendiente de `root_statement_id` (cualquier
+    rama, cualquier profundidad) es un barrier o un EXEC_SQL -- esa rama
+    podria ejecutarse y alterar SQLCODE, nunca se asume que no."""
+    for child in by_parent.get(root_statement_id, []):
+        if child.kind == StatementKind.EXEC_SQL or child.kind in _SQL_CAUSAL_BARRIER_KINDS:
+            return True
+        if _subtree_has_barrier_or_sql(by_parent, child.statement_id):
+            return True
+    return False
+
+
+def _nearest_preceding_operative_exec_sql(
+    statements: Sequence[CanonicalStatement], decision: CanonicalStatement
+) -> _SqlCausalLinkage:
+    """Escanea hacia atras dentro del mismo scope (`parent_statement_id`
+    de `decision`), en el orden ya contractual de
+    `CanonicalParagraph.statements` -- nunca reordena por `line_start`,
+    nunca cruza de paragraph/rama. Preferencia: falso negativo antes que
+    evidencia causal falsa (ver docs/SEMANTIC_EFFECTS.md)."""
+    same_scope = [s for s in statements if s.parent_statement_id == decision.parent_statement_id]
+    decision_index: int | None = None
+    for index, statement in enumerate(same_scope):
+        if statement.statement_id == decision.statement_id:
+            decision_index = index
+            break
+    if decision_index is None:
+        return _SqlCausalLinkage(status="NOT_AVAILABLE")
+
+    by_parent = _statements_by_parent(statements)
+    for statement in reversed(same_scope[:decision_index]):
+        if statement.kind == StatementKind.EXEC_SQL:
+            if statement.sql_access:
+                return _SqlCausalLinkage(status="PROVEN", exec_sql_statement=statement)
+            return _SqlCausalLinkage(status="AMBIGUOUS")
+        if statement.kind in _SQL_CAUSAL_BARRIER_KINDS:
+            return _SqlCausalLinkage(status="AMBIGUOUS")
+        if statement.kind in DECISION_STATEMENT_KINDS and _subtree_has_barrier_or_sql(
+            by_parent, statement.statement_id
+        ):
+            return _SqlCausalLinkage(status="AMBIGUOUS")
+    return _SqlCausalLinkage(status="NOT_AVAILABLE")
+
+
+def _decision_statement_for_candidate(
+    paragraph: CanonicalParagraph, candidate: RuleCandidate
+) -> CanonicalStatement | None:
+    """Unica fuente de identidad para `decision_id` (Fase 15B3-C3-C-B,
+    corrective: antes reimplementaba la enumeracion de
+    `semantic_graph_builder`, ahora regenera el id con las mismas
+    `identifiers.decision_statements_in_order`/`decision_id_for` y
+    compara por igualdad -- nunca puede divergir del grafo."""
+    if candidate.decision_id is None:
+        return None
+    for ordinal, statement in enumerate(decision_statements_in_order(paragraph), start=1):
+        candidate_id = decision_id_for(
+            candidate.paragraph_id, ordinal=ordinal, line_start=statement.line_start
+        )
+        if candidate_id == candidate.decision_id:
+            return statement
+    return None
+
+
+def _sql_causal_evidence_id(*, source_package_hash: str, exec_sql_statement_id: str) -> str:
+    """Sin `candidate_id` (a diferencia de `_evidence_id`): representa el
+    EXEC SQL real, no la pareja SQL+Decision -- Decisions distintas
+    causadas por el mismo EXEC SQL citan el mismo id."""
+    payload = {
+        "logical_query": "SQL_CAUSAL_CONTEXT",
+        "source_package_hash": source_package_hash,
+        "exec_sql_statement_id": exec_sql_statement_id,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"evidence::{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _enrich_decision_with_sql_causal_evidence(
+    decision: ContextPackageDecision,
+    evidence: list[EvidenceEntry],
+    candidate: RuleCandidate,
+    canonical_paragraphs: Mapping[tuple[str, str], CanonicalParagraph],
+) -> tuple[ContextPackageDecision, list[EvidenceEntry]]:
+    """Si la Decision es SQLCODE-related y el linkage es PROVEN, agrega
+    un `EvidenceEntry` y su id a `decision.evidence_ids` -- cualquier
+    otro caso (AMBIGUOUS/NOT_AVAILABLE/paragraph o decision no
+    correlacionables) devuelve `decision`/`evidence` sin modificar."""
+    paragraph = canonical_paragraphs.get((candidate.source_file, candidate.paragraph_name))
+    if paragraph is None:
+        return decision, evidence
+
+    decision_statement = _decision_statement_for_candidate(paragraph, candidate)
+    if decision_statement is None or not _is_sqlcode_decision(decision_statement):
+        return decision, evidence
+
+    linkage = _nearest_preceding_operative_exec_sql(paragraph.statements, decision_statement)
+    if linkage.status != "PROVEN" or linkage.exec_sql_statement is None:
+        return decision, evidence
+
+    exec_sql = linkage.exec_sql_statement
+    causal_evidence_id = _sql_causal_evidence_id(
+        source_package_hash=candidate.source_package_hash,
+        exec_sql_statement_id=exec_sql.statement_id,
+    )
+    sql_access_summary = [
+        {"table": access.table, "operation": access.operation.value}
+        for access in exec_sql.sql_access
+    ]
+    causal_evidence = EvidenceEntry(
+        evidence_id=causal_evidence_id,
+        kind="sql_causal_context",
+        source_file=candidate.source_file,
+        line_start=exec_sql.line_start,
+        line_end=exec_sql.line_end,
+        source_package_hash=candidate.source_package_hash,
+        details={
+            "paragraph_id": candidate.paragraph_id,
+            "exec_sql_statement_id": exec_sql.statement_id,
+            "statement_kind": exec_sql.kind.value,
+            "source_text": exec_sql.source_text,
+            "sql_access": sql_access_summary,
+        },
+    )
+    enriched_decision = decision.model_copy(
+        update={"evidence_ids": sorted({*decision.evidence_ids, causal_evidence_id})}
+    )
+    return enriched_decision, [*evidence, causal_evidence]
 
 
 def _build_decision(

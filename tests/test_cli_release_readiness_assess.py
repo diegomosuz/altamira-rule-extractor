@@ -68,6 +68,7 @@ _ALL_GROUND_TRUTH_FIXTURES = (
     "gt_calculation_unconditional_001.cbl",
     "gt_calculation_unconditional_002.cbl",
     "gt_sql_select_into_state_transition_001.cbl",
+    "gt_sqlcode_evaluate_state_transition_001.cbl",
 )
 
 

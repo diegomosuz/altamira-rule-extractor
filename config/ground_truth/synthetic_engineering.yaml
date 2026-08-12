@@ -216,6 +216,32 @@ cases:
       test_dependency_builder.py::test_data_dependency_through_exec_sql_select_into).
       El detector no inspecciona el origen del operando: esta expectativa demuestra que
       SQL no interfiere con la deteccion existente, no que la agregue.'
+- case_id: gt-positive-sqlcode-evaluate-state-transition
+  kind: POSITIVE
+  program: GTSQLCD1
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_sqlcode_evaluate_state_transition_001.cbl
+    sha256: 89dd0caf1b9155702ebfac2c7ba273fcb59e1316ce8bdbaa65e3a06e95564cf4
+  description: 'EXEC SQL SELECT ESTADO INTO :WS-ESTADO FROM CUENTAS WHERE CUENTA = :WS-CUENTA
+    END-EXEC seguido de EVALUATE SQLCODE (WHEN 0/WHEN +100/WHEN OTHER, cada uno MOVE a
+    WS-ESTADO-OPERACION), SQLCODE NO declarado explicitamente (mismo patron que el corpus
+    real Catherine, Fase 15B3-C3-C-A): prueba que el enriquecimiento evidencial SQLCODE
+    causal (Fase 15B3-C3-C-B) no rompe ni desvia la deteccion existente de STATE_TRANSITION.'
+  expected_rules:
+  - expectation_id: gt-positive-sqlcode-evaluate-state-transition::v2-state-change
+    rule_family: STATE_TRANSITION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'Identico mecanismo que gt-positive-state-transition-if-status-target:
+      pipeline/v2_detectors.py::detect_state_change detecta la escritura deterministica
+      (MOVE literal) de WS-ESTADO-OPERACION dentro de cada branch de la EVALUATE --
+      support=PARTIAL. enhanced_candidate_integration.py promueve a
+      RuleCandidate(rule_family=STATE_TRANSITION) porque WS-ESTADO-OPERACION matchea
+      status-name de config/semantic-tags.yml. SQLCODE nunca se declara como DataItem
+      (Fase 15B3-C3-C-A seccion 4: el detector no lo requiere) -- el enriquecimiento
+      SQLCODE causal (Fase 15B3-C3-C-B, context_package_builder.
+      _enrich_decision_with_sql_causal_evidence) agrega evidencia adicional al
+      ContextPackageDecision sin alterar candidate_id/condition/effect/rule_family.'
 - case_id: gt-positive-state-transition-if-status-target
   kind: POSITIVE
   program: GTST001
@@ -244,7 +270,7 @@ cases:
       ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
       heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 10
-  positive_case_count: 8
+  case_count: 11
+  positive_case_count: 9
   negative_case_count: 2
-  expected_rule_count: 8
+  expected_rule_count: 9

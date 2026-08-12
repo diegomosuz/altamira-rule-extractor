@@ -210,6 +210,54 @@ selectWithExplicitJoinIsUnsupportedNeverPartialTable` y variantes por
 tipo de JOIN). El caso ya soportado de múltiples tablas separadas por
 coma (`FROM CUENTAS A, MOVIMIENTOS B`) no se ve afectado.
 
+## SQLCODE: evidencia causal, NUNCA un SemanticEffect nuevo (Fase 15B3-C3-C-B)
+
+El patrón real (auditoría 15B3-C3-C-A, corpus Catherine) es `EXEC SQL
+... END-EXEC` inmediatamente seguido de `IF SQLCODE = ...`/`EVALUATE
+SQLCODE`, con SQLCODE **nunca declarado** como `CanonicalDataItem`
+(proviene implícitamente de `EXEC SQL INCLUDE SQLCA`, que sigue sin
+expandirse — ver más abajo). Esto **no se modela como
+`SemanticEffect`**: `EXECUTE_SQL` sigue siendo exactamente como en
+C3-B (`reads`/`writes`/`sql_operation`/`sql_tables`/
+`sql_host_variables`/`sql_predicate_text`, sin ningún campo
+`sql_status_outputs`/`caused_by_sql`/`sqlcode_written` — modelar
+SQLCODE como un "output" de la sentencia sería afirmar una semántica
+DB2 implícita nunca demostrada estructuralmente).
+
+El vínculo vive exclusivamente como **evidencia/contexto**, en
+`pipeline/context_package_builder.py`
+(`_nearest_preceding_operative_exec_sql`/
+`_enrich_decision_with_sql_causal_evidence`), invocado desde
+`contexts_built_stage.py` sobre `CanonicalParagraph.statements` ya
+cargado en memoria (`artifacts/02-canonical/`) — **nunca**
+`DATA_DEPENDS_ON`/`CONTROL_DEPENDS_ON` (ambas son `Paragraph->Paragraph`
+y `DATA_DEPENDS_ON` prohíbe explícitamente la auto-dependencia, que es
+el caso dominante real: EXEC SQL y la Decision SQLCODE en el mismo
+paragraph), **nunca** un nodo o relación Neo4j nuevos. El escaneo hacia
+atrás, dentro del mismo paragraph y mismo scope (`parent_statement_id`),
+clasifica el linkage en tres resultados internos (nunca persistidos
+como contrato):
+
+- **PROVEN**: el EXEC SQL operativo (`sql_access` no vacío) más cercano,
+  sin ningún `CALL`/`PERFORM`/`GO_TO`/`PROGRAM_TERMINATION` ni EXEC SQL
+  `unsupported` intermedio (tampoco en el subárbol de un IF/EVALUATE
+  intermedio, que podría ejecutar cualquiera de esos en alguna rama) —
+  se agrega un `EvidenceEntry` adicional (`kind="sql_causal_context"`,
+  reutilizando la clase existente, sin campo nuevo) y su `evidence_id` a
+  `ContextPackageDecision.evidence_ids` (campo ya existente).
+- **AMBIGUOUS**: cualquier barrera intermedia, o el EXEC SQL más cercano
+  es `unsupported` (p. ej. `INCLUDE SQLCA`) — **nunca** se salta hacia
+  un EXEC SQL anterior.
+- **NOT_AVAILABLE**: ningún EXEC SQL precedente en el mismo scope.
+
+AMBIGUOUS/NOT_AVAILABLE nunca agregan evidencia — la regla existente
+(`RuleCandidate`/`condition`/`effect`/`rule_family`, todos sin cambios)
+se sigue produciendo igual, solo sin el enriquecimiento. `+100`/`100`
+se preservan literales, nunca normalizados entre sí ni traducidos a
+significado de negocio. `EvidenceCatalog` (`pipeline/evidence_catalog.py`)
+recoge la nueva evidencia sin ningún cambio de código: camina
+genéricamente cualquier contenedor con `evidence_ids` no vacío.
+
 ## `SemanticSupportStatus`
 
 Mismo enum que `SemanticCoverageReport` (`FULLY_SUPPORTED` /

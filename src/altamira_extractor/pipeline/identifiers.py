@@ -16,6 +16,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from ..contracts.canonical import CanonicalParagraph, CanonicalStatement
+from ..contracts.enums import StatementKind
+
+DECISION_STATEMENT_KINDS = (StatementKind.IF, StatementKind.EVALUATE)
+
 
 def normalize_identifier(name: str) -> str:
     """Normalizacion determinista para comparar identificadores COBOL
@@ -75,3 +80,18 @@ def parameter_table_id(
     date_part = snapshot_date.isoformat() if snapshot_date else "unknown"
     hash_part = snapshot_hash[:12] if snapshot_hash else "unknown"
     return f"parameter::{table_id_value}::{date_part}::{hash_part}"
+
+
+def decision_statements_in_order(paragraph: CanonicalParagraph) -> list[CanonicalStatement]:
+    """Orden canonico usado por `decision_id_for`: unica fuente para
+    `semantic_graph_builder.py` (construccion) y `context_package_
+    builder.py` (resolucion), Fase 15B3-C3-C-B."""
+    return [s for s in paragraph.statements if s.kind in DECISION_STATEMENT_KINDS]
+
+
+def decision_id_for(para_id: str, *, ordinal: int, line_start: int | None) -> str:
+    """Mismo formato que ya persiste `Decision.id`
+    (`semantic_graph_builder._build_decisions_and_leads_to`): `ordinal`
+    es 1-based sobre `decision_statements_in_order`."""
+    line_part = str(line_start) if line_start is not None else "unknown"
+    return f"{para_id}::decision::{line_part}::{ordinal}"

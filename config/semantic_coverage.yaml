@@ -2658,6 +2658,17 @@ constructs:
       reference: tests/parser_integration/test_candidate_promotion_assessment_integration.py
   - layer: EVIDENCE
     status: PARTIALLY_SUPPORTED
+    notes: 'Fase 15B3-C3-C-B: cuando el linkage EXEC SQL->Decision es PROVEN (mismo
+      paragraph, sin CALL/PERFORM/GO_TO/PROGRAM_TERMINATION/EXEC_SQL unsupported
+      intermedio), se agrega un evidence_id causal adicional a
+      ContextPackageDecision.evidence_ids -- kind=sql_causal_context. AMBIGUOUS/
+      NOT_AVAILABLE nunca agregan evidencia (preferencia: falso negativo antes
+      que evidencia falsa).'
+    evidence:
+    - kind: UNIT_TEST
+      reference: tests/pipeline/test_sqlcode_causal_evidence.py
+    - kind: INTEGRATION_TEST
+      reference: tests/test_hermetic_sqlcode_causal_evidence_e2e.py
   - layer: PROVENANCE
     status: SUPPORTED
     evidence:
@@ -2670,6 +2681,10 @@ constructs:
   fixtures:
   - parser/src/test/resources/fixtures/sqlcode-decision.cbl
   limitations:
+  - 'Fase 15B3-C3-C-B (evidencia causal): unicamente PROVEN (mismo paragraph, sin
+    barreras) agrega evidencia; AMBIGUOUS/NOT_AVAILABLE nunca la agregan. Nunca expande
+    SQLCA, nunca fabrica SQLCODE como DataItem, nunca soporta SQLSTATE, nunca declara
+    un CALL/PERFORM intermedio como causalidad probada.'
   - SQLCODE nunca se identifica como tal; se trata igual que cualquier DataItem generico evaluado en un
     IF.
   unknown_behavior: No existe distincion estructural entre SQLCODE y cualquier otro campo numerico usado
