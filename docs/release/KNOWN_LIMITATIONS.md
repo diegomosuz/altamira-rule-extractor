@@ -20,11 +20,12 @@ aquí para que el cliente/QA los conozca antes de aceptar el release.
 ## Modo enhanced
 
 - Desde Fase 15B4-CANDIDATE-QUALITY-5E, `enhanced_candidates_enabled=true`
-  es el default del código — ver `docs/release/RELEASE_PROFILES.md`
-  ("Enhanced mode", incluye la discrepancia conocida y no resuelta con los
-  manifests `deploy/k3s/`, que siguen fijando `false` explícitamente).
-  `enhanced_candidates_enabled=false` sigue disponible como override
-  explícito (modo legacy/conservador, V1/Q0-only).
+  es el default del código; desde Fase 15B4-CANDIDATE-QUALITY-5G, el
+  despliegue K3s estándar de release (`deploy/k3s/configmap.yaml`)
+  también fija `true`, alineado — ver `docs/release/RELEASE_PROFILES.md`
+  ("Enhanced mode"). `enhanced_candidates_enabled=false` sigue disponible
+  como override explícito (modo legacy/conservador, V1/Q0-only), tanto en
+  el código como editando el ConfigMap de K3s.
 - **HISTORICAL / SUPERSEDED**: el "near-duplicate" en patrones donde una
   misma Decision escribe múltiples campos en la misma rama (hasta ~48% de
   sobre-conteo medido en el caso peor real, `CATHERINE_CORREGIDO`) fue

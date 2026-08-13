@@ -118,14 +118,16 @@ del flag): `RETURN_CODE_PROPAGATION`, `LEVEL_88_RETURN_CODE`,
 `enhanced_candidates_enabled=false` (legacy/conservador, comportamiento
 V1/Q0-only) sigue disponible como override explícito.
 
-**Discrepancia conocida, no resuelta en Fase 5F (documentación)**: los
-manifests de `deploy/k3s/` (`configmap.yaml`) todavía fijan
-`ALTAMIRA_ENHANCED_CANDIDATES_ENABLED: "false"` explícitamente,
-sobrescribiendo el default del código de vuelta al modo legacy para
-despliegues K3s — una decisión de producto anterior (15B4-B Sección 0.C,
-previa a 5E) que Fase 5F (documentación, sin cambios de comportamiento)
-no revisa ni revierte. Cualquier cliente que despliegue vía
-`deploy/k3s/` sin editar el ConfigMap sigue recibiendo el comportamiento
-V1/Q0-only, no el nuevo default del código. Alinear (o no) el default de
-despliegue K3s con el nuevo default del código es una decisión de release
-engineering pendiente, fuera de alcance de este documento.
+**Alineado desde Fase 15B4-CANDIDATE-QUALITY-5G**: los manifests de
+`deploy/k3s/` (`configmap.yaml`) fijan
+`ALTAMIRA_ENHANCED_CANDIDATES_ENABLED: "true"`, igual que el default del
+código — el despliegue K3s estándar de release ya no desactiva las
+capacidades productivas certificadas de 1.17. La variable se mantiene
+explícita en el ConfigMap (nunca se omite) para que el manifiesto siga
+siendo reproducible. Un operador puede seguir fijando
+`ALTAMIRA_ENHANCED_CANDIDATES_ENABLED=false` explícitamente (edición del
+ConfigMap o override operacional) para el modo legacy/conservador —
+override siempre soportado, nunca eliminado. (Historial: entre Fases
+15B4-B Sección 0.C y 5F, el ConfigMap fijaba `"false"` como decisión de
+producto anterior a 5E; esa discrepancia quedó documentada en 5F y se
+resolvió en 5G.)

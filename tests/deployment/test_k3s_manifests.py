@@ -145,9 +145,43 @@ def test_neo4j_container_has_resource_requests_and_limits() -> None:
     assert "cpu" in resources["limits"] and "memory" in resources["limits"]
 
 
-def test_configmap_has_enhanced_candidates_disabled_by_default() -> None:
+def test_configmap_has_enhanced_candidates_enabled_by_default() -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5G: el despliegue K3s estandar de
+    release esta alineado con el default del codigo
+    (enhanced_candidates_enabled=true desde Fase 5E) -- ya no desactiva
+    las capacidades productivas certificadas de 1.17
+    (RETURN_CODE_PROPAGATION/LEVEL_88_RETURN_CODE/STATE_TRANSITION/
+    CALCULATION)."""
     configmap = _find(_load_documents("configmap.yaml"), "ConfigMap")
-    assert configmap["data"]["ALTAMIRA_ENHANCED_CANDIDATES_ENABLED"] == "false"
+    assert configmap["data"]["ALTAMIRA_ENHANCED_CANDIDATES_ENABLED"] == "true"
+
+
+def test_app_deployment_consumes_the_expected_configmap_via_env_from() -> None:
+    """Traza ConfigMap -> Deployment: `altamira-config` (metadata.name de
+    configmap.yaml) debe ser exactamente el ConfigMap referenciado por
+    `envFrom.configMapRef` del contenedor `app` -- nunca un nombre
+    distinto ni un ConfigMap huerfano sin consumidor."""
+    configmap = _find(_load_documents("configmap.yaml"), "ConfigMap")
+    deployment = _find(_load_documents("app-deployment.yaml"), "Deployment")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    config_map_refs = [
+        entry["configMapRef"]["name"]
+        for entry in container.get("envFrom", [])
+        if "configMapRef" in entry
+    ]
+    assert config_map_refs == [configmap["metadata"]["name"]]
+
+
+def test_app_deployment_has_no_competing_env_override_for_enhanced_candidates() -> None:
+    """El valor efectivo de ALTAMIRA_ENHANCED_CANDIDATES_ENABLED debe
+    provenir exclusivamente del ConfigMap -- un `env:` explicito en el
+    contenedor con el mismo nombre tendria precedencia sobre `envFrom`
+    (semantica real de Kubernetes) y volveria ambiguo el default
+    efectivo de K3s."""
+    deployment = _find(_load_documents("app-deployment.yaml"), "Deployment")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    env_names = {entry["name"] for entry in container.get("env", [])}
+    assert "ALTAMIRA_ENHANCED_CANDIDATES_ENABLED" not in env_names
 
 
 def test_configmap_max_workers_is_one() -> None:

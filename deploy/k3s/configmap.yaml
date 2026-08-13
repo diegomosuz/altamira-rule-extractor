@@ -28,18 +28,18 @@ data:
   # app-deployment.yaml (ver docs/release/ "Known Limitations").
   ALTAMIRA_API_MAX_WORKERS: "1"
 
-  # Decision de producto (15B4-B Seccion 0.C, anterior a Fase 5E):
-  # este ConfigMap fija explicitamente el modo legacy/conservador
-  # (V1/Q0-only), sobrescribiendo hacia atras el default actual del
-  # codigo (enhanced_candidates_enabled=true desde Fase
-  # 15B4-CANDIDATE-QUALITY-5E, ver docs/release/RELEASE_PROFILES.md
-  # "Enhanced mode" y docs/CAPABILITY_COVERAGE_1_17.md). Fase 5F
-  # (documentacion, sin cambios de comportamiento) NO revisa ni
-  # revierte esta decision de despliegue K3s -- cambiar este valor (o
-  # quitar la linea para heredar el default del codigo) es una
-  # decision de release engineering pendiente, explicitamente fuera de
-  # alcance de una fase documental.
-  ALTAMIRA_ENHANCED_CANDIDATES_ENABLED: "false"
+  # Fase 15B4-CANDIDATE-QUALITY-5G: alineado con el default del codigo
+  # (enhanced_candidates_enabled=true desde Fase 5E, formal GT
+  # ENHANCED con FP=0/FN=0/precision=recall=f1=1.0, ver
+  # docs/release/RELEASE_PROFILES.md "Enhanced mode" y
+  # docs/CAPABILITY_COVERAGE_1_17.md). El despliegue K3s estandar de
+  # release ya no desactiva las capacidades productivas certificadas
+  # de 1.17 (RETURN_CODE_PROPAGATION/LEVEL_88_RETURN_CODE/
+  # STATE_TRANSITION/CALCULATION). Se conserva la variable explicita
+  # (nunca se omite) para que el manifiesto siga siendo reproducible;
+  # un operador puede seguir fijando "false" para el modo
+  # legacy/conservador (override explicito, siempre soportado).
+  ALTAMIRA_ENHANCED_CANDIDATES_ENABLED: "true"
 
   # Neo4j: host/puerto no son secretos (las credenciales SI lo son,
   # ver secret.example.yaml). Nombre de Service interno del mismo

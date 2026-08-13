@@ -19,16 +19,15 @@ V1/Q0 siempre activo + `RETURN_CODE_PROPAGATION`/`LEVEL_88_RETURN_CODE`/
 `STATE_TRANSITION`/`CALCULATION` vía V2). El override explícito
 `enhanced_candidates_enabled=false` (modo legacy/conservador, V1/Q0-only)
 sigue disponible. Por eso, en la columna **"ENHANCED result"** de la
-matriz de abajo describe el comportamiento **out-of-the-box** de 1.17;
-la columna **"DEFAULT result"** preserva la nomenclatura histórica de
-Fase 5D (cuando `false` era el default del código) y ahora describe el
-comportamiento bajo el override explícito `enhanced_candidates_enabled=
-false`, no el estado "recién instalado". **Excepción conocida**: los
-manifests de despliegue `deploy/k3s/` fijan explícitamente
-`enhanced_candidates_enabled=false` (ver `docs/release/
-RELEASE_PROFILES.md`, "Enhanced mode") — un despliegue K3s sin editar
-`configmap.yaml` recibe el comportamiento de la columna "DEFAULT result"
-(legacy), no "ENHANCED result".
+matriz de abajo describe el comportamiento **out-of-the-box** de 1.17,
+tanto en el código como en el despliegue K3s estándar (`deploy/k3s/
+configmap.yaml` fija `enhanced_candidates_enabled=true`, alineado desde
+Fase 15B4-CANDIDATE-QUALITY-5G — ver `docs/release/RELEASE_PROFILES.md`,
+"Enhanced mode"); la columna **"DEFAULT result"** preserva la
+nomenclatura histórica de Fase 5D (cuando `false` era el default del
+código) y ahora describe el comportamiento bajo el override explícito
+`enhanced_candidates_enabled=false`, no el estado "recién instalado" ni
+el despliegue K3s estándar.
 
 ## Categorías (exactamente 4, sin quinta)
 
