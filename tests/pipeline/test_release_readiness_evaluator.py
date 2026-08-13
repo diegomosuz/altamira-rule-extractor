@@ -23,13 +23,17 @@ from altamira_extractor.contracts.functional_ground_truth import (
 )
 from altamira_extractor.contracts.functional_validation import (
     Applicability,
+    ArtifactChainIntegrityReport,
     ExpectedRuleMatchResult,
+    FinalRuleLinkageReport,
+    FinalRuleLinkageStatus,
     FunctionalDatasetCoverageStatus,
     FunctionalDatasetDisposition,
     FunctionalValidationMetrics,
     FunctionalValidationReport,
     GroundTruthCaseResult,
     MatchOutcome,
+    ValidationSource,
 )
 from altamira_extractor.contracts.release_readiness import (
     DomainFunctionalReadinessStatus,
@@ -75,6 +79,12 @@ def _f1(precision: float | None, recall: float | None) -> float | None:
     if precision + recall == 0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
+
+
+_DEFAULT_INTEGRITY = ArtifactChainIntegrityReport(
+    candidates_checked=0, candidates_missing_context=[]
+)
+_DEFAULT_LINKAGE = FinalRuleLinkageReport(status=FinalRuleLinkageStatus.NOT_APPLICABLE)
 
 
 def _report(
@@ -126,6 +136,8 @@ def _report(
         run_id="run-1",
         source_package_hash=_HASH,
         ground_truth_catalog_edition="edition-1",
+        validation_source=ValidationSource.PRODUCTIVE_ARTIFACT,
+        productive_candidate_count=0,
         dataset_applicability=Applicability.APPLICABLE,
         coverage_status=FunctionalDatasetCoverageStatus.COMPLETELY_EVALUATED,
         required_case_count=1,
@@ -136,6 +148,8 @@ def _report(
         dataset_disposition=dataset_disposition,
         case_results=[negative, positive],
         metrics=metrics,
+        artifact_chain_integrity=_DEFAULT_INTEGRITY,
+        final_rule_linkage=_DEFAULT_LINKAGE,
     )
 
 
@@ -158,6 +172,8 @@ def _not_applicable_report() -> FunctionalValidationReport:
         run_id="run-1",
         source_package_hash=_HASH,
         ground_truth_catalog_edition="edition-1",
+        validation_source=ValidationSource.PRODUCTIVE_ARTIFACT,
+        productive_candidate_count=0,
         dataset_applicability=Applicability.NOT_APPLICABLE,
         coverage_status=FunctionalDatasetCoverageStatus.NOT_EVALUATED,
         required_case_count=1,
@@ -176,6 +192,8 @@ def _not_applicable_report() -> FunctionalValidationReport:
             recall=None,
             f1_score=None,
         ),
+        artifact_chain_integrity=_DEFAULT_INTEGRITY,
+        final_rule_linkage=_DEFAULT_LINKAGE,
     )
 
 
@@ -212,6 +230,8 @@ def _partially_evaluated_report() -> FunctionalValidationReport:
         run_id="run-1",
         source_package_hash=_HASH,
         ground_truth_catalog_edition="edition-1",
+        validation_source=ValidationSource.PRODUCTIVE_ARTIFACT,
+        productive_candidate_count=0,
         dataset_applicability=Applicability.APPLICABLE,
         coverage_status=FunctionalDatasetCoverageStatus.PARTIALLY_EVALUATED,
         required_case_count=2,
@@ -230,6 +250,8 @@ def _partially_evaluated_report() -> FunctionalValidationReport:
             recall=1.0,
             f1_score=1.0,
         ),
+        artifact_chain_integrity=_DEFAULT_INTEGRITY,
+        final_rule_linkage=_DEFAULT_LINKAGE,
     )
 
 

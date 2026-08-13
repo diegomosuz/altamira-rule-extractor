@@ -8,7 +8,17 @@ callee), sin Neo4j (Fase 6/7/8/9 de interprocedural son puramente en
 memoria sobre `artifacts/02-canonical/`).
 
 Marcado `integration` (requiere el JAR real). Nunca invoca un proveedor
-LLM: solo se ejecuta hasta PARSED."""
+LLM: solo se ejecuta hasta PARSED.
+
+Nota (Fase 15B4-CANDIDATE-QUALITY-5C): BY_REFERENCE_OUTPUT solo lo
+calcula el analisis V2/interprocedural en memoria (Fase 9) -- nunca
+se escribe en el `06-candidates.json` productivo (candidates_detected_
+stage no invoca interprocedural_rule_detectors). Por eso este test usa
+explicitamente `compute_functional_validation_report_from_promotion_
+assessment` (shadow/diagnostico) en vez del default productivo, que a
+partir de 5C solo lee `06-candidates.json` real y reportaria este caso
+como MISSING (correcto: el candidato nunca llego al artefacto
+productivo)."""
 
 from __future__ import annotations
 
@@ -24,12 +34,14 @@ from altamira_extractor.contracts.functional_validation import (
     FunctionalDatasetCoverageStatus,
     FunctionalDatasetDisposition,
     MatchOutcome,
+    ValidationSource,
 )
 from altamira_extractor.pipeline.candidate_promotion_assessment_service import (
     compute_candidate_promotion_assessment_artifact,
 )
 from altamira_extractor.pipeline.functional_validation_service import (
     compute_functional_validation_report,
+    compute_functional_validation_report_from_promotion_assessment,
 )
 from altamira_extractor.pipeline.runner import run_ingestion
 
@@ -96,7 +108,9 @@ def test_by_reference_output_ground_truth_case_matches_end_to_end(tmp_path: Path
     assert reference.paragraph == "MAIN-PARA"
     assert reference.output_literal == "OK00"
 
-    report = compute_functional_validation_report(run_dir, state.run_id, settings.ground_truth_path)
+    report = compute_functional_validation_report_from_promotion_assessment(
+        run_dir, state.run_id, settings.ground_truth_path
+    )
 
     by_case_id = {c.case_id: c for c in report.case_results}
     by_reference_case = by_case_id["gt-positive-by-reference-output-unconditional-move"]
@@ -138,3 +152,19 @@ def test_by_reference_output_ground_truth_case_matches_end_to_end(tmp_path: Path
     assert report.dataset_disposition != FunctionalDatasetDisposition.PASS_ENGINEERING
     assert "gt-positive-return-code-if-else" in report.pending_case_ids
     assert "gt-positive-level88-return-code-nested-set" in report.pending_case_ids
+
+    # Checkpoint 5C (P1-PRODUCTIVE-ARTIFACT-QUALIFICATION): el default
+    # productivo lee EXCLUSIVAMENTE el 06-candidates.json real. Como
+    # BY_REFERENCE_OUTPUT nunca llega a ese artefacto en este run, debe
+    # reportarse honestamente como MISSING -- nunca un TP fabricado por
+    # una recomputacion V2/interprocedural en memoria.
+    productive_report = compute_functional_validation_report(
+        run_dir, state.run_id, settings.ground_truth_path
+    )
+    productive_by_case_id = {c.case_id: c for c in productive_report.case_results}
+    productive_by_reference_case = productive_by_case_id[
+        "gt-positive-by-reference-output-unconditional-move"
+    ]
+    assert productive_by_reference_case.outcome == MatchOutcome.MISSING
+    assert productive_report.productive_candidate_count == 0
+    assert productive_report.validation_source == ValidationSource.PRODUCTIVE_ARTIFACT

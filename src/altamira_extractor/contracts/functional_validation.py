@@ -66,6 +66,120 @@ from .candidate_promotion_assessment import UnifiedRuleFamily
 from .functional_ground_truth import GroundTruthCaseKind
 
 
+class ValidationSource(StrEnum):
+    """Fase 15B4-CANDIDATE-QUALITY-5C (cierre de
+    P1-PRODUCTIVE-ARTIFACT-QUALIFICATION): de que catalogo de candidatos
+    proviene `FunctionalValidationReport.case_results`.
+    `PRODUCTIVE_ARTIFACT` (release/product qualification, default de
+    `compute_functional_validation_report`) lee UNICAMENTE
+    `artifacts/06-candidates.json` ya persistido por el run -- nunca
+    recalcula V2/interprocedural. `PROMOTION_ASSESSMENT_SHADOW`
+    (desarrollo/capability-assessment, requiere invocacion EXPLICITA)
+    preserva el comportamiento historico via
+    `CandidatePromotionAssessmentArtifact` (Fase 9): V1 real desde
+    `06-candidates.json`, V2/interprocedural recalculados en memoria
+    -- mide capacidad de deteccion del codigo actual, NUNCA que fue
+    realmente promovido a un artifact productivo. Nunca usar
+    `PROMOTION_ASSESSMENT_SHADOW` como release gate."""
+
+    PRODUCTIVE_ARTIFACT = "PRODUCTIVE_ARTIFACT"
+    PROMOTION_ASSESSMENT_SHADOW = "PROMOTION_ASSESSMENT_SHADOW"
+
+
+class ArtifactChainIntegrityReport(AltamiraBaseModel):
+    """Invariante barata (Fase 15B4-CANDIDATE-QUALITY-5C, seccion 18):
+    todo candidato productivo (`06-candidates.json`) cuyo run alcanzo
+    CONTEXTS_BUILT o posterior debe tener un `ContextPackage`
+    correspondiente en `artifacts/07-context/`. Un candidato sin
+    contexto es una falla de integridad de la cadena de artefactos --
+    NUNCA se reinterpreta como FN semantico del ground truth (son
+    conceptos distintos: uno es "el candidato no fue detectado", el
+    otro es "el candidato existe pero el pipeline downstream se rompio
+    para el")."""
+
+    candidates_checked: int = Field(ge=0)
+    candidates_missing_context: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_sorted_unique(self) -> ArtifactChainIntegrityReport:
+        ids = self.candidates_missing_context
+        if ids != sorted(set(ids)):
+            raise ValueError("candidates_missing_context debe estar ordenado y sin duplicados")
+        if len(ids) > self.candidates_checked:
+            raise ValueError("candidates_missing_context no puede superar candidates_checked")
+        return self
+
+
+class FinalRuleLinkageStatus(StrEnum):
+    """Perfil del producto (Fase 15B4-CANDIDATE-QUALITY-5C, seccion 20):
+    `APPLICABLE` unicamente para runs FULL_LLM que alcanzaron COMPLETED
+    (10-rules/ es un artefacto esperado). `NOT_APPLICABLE` para
+    DETERMINISTIC_OFFLINE (final esperado = CONTEXTS_BUILT, sin
+    10-rules por diseno) -- NUNCA una falla."""
+
+    APPLICABLE = "APPLICABLE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class FinalRuleLinkageReport(AltamiraBaseModel):
+    """Chequeo deterministico (Fase 15B4-CANDIDATE-QUALITY-5C, secciones
+    19/21) de `artifacts/10-rules/rules-manifest.json` -- nunca
+    comparacion semantica de Markdown via LLM. `guardrail_rejected_
+    candidate_ids`: candidatos en 06 cuyo guardrail real
+    (`09-guardrails/guardrail-manifest.json`) tiene verdict=REJECTED --
+    la ausencia de regla final para ellos es un resultado DOWNSTREAM
+    legitimo, nunca una falla de deteccion/qualification (seccion 21).
+    `broken_candidate_ids`: `records[].candidate_id` de
+    `rules-manifest.json` que NO corresponde a ningun candidato real de
+    06 -- eso SI es una falla de integridad. `missing_final_rule_
+    candidate_ids` (Fase 15B4-CANDIDATE-QUALITY-5C-SAFETY, seccion 8):
+    candidatos de 06 cuyo guardrail real (`09-guardrails/guardrail-
+    manifest.json`) tiene verdict=EVIDENCE_VALIDATED (aprobado, nunca
+    rechazado) pero NO aparecen en `rules-manifest.json` -- a diferencia
+    de `guardrail_rejected_candidate_ids` (ausencia LEGITIMA downstream),
+    esto SI es una falla de integridad real: el renderer deberia haber
+    producido una regla para todo candidato aprobado."""
+
+    status: FinalRuleLinkageStatus
+    rules_manifest_rule_count: int | None = Field(default=None, ge=0)
+    broken_candidate_ids: list[str] = Field(default_factory=list)
+    duplicate_candidate_ids: list[str] = Field(default_factory=list)
+    guardrail_rejected_candidate_ids: list[str] = Field(default_factory=list)
+    missing_final_rule_candidate_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> FinalRuleLinkageReport:
+        if self.status == FinalRuleLinkageStatus.NOT_APPLICABLE:
+            populated = (
+                self.rules_manifest_rule_count,
+                self.broken_candidate_ids,
+                self.duplicate_candidate_ids,
+                self.guardrail_rejected_candidate_ids,
+                self.missing_final_rule_candidate_ids,
+            )
+            if any(populated):
+                raise ValueError(
+                    "status=NOT_APPLICABLE no puede declarar ningun campo de linkage"
+                )
+        for ids in (
+            self.broken_candidate_ids,
+            self.duplicate_candidate_ids,
+            self.guardrail_rejected_candidate_ids,
+            self.missing_final_rule_candidate_ids,
+        ):
+            if ids != sorted(set(ids)):
+                raise ValueError(
+                    "las listas de candidate_id deben estar ordenadas y sin duplicados"
+                )
+        if set(self.guardrail_rejected_candidate_ids) & set(self.missing_final_rule_candidate_ids):
+            raise ValueError(
+                "un candidate_id no puede estar en guardrail_rejected_candidate_ids Y en "
+                "missing_final_rule_candidate_ids a la vez (son ausencias mutuamente excluyentes: "
+                "legitima vs falla de integridad)"
+            )
+        return self
+
+
 class Applicability(StrEnum):
     """Si el fixture set de un `GroundTruthCase` (o, agregado, de todo el
     `FunctionalGroundTruthSet`) esta presente en el run evaluado.
@@ -406,10 +520,17 @@ class FunctionalValidationReport(AltamiraBaseModel):
     ejecuciones sobre los mismos artefactos de entrada deben producir
     bytes identicos."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     run_id: str = Field(min_length=1)
     source_package_hash: Sha256Hex
     ground_truth_catalog_edition: str = Field(min_length=1, max_length=100)
+    # Fase 15B4-CANDIDATE-QUALITY-5C: de que fuente provienen los
+    # candidatos comparados contra el ground truth -- ver docstring de
+    # `ValidationSource`. Campo obligatorio (nunca un default silencioso):
+    # todo llamador de este contrato debe declarar explicitamente cual de
+    # las dos semanticas produjo el reporte.
+    validation_source: ValidationSource
+    productive_candidate_count: int = Field(ge=0)
     dataset_applicability: Applicability
     coverage_status: FunctionalDatasetCoverageStatus
     required_case_count: int = Field(ge=0)
@@ -420,6 +541,8 @@ class FunctionalValidationReport(AltamiraBaseModel):
     dataset_disposition: FunctionalDatasetDisposition
     case_results: list[GroundTruthCaseResult] = Field(default_factory=list)
     metrics: FunctionalValidationMetrics
+    artifact_chain_integrity: ArtifactChainIntegrityReport
+    final_rule_linkage: FinalRuleLinkageReport
 
     @model_validator(mode="after")
     def _check_case_results_sorted_and_unique(self) -> FunctionalValidationReport:

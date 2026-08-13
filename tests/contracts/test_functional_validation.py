@@ -11,16 +11,20 @@ from pydantic import ValidationError
 from altamira_extractor.contracts.functional_ground_truth import GroundTruthCaseKind
 from altamira_extractor.contracts.functional_validation import (
     Applicability,
+    ArtifactChainIntegrityReport,
     CaseLevelMetrics,
     CaseMetricReasonCode,
     CaseMetricStatus,
     ExpectedRuleMatchResult,
+    FinalRuleLinkageReport,
+    FinalRuleLinkageStatus,
     FunctionalDatasetCoverageStatus,
     FunctionalDatasetDisposition,
     FunctionalValidationMetrics,
     FunctionalValidationReport,
     GroundTruthCaseResult,
     MatchOutcome,
+    ValidationSource,
 )
 
 _HASH = "a" * 64
@@ -310,6 +314,8 @@ def _build_report(
         "run_id": "run-1",
         "source_package_hash": _HASH,
         "ground_truth_catalog_edition": "edition-1",
+        "validation_source": ValidationSource.PRODUCTIVE_ARTIFACT,
+        "productive_candidate_count": 0,
         "dataset_applicability": dataset_applicability,
         "coverage_status": coverage_status,
         "required_case_count": len(required),
@@ -324,6 +330,10 @@ def _build_report(
         "dataset_disposition": dataset_disposition,
         "case_results": case_results,
         "metrics": _zero_metrics(),
+        "artifact_chain_integrity": ArtifactChainIntegrityReport(
+            candidates_checked=0, candidates_missing_context=[]
+        ),
+        "final_rule_linkage": FinalRuleLinkageReport(status=FinalRuleLinkageStatus.NOT_APPLICABLE),
     }
     defaults.update(overrides)
     return FunctionalValidationReport(**defaults)  # type: ignore[arg-type]

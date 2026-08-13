@@ -295,6 +295,7 @@ from .pipeline.functional_dataset_validation_service import (
 )
 from .pipeline.functional_validation_service import (
     compute_functional_validation_report,
+    compute_functional_validation_report_from_promotion_assessment,
     write_functional_validation_report,
 )
 from .pipeline.interprocedural_call_linkage_service import (
@@ -415,6 +416,15 @@ SemanticCoverageObservationsJsonOption = Annotated[
 FunctionalValidationJsonOption = Annotated[
     bool,
     typer.Option("--json", help="Imprime el FunctionalValidationReport completo en JSON estable"),
+]
+FunctionalValidationSourceOption = Annotated[
+    str,
+    typer.Option(
+        "--source",
+        help="'productive' (default, release gate: lee UNICAMENTE artifacts/06-candidates.json "
+        "real) o 'promotion-assessment' (SHADOW/development: recalcula V2/interprocedural en "
+        "memoria via CandidatePromotionAssessmentArtifact -- Fase 9, NUNCA usar como release gate)",
+    ),
 ]
 DatasetIdOption = Annotated[
     str,
@@ -928,27 +938,51 @@ def semantic_coverage_report(
 @app.command(name="functional-validate")
 @_guard
 def functional_validate(
-    run_id: RunIdArgument, json_output: FunctionalValidationJsonOption = False
+    run_id: RunIdArgument,
+    json_output: FunctionalValidationJsonOption = False,
+    source: FunctionalValidationSourceOption = "productive",
 ) -> None:
     """Calcula y persiste diagnostics/functional-validation-report.json
     de RUN_ID.
 
-    Informe NO contractual, bajo demanda (Fase 15B2-A, Parte F, ver
+    Informe NO contractual, bajo demanda (Fase 15B2-A, Parte F; Fase
+    15B4-CANDIDATE-QUALITY-5C para `--source`, ver
     docs/FUNCTIONAL_VALIDATION.md): compara config/ground_truth/
-    synthetic_engineering.yaml contra los UnifiedCandidateReference
-    reales de RUN_ID (CandidatePromotionAssessmentArtifact, Fase 9) con
+    synthetic_engineering.yaml contra candidatos reales de RUN_ID con
     matching deterministico y exacto -- nunca LLM, nunca embeddings,
-    nunca similitud semantica. Requiere que RUN_ID ya haya alcanzado
-    PARSED (SUCCEEDED). Nunca modifica run.json ni ningun
+    nunca similitud semantica. `--source productive` (DEFAULT, release
+    gate) lee UNICAMENTE `artifacts/06-candidates.json` tal como el run
+    lo persistio. `--source promotion-assessment` (SHADOW/development)
+    preserva el comportamiento historico (Fase 9,
+    CandidatePromotionAssessmentArtifact: V2/interprocedural
+    RECALCULADOS en memoria) -- mide capacidad de deteccion del codigo
+    actual, NUNCA usar como release gate. Requiere que RUN_ID ya haya
+    alcanzado PARSED (SUCCEEDED). Nunca modifica run.json ni ningun
     artifacts/01-10; nunca accede a Neo4j ni invoca un proveedor LLM.
     """
+    if source not in ("productive", "promotion-assessment"):
+        raise _UsageError(
+            f"--source invalido: {source!r} (use 'productive' o 'promotion-assessment')"
+        )
     settings = load_settings()
     run_dir = _run_dir(settings, run_id)
-    report = compute_functional_validation_report(run_dir, run_id, settings.ground_truth_path)
+    compute_report = (
+        compute_functional_validation_report
+        if source == "productive"
+        else compute_functional_validation_report_from_promotion_assessment
+    )
+    report = compute_report(run_dir, run_id, settings.ground_truth_path)
     report_path = write_functional_validation_report(run_dir, report)
     relative_report_path = report_path.relative_to(run_dir).as_posix()
 
+    # 5C-SAFETY seccion 10: el pipeline outcome (en particular
+    # PipelineStage.FAILED, distinto de un perfil DETERMINISTIC_OFFLINE
+    # que nunca intento llegar a COMPLETED) debe quedar observable junto
+    # a final_rule_linkage -- nunca inferido solo de NOT_APPLICABLE.
     typer.echo(f"run_id: {report.run_id}")
+    typer.echo(f"pipeline_stage: {read_run_state(run_dir).current_stage.value}")
+    typer.echo(f"validation_source: {report.validation_source.value}")
+    typer.echo(f"productive_candidate_count: {report.productive_candidate_count}")
     typer.echo(f"ground_truth_catalog_edition: {report.ground_truth_catalog_edition}")
     typer.echo(f"dataset_applicability: {report.dataset_applicability.value}")
     typer.echo(f"coverage_status: {report.coverage_status.value}")
@@ -973,6 +1007,28 @@ def functional_validate(
     typer.echo(f"precision: {metrics.precision}")
     typer.echo(f"recall: {metrics.recall}")
     typer.echo(f"f1_score: {metrics.f1_score}")
+    integrity = report.artifact_chain_integrity
+    if integrity.candidates_missing_context:
+        typer.echo(
+            "artifact_chain_integrity: FAILURE candidates_missing_context="
+            f"{', '.join(integrity.candidates_missing_context)}"
+        )
+    linkage = report.final_rule_linkage
+    typer.echo(f"final_rule_linkage: {linkage.status.value}")
+    if linkage.broken_candidate_ids:
+        typer.echo(f"  broken_candidate_ids: {', '.join(linkage.broken_candidate_ids)}")
+    if linkage.duplicate_candidate_ids:
+        typer.echo(f"  duplicate_candidate_ids: {', '.join(linkage.duplicate_candidate_ids)}")
+    if linkage.guardrail_rejected_candidate_ids:
+        typer.echo(
+            "  guardrail_rejected_candidate_ids: "
+            f"{', '.join(linkage.guardrail_rejected_candidate_ids)}"
+        )
+    if linkage.missing_final_rule_candidate_ids:
+        typer.echo(
+            "  missing_final_rule_candidate_ids: "
+            f"{', '.join(linkage.missing_final_rule_candidate_ids)}"
+        )
     typer.echo(f"report: {relative_report_path}")
 
     if json_output:

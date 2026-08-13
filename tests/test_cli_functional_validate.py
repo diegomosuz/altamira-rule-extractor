@@ -175,7 +175,9 @@ def test_functional_validate_persists_report_file(patched_settings: Settings) ->
     assert report_path.is_file()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["run_id"] == _RUN_ID
-    assert payload["schema_version"] == "1.0"
+    # Fase 15B4-CANDIDATE-QUALITY-5C: bump de contrato (validation_source/
+    # productive_candidate_count/artifact_chain_integrity/final_rule_linkage).
+    assert payload["schema_version"] == "1.1"
 
 
 def test_functional_validate_missing_run_exits_nonzero(patched_settings: Settings) -> None:

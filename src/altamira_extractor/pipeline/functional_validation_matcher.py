@@ -62,17 +62,26 @@ from ..contracts.functional_ground_truth import (
 )
 from ..contracts.functional_validation import (
     Applicability,
+    ArtifactChainIntegrityReport,
     CaseLevelMetrics,
     CaseMetricReasonCode,
     CaseMetricStatus,
     ExpectedRuleMatchResult,
+    FinalRuleLinkageReport,
+    FinalRuleLinkageStatus,
     FunctionalDatasetCoverageStatus,
     FunctionalDatasetDisposition,
     FunctionalValidationMetrics,
     FunctionalValidationReport,
     GroundTruthCaseResult,
     MatchOutcome,
+    ValidationSource,
 )
+
+_DEFAULT_ARTIFACT_CHAIN_INTEGRITY = ArtifactChainIntegrityReport(
+    candidates_checked=0, candidates_missing_context=[]
+)
+_DEFAULT_FINAL_RULE_LINKAGE = FinalRuleLinkageReport(status=FinalRuleLinkageStatus.NOT_APPLICABLE)
 
 
 @dataclass(frozen=True)
@@ -304,6 +313,9 @@ def validate_ground_truth(
     source_package_hash: str,
     run_fixture_hashes: frozenset[str],
     guardrail_by_candidate_id: Mapping[str, GuardrailLookupEntry] = _EMPTY_GUARDRAIL_MAP,
+    validation_source: ValidationSource = ValidationSource.PROMOTION_ASSESSMENT_SHADOW,
+    artifact_chain_integrity: ArtifactChainIntegrityReport | None = None,
+    final_rule_linkage: FinalRuleLinkageReport | None = None,
 ) -> FunctionalValidationReport:
     """Analizador puro: para cada `GroundTruthCase`, decide primero su
     `Applicability` (`compute_case_applicability`, contra
@@ -387,6 +399,8 @@ def validate_ground_truth(
         run_id=run_id,
         source_package_hash=source_package_hash,
         ground_truth_catalog_edition=ground_truth.catalog_edition,
+        validation_source=validation_source,
+        productive_candidate_count=len(candidate_references),
         dataset_applicability=dataset_applicability,
         coverage_status=coverage_status,
         required_case_count=required_case_count,
@@ -397,4 +411,6 @@ def validate_ground_truth(
         dataset_disposition=dataset_disposition,
         case_results=case_results,
         metrics=_compute_metrics(case_results),
+        artifact_chain_integrity=artifact_chain_integrity or _DEFAULT_ARTIFACT_CHAIN_INTEGRITY,
+        final_rule_linkage=final_rule_linkage or _DEFAULT_FINAL_RULE_LINKAGE,
     )

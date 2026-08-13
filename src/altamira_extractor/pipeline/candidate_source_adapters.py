@@ -201,6 +201,57 @@ def adapt_v1_candidates(
     return sorted(references, key=lambda reference: reference.unified_reference_id)
 
 
+def adapt_productive_candidates(
+    artifact: CandidateArtifact | None, *, source_artifact_hash: str
+) -> list[UnifiedCandidateReference]:
+    """Fase 15B4-CANDIDATE-QUALITY-5C (cierre de
+    P1-PRODUCTIVE-ARTIFACT-QUALIFICATION): adapta el `CandidateArtifact`
+    REAL de `artifacts/06-candidates.json` -- a diferencia de
+    `adapt_v1_candidates` (que asume, correctamente para su epoca de
+    origen previa a la integracion productiva V2, que TODO candidato en
+    ese artefacto es V1/RETURN_CODE), este adaptador lee
+    `candidate.candidate_source`/`candidate.rule_family` REALES de cada
+    `RuleCandidate` -- necesario porque, desde `enhanced_candidate_
+    integration.py` (Fase 15B3-B en adelante), `06-candidates.json`
+    puede contener candidatos V1 Y V2 (LEVEL_88_RETURN_CODE/
+    STATE_TRANSITION/CALCULATION) fusionados en el MISMO artefacto real.
+    `artifact is None` (fuente no disponible) siempre produce `[]`.
+    Nunca modifica `artifact`. Nunca recalcula nada: esta es la UNICA
+    fuente de candidatos para la qualification productiva -- ver
+    `functional_validation_service.py::compute_functional_validation_
+    report`."""
+    if artifact is None:
+        return []
+    references = [
+        UnifiedCandidateReference(
+            unified_reference_id=unified_reference_id_for(
+                source=candidate.candidate_source, source_candidate_id=candidate.candidate_id
+            ),
+            source=candidate.candidate_source,
+            source_candidate_id=candidate.candidate_id,
+            source_artifact_hash=source_artifact_hash,
+            rule_family=candidate.rule_family,
+            original_rule_type=candidate.rule_type,
+            original_support=candidate.status.value,
+            program=_program_name_from_paragraph_id(candidate.paragraph_id),
+            paragraph=candidate.paragraph_name,
+            decision_id=candidate.decision_id,
+            call_site_id=None,
+            target=None,
+            input_literal=None,
+            output_literal=candidate.outcome_code,
+            evidence_ids=_sorted_unique(candidate.evidence_ids),
+            barrier_codes=[],
+            provenance_references=_sorted_unique(
+                [f"{candidate.source_file}::{candidate.line_start}"]
+            ),
+            diagnostics=[],
+        )
+        for candidate in artifact.candidates
+    ]
+    return sorted(references, key=lambda reference: reference.unified_reference_id)
+
+
 def _v2_rule_family(
     candidate: V2ShadowCandidate,
     *,
