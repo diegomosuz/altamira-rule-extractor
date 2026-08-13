@@ -15,15 +15,21 @@ completo (nunca se usa unicamente `q0_query_hash`/`RunState` para omitir
 la ejecucion contra Neo4j); el artefacto recomputado solo se reescribe
 si difiere del existente.
 
-`Settings.enhanced_candidates_enabled` (Fase 15B3-B, opt-in, `False` por
-defecto): cuando esta activo, ademas de Q0 se ejecutan en memoria los
-detectores V2 RETURN_CODE_RULE/LEVEL_88_RETURN_CODE_RULE (ver
+`Settings.enhanced_candidates_enabled` (Fase 15B3-B; default `True`
+desde Fase 15B4-CANDIDATE-QUALITY-5E, tras cerrar el corpus Ground Truth
+formal con FP=0/FN=0/precision=recall=f1=1.0 -- ver
+`docs/CAPABILITY_COVERAGE_1_17.md`): cuando esta activo, ademas de Q0 se
+ejecutan en memoria los detectores V2 RETURN_CODE_RULE/
+LEVEL_88_RETURN_CODE_RULE/STATE_CHANGE_RULE (promovido a
+STATE_TRANSITION unicamente cuando el target tiene
+`semantic_tag in {status, status_flag}`)/CALCULATION_RULE (ver
 `enhanced_candidate_integration.py`) sobre los mismos artefactos que
 PARSED/SEMANTIC_GRAPH_BUILT ya persistieron -- nunca se agrega una
 consulta Neo4j adicional. Los candidatos V1 nunca se modifican; solo se
-agregan los candidatos V2 no cubiertos ya por un `decision_id` de V1.
-Con el default `False`, el artefacto producido es identico al de antes
-de esta fase.
+agregan los candidatos V2 no cubiertos ya por un `decision_id` de V1. El
+modo legacy/conservador (`enhanced_candidates_enabled=False` explicito,
+artefacto identico al de antes de Fase 15B3-B) sigue disponible como
+override explicito.
 """
 
 from __future__ import annotations

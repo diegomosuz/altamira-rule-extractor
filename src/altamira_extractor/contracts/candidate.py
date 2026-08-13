@@ -33,7 +33,9 @@ candidate_source_adapters.py::_V1_RULE_FAMILY`) y `evidence_ids=[]`
 salvo que la deteccion ampliada haya fusionado evidencia V2 en el (regla
 D: `evidence_ids` se enriquece via `model_copy`, nunca se muta el
 candidato V1 original en su lugar). Un `RuleCandidate` agregado por la
-deteccion ampliada (V2, opt-in via `Settings.enhanced_candidates_enabled`)
+deteccion ampliada (V2, configurable via `Settings.
+enhanced_candidates_enabled` -- activa por default desde Fase
+15B4-CANDIDATE-QUALITY-5E, override explicito `False` disponible)
 declara su propio `candidate_source`/`rule_family`/`evidence_ids`. Estos
 campos nunca implican aprobacion funcional ni cambian el significado de
 `status` (`DETECTED_CANDIDATE` sigue siendo el unico status valido
