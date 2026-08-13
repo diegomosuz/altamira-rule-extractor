@@ -41,7 +41,13 @@ _INAPPLICABLE_HASHES = frozenset({_OTHER_FIXTURE_SHA})
 
 
 def _ref(
-    ref_id: str, rule_family: str, program: str, paragraph: str | None
+    ref_id: str,
+    rule_family: str,
+    program: str,
+    paragraph: str | None,
+    *,
+    output_literal: str | None = None,
+    condition: str | None = None,
 ) -> UnifiedCandidateReference:
     return UnifiedCandidateReference(
         unified_reference_id=ref_id,
@@ -52,6 +58,8 @@ def _ref(
         original_support="DETERMINISTIC",
         program=program,
         paragraph=paragraph,
+        output_literal=output_literal,
+        condition=condition,
     )
 
 
@@ -152,6 +160,231 @@ def test_positive_case_ignores_wrong_paragraph() -> None:
     refs = [_ref("r1", "RETURN_CODE", "PROG1", "OTHER-PARA")]
     report = _validate(gt, refs)
     assert report.case_results[0].outcome == MatchOutcome.MISSING
+
+
+# --- 5D-SAFETY-2 (cierre de BRANCH_EXPECTATION_NOT_EXACT): ------------------
+# expected_output_literal discrimina candidatos con la misma
+# (rule_family, program, paragraph) pero un literal distinto -- un
+# candidato de literal equivocado ya NUNCA satisface silenciosamente una
+# expectation de un hecho funcional especifico.
+
+
+def _branch_case(*, expected_a: str, expected_b: str) -> GroundTruthCase:
+    return GroundTruthCase(
+        case_id="branch-1",
+        kind=GroundTruthCaseKind.POSITIVE,
+        program="PROG1",
+        fixtures=[
+            GroundTruthFixtureReference(
+                relative_path="config/ground_truth/fixtures/x.cbl", sha256=_FIXTURE_SHA
+            )
+        ],
+        description="caso multi-branch (IF/ELSE) con dos hechos exactos",
+        expected_rules=[
+            GroundTruthExpectedRule(
+                expectation_id="branch-1::a",
+                rule_family="RETURN_CODE",
+                paragraph="MAIN-PARA",
+                expected_output_literal=expected_a,
+                minimum_count=1,
+                derivation_notes="rama A",
+            ),
+            GroundTruthExpectedRule(
+                expectation_id="branch-1::b",
+                rule_family="RETURN_CODE",
+                paragraph="MAIN-PARA",
+                expected_output_literal=expected_b,
+                minimum_count=1,
+                derivation_notes="rama B",
+            ),
+        ],
+    )
+
+
+def test_positive_case_ignores_wrong_output_literal_when_declared() -> None:
+    gt = _ground_truth([_branch_case(expected_a="0", expected_b="99")])
+    refs = [_ref("r1", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="77")]
+    report = _validate(gt, refs)
+    for expectation in report.case_results[0].expectation_results:
+        assert expectation.outcome == MatchOutcome.MISSING, expectation.expectation_id
+
+
+def test_positive_case_matches_correct_output_literal_when_declared() -> None:
+    gt = _ground_truth([_branch_case(expected_a="0", expected_b="99")])
+    refs = [
+        _ref("r-else", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="0"),
+        _ref("r-then", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="99"),
+    ]
+    report = _validate(gt, refs)
+    assert report.case_results[0].outcome == MatchOutcome.MATCHED
+    assert report.metrics.true_positive_count == 2
+
+
+def test_multi_branch_wrong_outcome_never_counted_as_perfect_tp() -> None:
+    """Seccion 9 (5D-SAFETY-2), test obligatorio: correct family, correct
+    paragraph, correct RAW count (2 candidatos presentes) pero UN literal
+    equivocado (77 en vez de 0) -- nunca debe pasar como un caso MATCHED
+    perfecto. Reproduce exactamente el probe empirico de la Seccion 2."""
+    gt = _ground_truth([_branch_case(expected_a="0", expected_b="99")])
+    refs = [
+        _ref("r-then", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="99"),
+        _ref("r-wrong", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="77"),
+    ]
+    report = _validate(gt, refs)
+    case = report.case_results[0]
+    assert case.outcome == MatchOutcome.MISSING
+    assert len(refs) == 2  # el RAW count "parece" correcto -- pero el caso no pasa
+    outcomes = {e.expectation_id: e.outcome for e in case.expectation_results}
+    assert outcomes["branch-1::a"] == MatchOutcome.MISSING  # ''0'' nunca aparecio
+    assert outcomes["branch-1::b"] == MatchOutcome.MATCHED  # ''99'' si aparecio
+    assert report.metrics.true_positive_count == 1
+    assert report.metrics.false_negative_count == 1
+
+
+def test_output_literal_none_preserves_backward_compatibility() -> None:
+    """expected_output_literal ausente (None) preserva el comportamiento
+    historico: family+paragraph+count, sin discriminar por literal --
+    necesario para toda regla de un solo hecho (RETURN_CODE simple,
+    LEVEL_88, STATE_TRANSITION, CALCULATION)."""
+    gt = _ground_truth([_positive_case()])
+    refs = [_ref("r1", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="cualquier-cosa")]
+    report = _validate(gt, refs)
+    assert report.case_results[0].outcome == MatchOutcome.MATCHED
+
+
+# --- 5D-SAFETY-3 seccion 4: expected_condition --------------------------------
+
+
+def _condition_case() -> GroundTruthCase:
+    return GroundTruthCase(
+        case_id="cond-1",
+        kind=GroundTruthCaseKind.POSITIVE,
+        program="PROG1",
+        fixtures=[
+            GroundTruthFixtureReference(
+                relative_path="config/ground_truth/fixtures/x.cbl", sha256=_FIXTURE_SHA
+            )
+        ],
+        description="caso con expected_condition declarado",
+        expected_rules=[
+            GroundTruthExpectedRule(
+                expectation_id="cond-1::e1",
+                rule_family="RETURN_CODE",
+                paragraph="MAIN-PARA",
+                expected_output_literal="99",
+                expected_condition="WS-MONTO>1000",
+                minimum_count=1,
+                derivation_notes="nota de prueba",
+            )
+        ],
+    )
+
+
+def test_positive_case_ignores_wrong_condition_when_declared() -> None:
+    """Seccion 3 (5D-SAFETY-3), probe obligatorio: family/program/
+    paragraph/output_literal correctos, pero condition equivocada --
+    NUNCA un match perfecto. Debe aparecer expected fact missing (fn=1)
+    + actual fact unexpected (fp=1), nunca un MATCHED silencioso."""
+    gt = _ground_truth([_condition_case()])
+    refs = [
+        _ref(
+            "r1",
+            "RETURN_CODE",
+            "PROG1",
+            "MAIN-PARA",
+            output_literal="99",
+            condition="WS-OTRA-COSA<>0",
+        )
+    ]
+    report = _validate(gt, refs)
+    assert report.case_results[0].outcome == MatchOutcome.MISSING
+    assert report.metrics.false_negative_count == 1
+    assert report.metrics.false_positive_count == 1
+
+
+def test_positive_case_matches_correct_condition_when_declared() -> None:
+    gt = _ground_truth([_condition_case()])
+    refs = [
+        _ref(
+            "r1",
+            "RETURN_CODE",
+            "PROG1",
+            "MAIN-PARA",
+            output_literal="99",
+            condition="WS-MONTO>1000",
+        )
+    ]
+    report = _validate(gt, refs)
+    assert report.case_results[0].outcome == MatchOutcome.MATCHED
+    assert report.metrics.false_positive_count == 0
+
+
+def test_expected_condition_none_preserves_backward_compatibility() -> None:
+    gt = _ground_truth([_positive_case()])
+    refs = [_ref("r1", "RETURN_CODE", "PROG1", "MAIN-PARA", condition="cualquier-condicion")]
+    report = _validate(gt, refs)
+    assert report.case_results[0].outcome == MatchOutcome.MATCHED
+
+
+# --- 5D-SAFETY-3 secciones 6-8: actual no emparejado en scope -> FP ----------
+
+
+def test_unmatched_actual_within_scope_counts_as_fp() -> None:
+    """Seccion 6, probe obligatorio: 2 expectations exactas, candidate A
+    correcto + candidate B que no satisface ninguna -- TP=1 FN=1 FP=1."""
+    gt = _ground_truth([_branch_case(expected_a="0", expected_b="99")])
+    refs = [
+        _ref("r-a", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="0"),
+        _ref("r-unexpected", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="55"),
+    ]
+    report = _validate(gt, refs)
+    assert report.metrics.true_positive_count == 1
+    assert report.metrics.false_negative_count == 1
+    assert report.metrics.false_positive_count == 1
+
+
+def test_extra_branch_counts_as_fp_never_hidden() -> None:
+    """Seccion 7, probe obligatorio: GT espera 2 branches, actual produce
+    3 (2 correctos + 1 adicional espurio) -- TP=2 FN=0 FP=1. Protege
+    contra reaparicion de duplicados/branches espurios."""
+    gt = _ground_truth([_branch_case(expected_a="0", expected_b="99")])
+    refs = [
+        _ref("r-a", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="0"),
+        _ref("r-b", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="99"),
+        _ref("r-extra", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="55"),
+    ]
+    report = _validate(gt, refs)
+    assert report.metrics.true_positive_count == 2
+    assert report.metrics.false_negative_count == 0
+    assert report.metrics.false_positive_count == 1
+
+
+def test_missing_branch_counts_as_fn_never_fp() -> None:
+    """Seccion 8: GT espera 2, actual solo produce 1 -- TP=1 FN=1 FP=0
+    (una branch ausente nunca es un FP)."""
+    gt = _ground_truth([_branch_case(expected_a="0", expected_b="99")])
+    refs = [_ref("r-a", "RETURN_CODE", "PROG1", "MAIN-PARA", output_literal="0")]
+    report = _validate(gt, refs)
+    assert report.metrics.true_positive_count == 1
+    assert report.metrics.false_negative_count == 1
+    assert report.metrics.false_positive_count == 0
+
+
+def test_unmatched_actual_never_leaks_into_unexpected_for_simple_case() -> None:
+    """Seccion 9 (backward compat): un caso simple (sin expected_output_
+    literal/expected_condition, una unica expectation) nunca produce FP
+    por candidatos "extra" -- la unica expectation, sin filtro, ya
+    reclama todo el scope (mismo criterio que 5C: duplicados visibles
+    via matched_count, nunca ocultos, pero tampoco FP fabricado)."""
+    gt = _ground_truth([_positive_case()])
+    refs = [
+        _ref("r1", "RETURN_CODE", "PROG1", "MAIN-PARA"),
+        _ref("r2", "RETURN_CODE", "PROG1", "MAIN-PARA"),
+    ]
+    report = _validate(gt, refs)
+    assert report.case_results[0].outcome == MatchOutcome.MATCHED
+    assert report.case_results[0].expectation_results[0].matched_count == 2
+    assert report.metrics.false_positive_count == 0
 
 
 def test_negative_case_confirmed_absent_when_no_candidates() -> None:

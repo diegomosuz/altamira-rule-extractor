@@ -219,6 +219,13 @@ class UnifiedCandidateReference(AltamiraBaseModel):
     target: str | None = None
     input_literal: str | None = None
     output_literal: str | None = None
+    # Fase 15B4-CANDIDATE-QUALITY-5D-SAFETY-3: condicion cruda de la
+    # Decision de origen (`RuleCandidate.condition`/`Decision.expression`),
+    # nunca normalizada/derivada de run_id/hash/ordinal de linea -- estable
+    # para una fixture versionada dada. NUNCA distingue ramas de la MISMA
+    # Decision (THEN/ELSE, WHEN...) entre si: representa la condicion de la
+    # Decision completa, identica para todos sus candidatos derivados.
+    condition: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
     barrier_codes: list[str] = Field(default_factory=list)
     provenance_references: list[str] = Field(default_factory=list)

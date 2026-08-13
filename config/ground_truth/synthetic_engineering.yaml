@@ -8,7 +8,7 @@
 # #2). Ver ese mismo modulo para las tres decisiones arquitectonicas
 # obligatorias que gobiernan este archivo.
 schema_version: "1.0"
-catalog_edition: fase-15b2-a-2026.08.05
+catalog_edition: fase-15b4-5d-safety-2026.08.13
 cases:
 - case_id: gt-negative-state-transition-nonfunctional-indicator-name
   kind: NEGATIVE
@@ -35,34 +35,6 @@ cases:
     positivo RETURN_CODE via Q0 (sink.semantic_tag=return_code es un requisito estructural
     de queries/v1/q0_candidates.cypher que este DataItem nunca cumple).'
   expected_rules: []
-- case_id: gt-positive-by-reference-output-unconditional-move
-  kind: POSITIVE
-  program: GTBRCLR1
-  fixtures:
-  - relative_path: config/ground_truth/fixtures/gt_by_reference_output_callee_001.cbl
-    sha256: d4db8a7994ae649e010e01647b1f04e9a383fc907ee6f78bbb53eb356a84ab8d
-  - relative_path: config/ground_truth/fixtures/gt_by_reference_output_caller_001.cbl
-    sha256: 19b5352db448eefe16f57f846fd046d92a79deb355421082812c86170f2a5fa9
-  description: 'GTBRCLR1 (caller) invoca CALL ''GTBRCLE1'' USING BY REFERENCE WS-STATUS;
-    GTBRCLE1 (callee) ejecuta MOVE ''OK00'' TO LK-STATUS de forma UNCONDICIONAL (unico statement
-    de MAIN-PARA, sin IF/EVALUATE) antes de GOBACK -- caso interprocedural genuino: dos
-    programas, dos fixtures.'
-  expected_rules:
-  - expectation_id: gt-positive-by-reference-output-unconditional-move::interprocedural-by-reference
-    rule_family: BY_REFERENCE_OUTPUT
-    paragraph: MAIN-PARA
-    minimum_count: 1
-    derivation_notes: 'detect_by_reference_rule exige exit_fact status=PROPAGATED
-      (_exit_fact_for_binding -> _known_literal_at con parent_scope=None): busca el ULTIMO
-      PropagatedValueFact de GTBRCLE1 escrito a LK-STATUS fuera de cualquier decision. La unica
-      escritura es MOVE ''OK00'' TO LK-STATUS, top-level en MAIN-PARA -- produce un unico fact
-      literal, exit_fact queda PROPAGATED con literal=''OK00''. callee_exit_barrier=None (GOBACK
-      nunca es barrera). binding RESOLVED_POSITIONAL (unico parametro LINKAGE). Mapeo
-      BY_REFERENCE_RULE -> BY_REFERENCE_OUTPUT via candidate_source_adapters.py,
-      program=caller_program, paragraph=caller_paragraph. Confirmado end-to-end con el pipeline
-      real hasta PARSED + compute_interprocedural_rule_candidates_artifact (sin Neo4j): 1
-      candidato support=DETERMINISTIC caller=GTBRCLR1 callee=GTBRCLE1 target=WS-STATUS
-      output_literal=OK00, sin barriers ni diagnostics.'
 - case_id: gt-positive-calculation-if-compute-multiplication
   kind: POSITIVE
   program: GTCALC001
@@ -87,6 +59,51 @@ cases:
       enhanced_candidate_integration.py promueve a RuleCandidate(rule_family=CALCULATION) SIN
       gate de semantic_tag. Confirmado con el JAR real: target_data_items=[WS-COMISION],
       parent_statement_id apunta al IF, unsupported_constructs=[].'
+- case_id: gt-positive-calculation-if-subtract
+  kind: POSITIVE
+  program: GTCALC005
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_calculation_subtract_001.cbl
+    sha256: 8d139b7d05f64c9b886242dadc9d1d3c93bdcc2984a5b560883d7b4e2f54f491
+  description: 'IF WS-TIPO = ''D'' SUBTRACT WS-RETIRO FROM WS-SALDO END-IF: calculo
+    condicionado (Fase 5D, cierre P1-CORPUS-GAP-GT) -- SUBTRACT dentro de un IF,
+    verbo aritmetico distinto de COMPUTE/MULTIPLY (unicos verbos cubiertos hasta
+    5D), mismo normalizador unico.'
+  expected_rules:
+  - expectation_id: gt-positive-calculation-if-subtract::v2-calculation
+    rule_family: CALCULATION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'SUBTRACT...FROM normaliza via
+      semantic_effects_analyzer._normalize_calculation (mismo normalizador unico para
+      COMPUTE/ADD/SUBTRACT/MULTIPLY/DIVIDE, StatementKind.SUBTRACT) a un SemanticEffect
+      COMPUTE_VALUE con target_data_items=[WS-SALDO]. pipeline/v2_detectors.py::detect_calculation
+      exige un IF/EVALUATE envolvente via _nearest_enclosing_decision -- el SUBTRACT esta
+      anidado dentro del IF, decision_id resuelve contra el Decision real (identico mecanismo
+      que gt-positive-calculation-if-compute-multiplication, unicamente el verbo cambia).
+      support=PARTIAL siempre. enhanced_candidate_integration.py promueve a
+      RuleCandidate(rule_family=CALCULATION) SIN gate de semantic_tag.'
+- case_id: gt-positive-calculation-unconditional-add
+  kind: POSITIVE
+  program: GTCALC004
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_calculation_add_001.cbl
+    sha256: a62779c95e0ceabe1f58e0fb1fc791acc27c028aaacb1e056a4385a8d71fbfef
+  description: 'ADD WS-DEPOSITO TO WS-SALDO, unico statement de MAIN-PARA, SIN
+    IF/EVALUATE envolvente (Fase 5D, cierre P1-CORPUS-GAP-GT) -- verbo ADD incondicional,
+    no cubierto por el corpus formal previo a 5D (solo COMPUTE/MULTIPLY estaban
+    representados).'
+  expected_rules:
+  - expectation_id: gt-positive-calculation-unconditional-add::v2-calculation
+    rule_family: CALCULATION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'ADD...TO normaliza via semantic_effects_analyzer._normalize_calculation
+      (mismo normalizador unico, StatementKind.ADD) a un SemanticEffect COMPUTE_VALUE con
+      target_data_items=[WS-SALDO]. Sin IF/EVALUATE ancestro, _nearest_enclosing_decision(...)
+      devuelve None -- identico mecanismo que gt-positive-calculation-unconditional-compute-multiplication
+      (unicamente el verbo cambia): _convert_unconditional_calculation productiviza el
+      candidato con decision_id=None/condition=None.'
 - case_id: gt-positive-calculation-unconditional-compute-multiplication
   kind: POSITIVE
   program: GTCALC002
@@ -113,6 +130,29 @@ cases:
       SemanticEffect COMPUTE_VALUE -- nunca fabrica una Decision ni una condition
       sintetica. Confirmado con el JAR real: target_data_items=[WS-COMISION],
       parent_statement_id=None, unsupported_constructs=[].'
+- case_id: gt-positive-calculation-unconditional-divide-giving
+  kind: POSITIVE
+  program: GTCALC006
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_calculation_divide_001.cbl
+    sha256: 9ce6a46a6c41c092bb96b69bbff67d3304ca12cea5a726852db1b743205f90c4
+  description: 'DIVIDE WS-MONTO BY WS-CUOTAS GIVING WS-VALOR-CUOTA, unico statement
+    de MAIN-PARA, SIN IF/EVALUATE envolvente (Fase 5D, cierre P1-CORPUS-GAP-GT) --
+    verbo DIVIDE incondicional, no cubierto por el corpus formal previo a 5D. Sin
+    REMAINDER (esa clausula permanece deliberadamente no soportada).'
+  expected_rules:
+  - expectation_id: gt-positive-calculation-unconditional-divide-giving::v2-calculation
+    rule_family: CALCULATION
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'DIVIDE...GIVING normaliza via semantic_effects_analyzer._normalize_calculation
+      (mismo normalizador unico, StatementKind.DIVIDE) a un SemanticEffect COMPUTE_VALUE con
+      target_data_items=[WS-VALOR-CUOTA] (unicamente el cociente -- sin clausula REMAINDER en
+      este fixture, por lo que no aplica la limitacion documentada de esa clausula). Sin
+      IF/EVALUATE ancestro, _nearest_enclosing_decision(...) devuelve None -- identico mecanismo
+      que gt-positive-calculation-unconditional-multiply-giving (unicamente el verbo cambia):
+      _convert_unconditional_calculation productiviza el candidato con
+      decision_id=None/condition=None.'
 - case_id: gt-positive-calculation-unconditional-multiply-giving
   kind: POSITIVE
   program: GTCALC003
@@ -194,25 +234,38 @@ cases:
   - relative_path: config/ground_truth/fixtures/gt_return_code_001.cbl
     sha256: fc64626ecaf91901bd6983476dfd6fa0053e113bd8f9834509d9f011d537e582
   description: 'IF WS-MONTO > 1000 MOVE 99 TO WS-COD-RETORNO ELSE MOVE 0 TO WS-COD-RETORNO:
-    decision IF cuyas dos ramas escriben un DataItem taggeado return_code.'
+    decision IF cuyas dos ramas escriben un DataItem taggeado return_code.
+    expected_condition deliberadamente OMITIDO (5D-SAFETY-3 seccion 5): verificado
+    empiricamente que ambas ramas comparten el MISMO Decision.expression/condition
+    (''WS-MONTO>1000''), nunca distinto por rama -- expected_output_literal ya
+    discrimina sin fabricar una condicion artificial.'
   expected_rules:
-  - expectation_id: gt-positive-return-code-if-else::q0
+  - expectation_id: gt-positive-return-code-if-else::else
     rule_family: RETURN_CODE
     paragraph: MAIN-PARA
+    expected_output_literal: '0'
     minimum_count: 1
-    derivation_notes: 'WS-COD-RETORNO coincide con la regla return-code-name de
-      config/semantic-tags.yml ((?i).*(COD|CODE).*(RET|RETURN|RESP).*: contiene
-      "COD" seguido de "RETORNO", que contiene "RET"). semantic_graph_builder.py
-      construye Decision+LEADS_TO unicamente desde IF/EVALUATE, con LEADS_TO hacia
-      los DataItem escritos en las ramas (ver notas de construct_id=IF en
-      config/semantic_coverage.yaml). queries/v1/q0_candidates.cypher exige
-      exactamente Program-[:CONTAINS]->Paragraph-[:HAS_DECISION]->Decision-[:LEADS_TO]->DataItem
-      con DataItem.semantic_tag=''return_code'' -- ambas ramas de este IF satisfacen
-      ese patron para WS-COD-RETORNO, por lo que Q0 (detector_id=q0-return-code-decision)
-      debe producir al menos una fila. Confirmado con el JAR real de ProLeap (parser/target/
-      altamira-cobol-parser.jar parse): ambos MOVE (branch=THEN/ELSE) declaran
-      target_data_items=[WS-COD-RETORNO] con parent_statement_id apuntando al mismo IF, y
-      unsupported_constructs=[] (sin degradacion de extraccion).'
+    derivation_notes: 'WS-COD-RETORNO coincide con return-code-name de
+      config/semantic-tags.yml. queries/v1/q0_candidates.cypher exige
+      Program-[:CONTAINS]->Paragraph-[:HAS_DECISION]->Decision-[:LEADS_TO]->DataItem
+      con semantic_tag=''return_code''. 5D-SAFETY-2 (cierre BRANCH_EXPECTATION_NOT_EXACT):
+      un hecho funcional POR EXPECTATION -- MOVE 0 (rama ELSE) via
+      expected_output_literal=''0'' (UnifiedCandidateReference.output_literal, campo
+      estable ya existente). DEFAULT: V1 ghost coarse (outcome_code=None,
+      Decision.outcome_code queda None con 2 literales distintos en el subarbol)
+      nunca satisface esta expectation especifica -- MISSING honesto. ENHANCED:
+      V2_RETURN_CODE_PROPAGATION deterministico por-branch, output_literal=''0''.'
+  - expectation_id: gt-positive-return-code-if-else::then
+    rule_family: RETURN_CODE
+    paragraph: MAIN-PARA
+    expected_output_literal: '99'
+    minimum_count: 1
+    derivation_notes: 'Mismo mecanismo que la expectation ::else (ver esa nota) --
+      MOVE 99 (rama THEN) via expected_output_literal=''99''. Confirmado con el JAR
+      real: MOVE (branch=THEN) declara target_data_items=[WS-COD-RETORNO],
+      unsupported_constructs=[]. DEFAULT: MISSING honesto (V1 ghost coarse,
+      output_literal=None). ENHANCED: V2_RETURN_CODE_PROPAGATION deterministico,
+      output_literal=''99''.'
 - case_id: gt-positive-sql-select-into-state-transition
   kind: POSITIVE
   program: GTSQLST1
@@ -254,20 +307,37 @@ cases:
     real Catherine, Fase 15B3-C3-C-A): prueba que el enriquecimiento evidencial SQLCODE
     causal (Fase 15B3-C3-C-B) no rompe ni desvia la deteccion existente de STATE_TRANSITION.'
   expected_rules:
-  - expectation_id: gt-positive-sqlcode-evaluate-state-transition::v2-state-change
+  - expectation_id: gt-positive-sqlcode-evaluate-state-transition::when-0
     rule_family: STATE_TRANSITION
     paragraph: MAIN-PARA
+    expected_output_literal: A
     minimum_count: 1
     derivation_notes: 'Identico mecanismo que gt-positive-state-transition-if-status-target:
-      pipeline/v2_detectors.py::detect_state_change detecta la escritura deterministica
-      (MOVE literal) de WS-ESTADO-OPERACION dentro de cada branch de la EVALUATE --
-      support=PARTIAL. enhanced_candidate_integration.py promueve a
-      RuleCandidate(rule_family=STATE_TRANSITION) porque WS-ESTADO-OPERACION matchea
-      status-name de config/semantic-tags.yml. SQLCODE nunca se declara como DataItem
-      (Fase 15B3-C3-C-A seccion 4: el detector no lo requiere) -- el enriquecimiento
-      SQLCODE causal (Fase 15B3-C3-C-B, context_package_builder.
-      _enrich_decision_with_sql_causal_evidence) agrega evidencia adicional al
-      ContextPackageDecision sin alterar candidate_id/condition/effect/rule_family.'
+      detect_state_change detecta la escritura deterministica (MOVE literal) de
+      WS-ESTADO-OPERACION -- support=PARTIAL. Promovido a RuleCandidate(STATE_TRANSITION)
+      porque WS-ESTADO-OPERACION matchea status-name. 5D-SAFETY-2 (cierre
+      BRANCH_EXPECTATION_NOT_EXACT): un hecho funcional POR EXPECTATION -- WHEN 0 ->
+      MOVE ''A'' via expected_output_literal=''A''. SQLCODE nunca se declara como
+      DataItem -- el enriquecimiento causal agrega evidencia sin alterar
+      candidate_id/condition/effect/rule_family. expected_condition deliberadamente
+      OMITIDO (5D-SAFETY-3 seccion 5): verificado empiricamente que las 3 ramas
+      comparten el MISMO Decision.expression/condition (''SQLCODE''), nunca distinto
+      por rama -- expected_output_literal ya discrimina sin fabricar una condicion
+      artificial por WHEN.'
+  - expectation_id: gt-positive-sqlcode-evaluate-state-transition::when-100
+    rule_family: STATE_TRANSITION
+    paragraph: MAIN-PARA
+    expected_output_literal: N
+    minimum_count: 1
+    derivation_notes: 'Mismo mecanismo que la expectation ::when-0 (ver esa nota) --
+      WHEN +100 -> MOVE ''N'' via expected_output_literal=''N''.'
+  - expectation_id: gt-positive-sqlcode-evaluate-state-transition::when-other
+    rule_family: STATE_TRANSITION
+    paragraph: MAIN-PARA
+    expected_output_literal: E
+    minimum_count: 1
+    derivation_notes: 'Mismo mecanismo que la expectation ::when-0 (ver esa nota) --
+      WHEN OTHER -> MOVE ''E'' via expected_output_literal=''E''.'
 - case_id: gt-positive-state-transition-if-status-target
   kind: POSITIVE
   program: GTST001
@@ -296,7 +366,7 @@ cases:
       ver gt-negative-state-transition-nonfunctional-indicator-name). No usa LLM ni
       heuristica de texto libre: unicamente el semantic_tag ya asignado por SemanticTagger.'
 summary:
-  case_count: 12
-  positive_case_count: 10
+  case_count: 14
+  positive_case_count: 12
   negative_case_count: 2
-  expected_rule_count: 10
+  expected_rule_count: 15

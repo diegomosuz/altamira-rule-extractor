@@ -189,6 +189,7 @@ def adapt_v1_candidates(
             target=None,
             input_literal=None,
             output_literal=candidate.outcome_code,
+            condition=candidate.condition,
             evidence_ids=[],
             barrier_codes=[],
             provenance_references=_sorted_unique(
@@ -240,6 +241,7 @@ def adapt_productive_candidates(
             target=None,
             input_literal=None,
             output_literal=candidate.outcome_code,
+            condition=candidate.condition,
             evidence_ids=_sorted_unique(candidate.evidence_ids),
             barrier_codes=[],
             provenance_references=_sorted_unique(

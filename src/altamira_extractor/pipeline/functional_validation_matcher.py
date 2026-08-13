@@ -121,14 +121,45 @@ def _not_evaluated_result(case: GroundTruthCase) -> GroundTruthCaseResult:
     )
 
 
-def _matches_expected_rule(
+def _matches_case_scope(
     reference: UnifiedCandidateReference, *, rule: GroundTruthExpectedRule, program: str
 ) -> bool:
+    """5D-SAFETY-3 seccion 6: family+program+paragraph UNICAMENTE (sin
+    literal/condition) -- define que candidatos "pertenecen" al scope de
+    un `GroundTruthCase`, para poder distinguir un candidato realmente no
+    esperado (nunca satisface ninguna expectation del caso) de uno que
+    simplemente satisface una expectation DISTINTA."""
     if reference.rule_family != rule.rule_family:
         return False
     if (reference.program or "").strip() != program.strip():
         return False
     if rule.paragraph is not None and (reference.paragraph or "").strip() != rule.paragraph.strip():
+        return False
+    return True
+
+
+def _matches_expected_rule(
+    reference: UnifiedCandidateReference, *, rule: GroundTruthExpectedRule, program: str
+) -> bool:
+    if not _matches_case_scope(reference, rule=rule, program=program):
+        return False
+    # 5D-SAFETY-2 (cierre de BRANCH_EXPECTATION_NOT_EXACT): opcional --
+    # None preserva el comportamiento historico. Declarado, discrimina un
+    # candidato de literal equivocado (misma family/program/paragraph) de
+    # uno que realmente satisface ESTE hecho funcional especifico.
+    if (
+        rule.expected_output_literal is not None
+        and (reference.output_literal or "").strip() != rule.expected_output_literal.strip()
+    ):
+        return False
+    # 5D-SAFETY-3 seccion 4: opcional -- None preserva compatibilidad.
+    # Declarado, exige ADEMAS coincidencia exacta de condition (ver
+    # advertencia en GroundTruthExpectedRule.expected_condition: nunca
+    # distingue ramas de la MISMA Decision, solo Decisions distintas).
+    if (
+        rule.expected_condition is not None
+        and (reference.condition or "").strip() != rule.expected_condition.strip()
+    ):
         return False
     return True
 
@@ -216,6 +247,24 @@ def _evaluate_positive_case(
         if all(r.outcome == MatchOutcome.MATCHED for r in expectation_results)
         else MatchOutcome.MISSING
     )
+    # 5D-SAFETY-3 secciones 6-7: un candidato DENTRO del scope del caso
+    # (family+program+paragraph de alguna expected_rule) que no satisface
+    # NINGUNA expectation especifica (p. ej. output_literal/condition no
+    # coincide con ninguna declarada) es un hecho no esperado real -- para
+    # casos SIN discriminacion adicional (todas las expected_rules sin
+    # expected_output_literal/expected_condition) esto siempre da vacio
+    # (la unica expectation, sin filtro, ya capturo todo el scope),
+    # preservando el comportamiento historico (Seccion 9).
+    matched_union = {rid for r in expectation_results for rid in r.matched_unified_reference_ids}
+    unexpected_ids = sorted(
+        reference.unified_reference_id
+        for reference in candidate_references
+        if reference.unified_reference_id not in matched_union
+        and any(
+            _matches_case_scope(reference, rule=rule, program=case.program)
+            for rule in case.expected_rules
+        )
+    )
     case_metrics = None
     if case_outcome == MatchOutcome.MATCHED:
         candidate_references_by_id = {
@@ -234,6 +283,7 @@ def _evaluate_positive_case(
         applicability=Applicability.APPLICABLE,
         outcome=case_outcome,
         expectation_results=expectation_results,
+        unexpected_candidate_reference_ids=unexpected_ids,
         case_metrics=case_metrics,
     )
 
@@ -276,6 +326,12 @@ def _compute_metrics(case_results: Sequence[GroundTruthCaseResult]) -> Functiona
             false_negative_count += sum(
                 1 for r in case.expectation_results if r.outcome == MatchOutcome.MISSING
             )
+            # 5D-SAFETY-3 secciones 6-7: candidato dentro del scope del
+            # caso que no satisface ninguna expectation especifica -- FP
+            # real, nunca invisible (siempre vacio para casos sin
+            # discriminacion adicional, ver docstring de _evaluate_
+            # positive_case).
+            false_positive_count += len(case.unexpected_candidate_reference_ids)
         elif case.outcome == MatchOutcome.UNEXPECTED_CANDIDATES:
             false_positive_count += 1
         else:

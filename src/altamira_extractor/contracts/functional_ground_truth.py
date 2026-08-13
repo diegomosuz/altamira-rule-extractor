@@ -71,11 +71,41 @@ class GroundTruthCaseKind(StrEnum):
 class GroundTruthExpectedRule(AltamiraBaseModel):
     """Expectativa estructurada de UN resultado esperado. Solo valida
     para `GroundTruthCaseKind.POSITIVE` -- un caso NEGATIVE nunca declara
-    `expected_rules` (la ausencia es la expectativa completa)."""
+    `expected_rules` (la ausencia es la expectativa completa).
+
+    `expected_output_literal` (Fase 15B4-CANDIDATE-QUALITY-5D-SAFETY-2,
+    cierre de `BRANCH_EXPECTATION_NOT_EXACT`): `None` preserva el
+    comportamiento historico (family+paragraph+minimum_count, sin
+    discriminar por literal -- suficiente para toda regla de un solo
+    hecho). Cuando se declara, `_matches_expected_rule` (Parte F) exige
+    ADEMAS `reference.output_literal == expected_output_literal` --
+    reutiliza `UnifiedCandidateReference.output_literal`, un campo ya
+    existente y estable (nunca derivado de `run_id`/hash de
+    candidate_id/ordinal de linea/path temporal), nunca un campo nuevo en
+    `RuleCandidate`. Existe precisamente para que un caso multi-branch
+    (IF/ELSE, EVALUATE) pueda declarar una `GroundTruthExpectedRule` POR
+    CADA hecho funcional distinto -- un candidato con el literal
+    equivocado ya no puede "rellenar" silenciosamente la cuenta de otro
+    branch.
+
+    `expected_condition` (Fase 15B4-CANDIDATE-QUALITY-5D-SAFETY-3): `None`
+    preserva compatibilidad -- opcional, nunca exigido. Reutiliza
+    `UnifiedCandidateReference.condition` (`RuleCandidate.condition`/
+    `Decision.expression`, estable para una fixture versionada, nunca
+    derivado de run_id/hash/ordinal de linea). ADVERTENCIA verificada
+    empiricamente (5D-SAFETY-3 seccion 5): `condition` describe la
+    Decision COMPLETA, NUNCA una rama individual -- todos los candidatos
+    de un mismo IF/EVALUATE comparten el MISMO valor. Nunca declarar
+    `expected_condition` distinto entre expectations de branches de la
+    MISMA Decision (eso fabricaria una discriminacion inexistente); solo
+    tiene sentido cuando dos expectations provienen de Decisions
+    REALMENTE distintas."""
 
     expectation_id: str = Field(min_length=1, max_length=100)
     rule_family: UnifiedRuleFamily
     paragraph: str | None = None
+    expected_output_literal: str | None = None
+    expected_condition: str | None = None
     minimum_count: int = Field(default=1, ge=1)
     derivation_notes: str = Field(min_length=1, max_length=1000)
 

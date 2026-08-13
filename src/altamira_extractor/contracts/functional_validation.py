@@ -356,10 +356,14 @@ class GroundTruthCaseResult(AltamiraBaseModel):
     candidatos).
 
     Cuando `applicability=APPLICABLE`: para `kind=POSITIVE`,
-    `expectation_results` siempre tiene la misma cantidad de entradas
-    que `expected_rules` del caso original y
-    `unexpected_candidate_reference_ids` siempre esta vacia. Para
-    `kind=NEGATIVE`, `expectation_results` siempre esta vacia."""
+    `expectation_results` siempre tiene la misma cantidad de entradas que
+    `expected_rules` del caso original. `unexpected_candidate_reference_
+    ids` (Fase 15B4-CANDIDATE-QUALITY-5D-SAFETY-3, secciones 6-7): para
+    `kind=POSITIVE` puede ser NO vacia -- un candidato dentro del scope
+    del caso (family+program+paragraph de alguna expected_rule) que no
+    satisface NINGUNA expectation especifica es un hecho no esperado
+    real, nunca invisible. Para `kind=NEGATIVE`, `expectation_results`
+    siempre esta vacia."""
 
     case_id: str = Field(min_length=1, max_length=100)
     kind: GroundTruthCaseKind
@@ -404,11 +408,11 @@ class GroundTruthCaseResult(AltamiraBaseModel):
                 "outcome=NOT_EVALUATED"
             )
         if self.kind == GroundTruthCaseKind.POSITIVE:
-            if self.unexpected_candidate_reference_ids:
-                raise ValueError(
-                    f"case_id={self.case_id!r}: kind=POSITIVE no puede declarar "
-                    "unexpected_candidate_reference_ids"
-                )
+            # 5D-SAFETY-3 secciones 6-7: kind=POSITIVE SI puede declarar
+            # unexpected_candidate_reference_ids -- un candidato en scope
+            # que no satisface ninguna expectation especifica (nunca lo
+            # contrario: no puede coexistir con applicability=
+            # NOT_APPLICABLE, ya validado arriba).
             if not self.expectation_results:
                 raise ValueError(
                     f"case_id={self.case_id!r}: kind=POSITIVE exige al menos un "
@@ -574,6 +578,11 @@ class FunctionalValidationReport(AltamiraBaseModel):
                 expected_fn += sum(
                     1 for r in case.expectation_results if r.outcome == MatchOutcome.MISSING
                 )
+                # 5D-SAFETY-3 secciones 6-7: candidato en scope sin
+                # expectation que lo reclame -- FP real, mismo criterio
+                # que pipeline/functional_validation_matcher.py::
+                # _compute_metrics.
+                expected_fp += len(case.unexpected_candidate_reference_ids)
             else:
                 if case.outcome == MatchOutcome.UNEXPECTED_CANDIDATES:
                     expected_fp += 1

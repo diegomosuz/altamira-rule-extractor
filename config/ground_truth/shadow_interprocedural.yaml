@@ -1,0 +1,51 @@
+# Ground truth SHADOW/diagnostico (Fase 15B4-CANDIDATE-QUALITY-5D-SAFETY,
+# seccion 1): catalogo SEPARADO, exclusivamente para capacidades
+# interprocedurales que `candidates_detected_stage.py` NUNCA productiviza
+# (BY_REFERENCE_RULE/BY_REFERENCE_OUTPUT es shadow-only por diseno
+# arquitectonico, ver `enhanced_candidate_integration.py`, "Deliberadamente
+# fuera de alcance").
+#
+# NUNCA usar este archivo como `ground_truth_path` de un release/productive
+# gate -- solo `compute_functional_validation_report_from_promotion_
+# assessment` (validation_source=PROMOTION_ASSESSMENT_SHADOW) lo consume,
+# vía `tests/pipeline/test_ground_truth_by_reference_output_integration.py`.
+# El catalogo PRODUCTIVO real es exclusivamente
+# `config/ground_truth/synthetic_engineering.yaml`, que NUNCA declara una
+# capacidad no-PRODUCTIVE_RULE como expected positive business-rule fact.
+schema_version: "1.0"
+catalog_edition: fase-15b4-5d-safety-shadow-2026.08.13
+cases:
+- case_id: gt-positive-by-reference-output-unconditional-move
+  kind: POSITIVE
+  program: GTBRCLR1
+  fixtures:
+  - relative_path: config/ground_truth/fixtures/gt_by_reference_output_callee_001.cbl
+    sha256: d4db8a7994ae649e010e01647b1f04e9a383fc907ee6f78bbb53eb356a84ab8d
+  - relative_path: config/ground_truth/fixtures/gt_by_reference_output_caller_001.cbl
+    sha256: 19b5352db448eefe16f57f846fd046d92a79deb355421082812c86170f2a5fa9
+  description: 'GTBRCLR1 (caller) invoca CALL ''GTBRCLE1'' USING BY REFERENCE WS-STATUS;
+    GTBRCLE1 (callee) ejecuta MOVE ''OK00'' TO LK-STATUS UNCONDICIONAL antes de GOBACK --
+    caso interprocedural genuino, dos programas. BY_REFERENCE_OUTPUT es
+    DEFERRED_UNSUPPORTED en el path productivo (nunca llega a 06-candidates.json) -- este
+    caso vive AQUI (catalogo shadow), nunca en el catalogo productivo.'
+  expected_rules:
+  - expectation_id: gt-positive-by-reference-output-unconditional-move::interprocedural-by-reference
+    rule_family: BY_REFERENCE_OUTPUT
+    paragraph: MAIN-PARA
+    minimum_count: 1
+    derivation_notes: 'detect_by_reference_rule exige exit_fact status=PROPAGATED
+      (_exit_fact_for_binding -> _known_literal_at con parent_scope=None): busca el ULTIMO
+      PropagatedValueFact de GTBRCLE1 escrito a LK-STATUS fuera de cualquier decision. La unica
+      escritura es MOVE ''OK00'' TO LK-STATUS, top-level en MAIN-PARA -- produce un unico fact
+      literal, exit_fact queda PROPAGATED con literal=''OK00''. callee_exit_barrier=None (GOBACK
+      nunca es barrera). binding RESOLVED_POSITIONAL (unico parametro LINKAGE). Mapeo
+      BY_REFERENCE_RULE -> BY_REFERENCE_OUTPUT via candidate_source_adapters.py,
+      program=caller_program, paragraph=caller_paragraph. Confirmado end-to-end con el pipeline
+      real hasta PARSED + compute_interprocedural_rule_candidates_artifact (sin Neo4j): 1
+      candidato support=DETERMINISTIC caller=GTBRCLR1 callee=GTBRCLE1 target=WS-STATUS
+      output_literal=OK00, sin barriers ni diagnostics.'
+summary:
+  case_count: 1
+  positive_case_count: 1
+  negative_case_count: 0
+  expected_rule_count: 1

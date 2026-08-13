@@ -70,6 +70,9 @@ _ALL_GROUND_TRUTH_FIXTURES = (
     "gt_sql_select_into_state_transition_001.cbl",
     "gt_sqlcode_evaluate_state_transition_001.cbl",
     "gt_declared_value_return_code_001.cbl",
+    "gt_calculation_add_001.cbl",
+    "gt_calculation_subtract_001.cbl",
+    "gt_calculation_divide_001.cbl",
 )
 
 
