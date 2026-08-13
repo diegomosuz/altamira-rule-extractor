@@ -105,15 +105,19 @@ def _write_declared_value_package_zip(path: Path) -> Path:
 
 
 def _declared_value_settings(tmp_path: Path, *, run_label: str) -> Settings:
-    # enhanced_candidates_enabled NUNCA se activa aqui: prueba que
-    # declared_value provenance enriquece una regla RETURN_CODE ya
-    # productiva por el path default V1/Q0, sin ningun flag.
+    # enhanced_candidates_enabled NUNCA se activa aqui (explicito): prueba
+    # que declared_value provenance enriquece una regla RETURN_CODE
+    # producida por el path V1/Q0, sin ninguna dependencia de la
+    # deteccion ampliada. (Fase 15B4-CANDIDATE-QUALITY-5E: el default
+    # global paso a True; se fija False explicitamente para preservar
+    # el aislamiento que este test documenta.)
     return build_hermetic_settings(
         tmp_path / f"hermetic_data_{run_label}",
         NEO4J_URI=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
         NEO4J_USER=os.environ.get("NEO4J_USER", "neo4j"),
         NEO4J_PASSWORD=os.environ.get("NEO4J_PASSWORD", "neo4j"),
         NEO4J_DATABASE=os.environ.get("NEO4J_DATABASE", "neo4j"),
+        enhanced_candidates_enabled=False,
     )
 
 

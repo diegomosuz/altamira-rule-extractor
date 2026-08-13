@@ -78,11 +78,18 @@ def test_catherine_original_end_to_end_preserves_level_88_semantics(
 ) -> None:
     _require_catherine_fixtures()
     require_jar()
-    settings = build_settings(tmp_path)
-    # Catherine original usa SET condicion-88 (nunca MOVE literal a
-    # WS-COD-RETORNO): Q0 (patron Decision-[:LEADS_TO]->DataItem{semantic_
-    # tag:'return_code'}, sin cambios en esta fase) no reconoce ese patron,
-    # asi que se espera CERO candidatos y por lo tanto CERO llamadas LLM.
+    # Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    # explicito. Catherine original usa SET condicion-88 (nunca MOVE
+    # literal a WS-COD-RETORNO): Q0 (patron Decision-[:LEADS_TO]->
+    # DataItem{semantic_tag:'return_code'}) no reconoce ese patron, asi
+    # que se espera CERO candidatos V1/Q0 y por lo tanto CERO llamadas
+    # LLM -- con el default ampliado (True) el detector
+    # LEVEL_88_RETURN_CODE SI reconoce este patron (ver
+    # docs/CAPABILITY_COVERAGE_1_17.md, 13 candidatos), pero eso es un
+    # escenario distinto, cubierto por otros tests.
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
+    # Q0 no reconoce el patron SET condicion-88: se espera CERO
+    # candidatos y por lo tanto CERO llamadas LLM.
     install_fake_client(monkeypatch, rule_drafts_stage_module, [])
     install_fake_client(monkeypatch, guardrails_stage_module, [])
 

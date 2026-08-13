@@ -358,16 +358,21 @@ class Settings(BaseSettings):
     trusted_hosts: list[str] = Field(default_factory=lambda: ["*"])
     hsts_enabled: bool = False
 
-    # Realineacion minima del motor de reglas (Fase 15B3-B). Con el
-    # default `False`, CANDIDATES_DETECTED es byte-compatible con V1: solo
-    # ejecuta Q0. Con `True`, ademas ejecuta en memoria los detectores V2
-    # RETURN_CODE_RULE/LEVEL_88_RETURN_CODE_RULE (nunca STATE_CHANGE_RULE,
-    # que nunca es DETERMINISTIC) sobre los mismos artefactos ya
+    # Realineacion minima del motor de reglas (Fase 15B3-B, default
+    # flippeado a `True` en Fase 15B4-CANDIDATE-QUALITY-5E tras cerrar el
+    # corpus GT formal con FP=0/FN=0/precision=recall=f1=1.0). Con
+    # `False`, CANDIDATES_DETECTED es byte-compatible con V1: solo
+    # ejecuta Q0 (modo legacy/conservador, sigue disponible explicitamente
+    # para el operador que lo necesite). Con el default `True`, ademas
+    # ejecuta en memoria los detectores V2 RETURN_CODE_RULE/
+    # LEVEL_88_RETURN_CODE_RULE/STATE_CHANGE_RULE (promovido a
+    # STATE_TRANSITION unicamente cuando el target tiene
+    # semantic_tag in {status, status_flag}, ver enhanced_candidate_
+    # integration.py)/CALCULATION_RULE sobre los mismos artefactos ya
     # persistidos por PARSED/SEMANTIC_GRAPH_BUILT, y agrega unicamente los
-    # candidatos no cubiertos ya por V1 a `artifacts/06-candidates.json`
-    # (ver pipeline/enhanced_candidate_integration.py). V1 nunca se
-    # modifica ni se reordena.
-    enhanced_candidates_enabled: bool = False
+    # candidatos no cubiertos ya por V1 a `artifacts/06-candidates.json`.
+    # V1 nunca se modifica ni se reordena.
+    enhanced_candidates_enabled: bool = True
 
     # Localizacion estable de config/semantic_coverage.yaml (Fase 15B2-A
     # Parte B/C/D: manifiesto estatico de cobertura semantica y

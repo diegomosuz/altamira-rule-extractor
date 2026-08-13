@@ -355,9 +355,12 @@ def test_real_ready_for_controlled_review_v2_interprocedural_exact_match(
     paquete, ver docstring de modulo), cero conflictos, provenance
     completo, target/output presentes, cero barreras -- disposition
     `READY_FOR_CONTROLLED_REVIEW` para AMBAS referencias, contadas como
-    DOS referencias distintas (nunca fusionadas en una)."""
+    DOS referencias distintas (nunca fusionadas en una).
+
+    Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- el escenario exige baseline V1/Q0 en cero candidatos."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
 
     run_dir, run_id, succeeded_stages = _run_pipeline(settings, ready_blocked_zip)
     assert "PARSED" in succeeded_stages

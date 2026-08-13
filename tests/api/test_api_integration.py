@@ -214,9 +214,14 @@ def test_api_guardrail_count_zero_reaches_completed_when_q0_finds_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Un paquete sin patron de return_code: Q0 no encuentra candidatos y
-    el pipeline igual alcanza COMPLETED (0 reglas), sin llamar al LLM."""
+    el pipeline igual alcanza COMPLETED (0 reglas), sin llamar al LLM.
+
+    Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- el programa fixture SI contiene un ADD (CALCULATION),
+    asi que el escenario "cero candidatos" es especificamente sobre
+    Q0/V1, no sobre la deteccion ampliada."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
     # Ningun candidato: ni RULE_DRAFTS_GENERATED ni GUARDRAILS_APPLIED
     # deberian llamar al LLM.
     install_fake_client(monkeypatch, rule_drafts_stage_module, [])

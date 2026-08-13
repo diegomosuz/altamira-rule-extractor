@@ -260,8 +260,8 @@ exactamente igual que antes de esta fase.
 ## Fase 15B3-B: integración productiva opt-in de RETURN_CODE_RULE/LEVEL_88_RETURN_CODE_RULE
 
 "Realineación mínima del motor de extracción de reglas": con
-`Settings.enhanced_candidates_enabled=true` (`False` por defecto,
-`ALTAMIRA_ENHANCED_CANDIDATES_ENABLED`), la etapa `CANDIDATES_DETECTED`
+`Settings.enhanced_candidates_enabled=true`
+(`ALTAMIRA_ENHANCED_CANDIDATES_ENABLED`), la etapa `CANDIDATES_DETECTED`
 (`pipeline/candidates_detected_stage.py`) ejecuta, **después** de Q0 y
 en memoria (sin persistir ningún diagnóstico), exactamente
 `detect_return_code_propagation`/`detect_level_88_return_code` de este
@@ -270,14 +270,15 @@ mismo módulo (`v2_detectors.py`, sin modificar) sobre
 `v2-candidates-shadow`, nunca una copia ni una reimplementación. Ver
 `pipeline/enhanced_candidate_integration.py`.
 
-Alcance deliberadamente parcial:
+Alcance deliberadamente parcial (Fase 15B3-B, momento de esta sección):
 
 - **Integrados**: `RETURN_CODE_RULE`, `LEVEL_88_RETURN_CODE_RULE` —
   ambos anclados a una `Decision` real, compatibles sin cambios con las
   queries Q4/Q5a de `context_package_builder.py` (que exigen un
   `decision_id` correspondiente a un nodo `Decision` existente).
-- **Nunca integrado**: `STATE_CHANGE_RULE` — nunca `DETERMINISTIC`
-  (siempre `PARTIAL`), CLAUDE.md prohíbe que `PARTIAL` se convierta
+- **Nunca integrado EN FASE 15B3-B** (corregido en Fase 15B3-C1, ver
+  nota abajo): `STATE_CHANGE_RULE` — nunca `DETERMINISTIC` (siempre
+  `PARTIAL`); CLAUDE.md prohíbe que `PARTIAL` se convierta
   automáticamente en aprobado.
 - **Nunca integrado en esta fase**: `InterproceduralRuleType.
   BY_REFERENCE_RULE` (`docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md`)
@@ -311,8 +312,18 @@ estructural de Q0), `support_level` (`Literal["DETERMINISTIC"]` — los
 únicos candidatos que llegan aquí), `evidence_ids` (vacío para V1).
 Runs históricos sin estos campos siguen siendo válidos.
 
-Con el flag en `False` (default), `CANDIDATES_DETECTED` es
-byte-compatible con el comportamiento anterior a esta fase.
+Con el flag en `False`, `CANDIDATES_DETECTED` es byte-compatible con el
+comportamiento anterior a esta fase.
+
+**Nota (Fase 15B4-CANDIDATE-QUALITY-5E)**: desde Fase 15B3-C1/C2 el
+alcance integrado creció -- `STATE_CHANGE_RULE` (promovido a
+`STATE_TRANSITION` cuando el target tiene `semantic_tag in {status,
+status_flag}`) y `CALCULATION_RULE` también se productivizan bajo este
+mismo flag. Desde Fase 5E, `enhanced_candidates_enabled=True` es el
+**default** (antes `False`) -- el modo `False`/legacy sigue disponible
+explícitamente. Ver `docs/CAPABILITY_COVERAGE_1_17.md` para la matriz de
+capacidades vigente; esta sección documenta el estado histórico de Fase
+15B3-B, no el alcance actual.
 
 ## Procedimiento futuro de promoción
 

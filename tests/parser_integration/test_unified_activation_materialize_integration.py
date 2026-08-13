@@ -144,8 +144,10 @@ def _write_authorization(
 
 
 def test_real_six_step_materialization_cycle(tmp_path: Path, ready_blocked_zip: Path) -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- reutiliza el escenario de baseline V1/Q0 controlado."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
 
     run_dir, run_id, succeeded_stages = _run_pipeline(settings, ready_blocked_zip)
     assert "PARSED" in succeeded_stages

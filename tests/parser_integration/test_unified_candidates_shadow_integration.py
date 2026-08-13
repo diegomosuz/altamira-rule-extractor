@@ -87,9 +87,12 @@ def test_real_two_equivalent_proposals_produce_single_valid_shadow_group(
     equivalentes (V2 + interprocedural), 100% reales, deben producir
     exactamente 2 `shadow_members`, 1 `shadow_group` `VALID`/
     `NOT_IN_BASELINE`, con ambos `source_candidate_id`/`review_decision_id`
-    preservados y ningun candidato fuente elegido como "ganador"."""
+    preservados y ningun candidato fuente elegido como "ganador".
+
+    Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- el escenario exige baseline V1/Q0 en cero candidatos."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
 
     run_dir, run_id, succeeded_stages = _run_pipeline(settings, ready_blocked_zip)
     assert "PARSED" in succeeded_stages

@@ -248,7 +248,14 @@ def _base_kwargs(tmp_path: Path, *, run_stages: list[StageExecution]) -> dict[st
     _write_invariants(invariants_path, semantic_graph_hash=semantic_graph_hash)
     _write_q0_cypher(q0_path)
 
-    settings = Settings(semantic_tags_path=semantic_tags_path)
+    # Fase 15B4-CANDIDATE-QUALITY-5E: default global paso a True: esta
+    # base de kwargs fija explicitamente el modo V1-only (legacy) porque
+    # los tests V1/V2 de esta seccion construyen su propio settings con
+    # enhanced_candidates_enabled=True cuando lo necesitan (ver
+    # test_enhanced_enabled_*), y varios tests base usan un
+    # canonical_dir vacio que no soporta la carga de CanonicalProgram
+    # que requiere el modo ampliado.
+    settings = Settings(semantic_tags_path=semantic_tags_path, enhanced_candidates_enabled=False)
     return {
         "run_id": _RUN_ID,
         "source_package_hash": _HASH_A,
@@ -711,9 +718,12 @@ def _install_detect_enhanced_candidates(
     return calls
 
 
-def test_enhanced_disabled_by_default_never_calls_enhanced_detection(
+def test_enhanced_disabled_via_explicit_false_never_calls_enhanced_detection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5E: el default global paso a True;
+    este test fija enhanced_candidates_enabled=False explicitamente
+    (via _base_kwargs) para seguir cubriendo el modo V1-only legacy."""
     kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
     active = _matching_active_graph_load(graph, semantic_graph_hash)
     stub = _StubRepository(active=active)
@@ -800,7 +810,8 @@ def test_v1_candidate_without_source_file_is_preserved_with_warning(
     CANDIDATES_DETECTED (antes: ValidationError sin capturar,
     propagada como CandidateDetectionError) -- se persiste igual, con
     un warning trazable en el artefacto, incluso con
-    `enhanced_candidates_enabled=False` (default)."""
+    `enhanced_candidates_enabled=False` (explicito via _base_kwargs;
+    Fase 15B4-CANDIDATE-QUALITY-5E cambio el default global a True)."""
     kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
     active = _matching_active_graph_load(graph, semantic_graph_hash)
     stub = _StubRepository(active=active)

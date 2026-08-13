@@ -365,7 +365,7 @@ def write_disabled_dev_security_config(tmp_path: Path) -> Path:
     return path
 
 
-def build_settings(tmp_path: Path) -> Settings:
+def build_settings(tmp_path: Path, **overrides: object) -> Settings:
     """Settings sinteticas para los E2E de proceso unico. `_env_file=None`
     (checkpoint correctivo): nunca carga `.env`, sin importar que archivo
     exista en el CWD del proceso de test -- mismo mecanismo que
@@ -373,20 +373,27 @@ def build_settings(tmp_path: Path) -> Settings:
     `FAKE_LLM_*` (`.invalid`, RFC 2606) se reutilizan aqui en vez de un
     dominio de ejemplo que, aunque nunca deberia dialarse (todo E2E real
     parchea `OpenAICompatibleChatClient`), no ofrecia la misma garantia
-    de "nunca resuelve DNS" que el sentinel hermetico."""
+    de "nunca resuelve DNS" que el sentinel hermetico.
+
+    `**overrides` (Fase 15B4-CANDIDATE-QUALITY-5E): permite a un llamador
+    fijar explicitamente campos como `enhanced_candidates_enabled` cuando
+    su fixture depende de un baseline V1/Q0 controlado -- mismo patron ya
+    establecido en `build_hermetic_settings`."""
     prompts = write_prompt_files(tmp_path)
-    return Settings(  # type: ignore[call-arg]
-        _env_file=None,
-        data_dir=tmp_path / "data",
-        runs_dir=tmp_path / "data" / "runs",
-        incoming_dir=tmp_path / "data" / "incoming",
-        security_config_path=write_disabled_dev_security_config(tmp_path),
-        LLM_PROVIDER="openai",
-        OPENAI_API_KEY=FAKE_LLM_API_KEY,
-        OPENAI_BASE_URL=FAKE_LLM_BASE_URL,
-        OPENAI_MODEL=FAKE_LLM_MODEL,
-        rule_writer_system_prompt_path=prompts["writer_system"],
-        rule_writer_user_prompt_path=prompts["writer_user"],
-        rule_repair_system_prompt_path=prompts["repair_system"],
-        rule_repair_user_prompt_path=prompts["repair_user"],
-    )
+    defaults: dict[str, object] = {
+        "_env_file": None,
+        "data_dir": tmp_path / "data",
+        "runs_dir": tmp_path / "data" / "runs",
+        "incoming_dir": tmp_path / "data" / "incoming",
+        "security_config_path": write_disabled_dev_security_config(tmp_path),
+        "LLM_PROVIDER": "openai",
+        "OPENAI_API_KEY": FAKE_LLM_API_KEY,
+        "OPENAI_BASE_URL": FAKE_LLM_BASE_URL,
+        "OPENAI_MODEL": FAKE_LLM_MODEL,
+        "rule_writer_system_prompt_path": prompts["writer_system"],
+        "rule_writer_user_prompt_path": prompts["writer_user"],
+        "rule_repair_system_prompt_path": prompts["repair_system"],
+        "rule_repair_user_prompt_path": prompts["repair_user"],
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # type: ignore[arg-type, call-arg]

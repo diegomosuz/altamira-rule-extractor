@@ -77,8 +77,22 @@ def test_activation_governance_audit_modules_never_import_enhanced_detection(
     )
 
 
-def test_settings_default_is_disabled() -> None:
-    assert Settings(_env_file=None).enhanced_candidates_enabled is False
+def test_settings_default_is_enabled() -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5E: default flippeado False -> True --
+    las 4 familias V2 (RETURN_CODE_PROPAGATION/LEVEL_88_RETURN_CODE/
+    STATE_TRANSITION/CALCULATION) alcanzaron el criterio de cierre
+    formal (FP=0/FN=0/precision=recall=f1=1.0) y quedan activas por
+    defecto en 1.17. El modo legacy/conservador sigue disponible via
+    `enhanced_candidates_enabled=False` explicito -- ver
+    test_explicit_false_override_still_supported."""
+    assert Settings(_env_file=None).enhanced_candidates_enabled is True
+
+
+def test_explicit_false_override_still_supported() -> None:
+    """Seccion 14 (5E): el flag nunca se elimina -- un operador debe
+    poder seguir forzando el modo legacy/conservador explicitamente."""
+    settings = Settings(_env_file=None, enhanced_candidates_enabled=False)
+    assert settings.enhanced_candidates_enabled is False
 
 
 def test_no_second_flag_was_introduced() -> None:

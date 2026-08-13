@@ -469,9 +469,10 @@ def test_enhanced_pipeline_repeated_run_produces_same_candidate_ids_and_order(
 
 def test_enhanced_flag_disabled_produces_only_v1_candidate(tmp_path: Path) -> None:
     """Contraste directo: el MISMO paquete con
-    `enhanced_candidates_enabled=false` (default) produce unicamente el
+    `enhanced_candidates_enabled=false` explicito produce unicamente el
     candidato V1 (CHECK-SALDO-PARA) -- la propagacion y el nivel 88
-    nunca aparecen."""
+    nunca aparecen. (Fase 15B4-CANDIDATE-QUALITY-5E: el default global
+    paso a True; este test fija el modo legacy explicitamente.)"""
     require_jar()
     from altamira_extractor.pipeline.runner import run_ingestion
 
@@ -482,6 +483,7 @@ def test_enhanced_flag_disabled_produces_only_v1_candidate(tmp_path: Path) -> No
         NEO4J_USER=os.environ.get("NEO4J_USER", "neo4j"),
         NEO4J_PASSWORD=os.environ.get("NEO4J_PASSWORD", "neo4j"),
         NEO4J_DATABASE=os.environ.get("NEO4J_DATABASE", "neo4j"),
+        enhanced_candidates_enabled=False,
     )
     assert settings.enhanced_candidates_enabled is False
 

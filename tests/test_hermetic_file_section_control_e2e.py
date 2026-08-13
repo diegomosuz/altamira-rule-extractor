@@ -109,6 +109,10 @@ def test_fd_and_file_control_are_traced_without_affecting_the_productive_rule(
         NEO4J_USER=os.environ.get("NEO4J_USER", "neo4j"),
         NEO4J_PASSWORD=os.environ.get("NEO4J_PASSWORD", "neo4j"),
         NEO4J_DATABASE=os.environ.get("NEO4J_DATABASE", "neo4j"),
+        # Fase 15B4-CANDIDATE-QUALITY-5E: default global paso a True;
+        # este test cubre trazado de FD/FILE-CONTROL, no deteccion V2,
+        # asi que fija explicitamente el modo V1-only legacy.
+        enhanced_candidates_enabled=False,
     )
     assert settings.enhanced_candidates_enabled is False
 

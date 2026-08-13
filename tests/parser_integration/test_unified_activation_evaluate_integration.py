@@ -96,9 +96,12 @@ def test_real_three_modes_over_caller10_callee10_scenario(
     unico `shadow_group` VALID/NOT_IN_BASELINE, guardrail PASSED,
     downstream COMPLETED (identico a Fase 13) -- y sobre ese resultado
     real se evaluan las cuatro configuraciones A/B/C/D del control
-    plane de activacion unificada, nunca fabricadas a mano."""
+    plane de activacion unificada, nunca fabricadas a mano.
+
+    Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- reutiliza el escenario de baseline V1/Q0 controlado."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
 
     run_dir, run_id, succeeded_stages = _run_pipeline(settings, ready_blocked_zip)
     assert "PARSED" in succeeded_stages

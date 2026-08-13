@@ -195,8 +195,11 @@ def _run_pipeline(settings: object, zip_path: Path) -> tuple[Path, str, set[str]
 def test_real_review_package_and_plan_demonstrate_all_dispositions(
     tmp_path: Path, synthetic_zip: Path
 ) -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- el escenario exige un baseline V1/Q0 exacto (1
+    candidato) para razonar sobre las disposiciones de revision."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
 
     run_dir, run_id, succeeded_stages = _run_pipeline(settings, synthetic_zip)
     assert "PARSED" in succeeded_stages

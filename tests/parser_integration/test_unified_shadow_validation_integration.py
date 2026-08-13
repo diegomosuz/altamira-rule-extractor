@@ -80,9 +80,12 @@ def test_real_two_equivalent_proposals_qualify_for_downstream_shadow(
     producir un unico `shadow_group` estructuralmente elegible para
     shadow downstream, con disposition `QUALIFIED_FOR_DOWNSTREAM_SHADOW`
     y cero issues BLOCKING -- nunca una promocion real, nunca una
-    afirmacion de correccion funcional."""
+    afirmacion de correccion funcional.
+
+    Fase 15B4-CANDIDATE-QUALITY-5E: enhanced_candidates_enabled=False
+    explicito -- el escenario exige baseline V1/Q0 en cero candidatos."""
     require_jar()
-    settings = build_settings(tmp_path)
+    settings = build_settings(tmp_path, enhanced_candidates_enabled=False)
 
     run_dir, run_id, succeeded_stages = _run_pipeline(settings, ready_blocked_zip)
     assert "PARSED" in succeeded_stages
