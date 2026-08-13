@@ -28,9 +28,17 @@ data:
   # app-deployment.yaml (ver docs/release/ "Known Limitations").
   ALTAMIRA_API_MAX_WORKERS: "1"
 
-  # Decision de producto (15B4-B Seccion 0.C): enhanced permanece
-  # opt-in. Cambiar a "true" es una decision consciente del operador
-  # del cliente, nunca el default de este release.
+  # Decision de producto (15B4-B Seccion 0.C, anterior a Fase 5E):
+  # este ConfigMap fija explicitamente el modo legacy/conservador
+  # (V1/Q0-only), sobrescribiendo hacia atras el default actual del
+  # codigo (enhanced_candidates_enabled=true desde Fase
+  # 15B4-CANDIDATE-QUALITY-5E, ver docs/release/RELEASE_PROFILES.md
+  # "Enhanced mode" y docs/CAPABILITY_COVERAGE_1_17.md). Fase 5F
+  # (documentacion, sin cambios de comportamiento) NO revisa ni
+  # revierte esta decision de despliegue K3s -- cambiar este valor (o
+  # quitar la linea para heredar el default del codigo) es una
+  # decision de release engineering pendiente, explicitamente fuera de
+  # alcance de una fase documental.
   ALTAMIRA_ENHANCED_CANDIDATES_ENABLED: "false"
 
   # Neo4j: host/puerto no son secretos (las credenciales SI lo son,

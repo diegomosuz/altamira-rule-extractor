@@ -170,13 +170,20 @@ variables ordinarias).
   estructuralmente, pero esta versión no la usa para desambiguar.
   `CanonicalProgram.condition_names` sí acepta homónimos bajo padres
   distintos (se distinguen por `qualified_name`, único por contrato).
-- **No hay candidatos V2.** Esta fase captura y normaliza semántica
+- **Sin candidatos Q0/V1.** Esta fase captura y normaliza semántica
   únicamente; ni `queries/v1/q0_candidates.cypher` ni
   `candidate_detector.py` se modificaron. Un programa que usa
   exclusivamente `SET condición TO TRUE` (nunca `MOVE literal a
-  WS-COD-RETORNO`) sigue produciendo **cero candidatos Q0**, exactamente
+  WS-COD-RETORNO`) sigue produciendo **cero candidatos Q0/V1**, exactamente
   igual que antes de esta fase — la detección de candidatos basada en
-  condition-names queda fuera de alcance.
+  condition-names queda fuera del alcance de Q0/V1 específicamente.
+  **Estado actual (Fase 15B4-CANDIDATE-QUALITY-5E)**: el detector V2
+  `V2_LEVEL_88_RETURN_CODE` SÍ detecta este patrón y es
+  `PRODUCTIVE_RULE`, activo por default (`enhanced_candidates_enabled=
+  true`) — ver "Relación con SemanticCoverage y SemanticEffects" más
+  abajo y `docs/CAPABILITY_COVERAGE_1_17.md`. Esta sección describe
+  específicamente el alcance de Q0/V1 (sin cambios), no el estado
+  productivo actual del pipeline completo.
 - **CALL, EXEC CICS, LINKAGE SECTION, REDEFINES, OCCURS** siguen sin
   interpretarse; nada de esta fase los toca.
 - **No se interpretan las condiciones en sí** más allá de identificar la
@@ -242,14 +249,24 @@ nuevos.
   nunca modifica `condition_names`, `SET_CONDITION_TRUE`/`FALSE`, ni
   ningún campo de `CanonicalProgram`.
 - **`V2ShadowCandidatesArtifact`** (Fase 5, `docs/
-  V2_DETECTORS_SHADOW_MODE.md`, exclusivamente diagnóstico y bajo
-  demanda) agrega el detector `V2_LEVEL_88_RETURN_CODE`, que consume el
-  mismo `CONDITION_LITERAL` para proponer un candidato experimental
-  cuando el padre de la condición es un `DataItem` con
-  `semantic_tag=return_code`. Nunca modifica `condition_names`,
-  `SemanticEffectsArtifact` ni `SemanticPropagationArtifact`, y sus
-  candidatos nunca alimentan `CandidateArtifact` V1 ni la generación de
-  reglas.
+  V2_DETECTORS_SHADOW_MODE.md`; el comando CLI `v2-candidates-shadow`
+  en sí sigue siendo exclusivamente diagnóstico y bajo demanda) define
+  el detector `V2_LEVEL_88_RETURN_CODE`, que consume el mismo
+  `CONDITION_LITERAL` para proponer un candidato cuando el padre de la
+  condición es un `DataItem` con `semantic_tag=return_code`. Nunca
+  modifica `condition_names`, `SemanticEffectsArtifact` ni
+  `SemanticPropagationArtifact`. **Estado actual (Fase
+  15B4-CANDIDATE-QUALITY-5E)**: desde Fase 15B3-B/5E, las mismas
+  funciones puras de este detector se reutilizan también dentro de
+  `CANDIDATES_DETECTED` (`enhanced_candidate_integration.py`) para
+  producir `RuleCandidate` V1 reales en `06-candidates.json` cuando
+  `enhanced_candidates_enabled=true` (default desde 5E) — ese camino
+  productivo SÍ alimenta `CandidateArtifact`, `ContextPackage` y la
+  generación de reglas. El comando CLI `v2-candidates-shadow` y su
+  artefacto `diagnostics/v2-candidates-shadow.json` permanecen
+  separados y puramente diagnósticos (nunca leídos por el camino
+  productivo). Ver `docs/V2_DETECTORS_SHADOW_MODE.md` y
+  `docs/CAPABILITY_COVERAGE_1_17.md`.
 
 ## Uso de Catherine como golden fixture
 
@@ -262,8 +279,14 @@ nivel 88 bajo 8 padres distintos, 33 sentencias `SET condición TO TRUE` (sin
 el parser termina correctamente; las 20 condiciones aparecen con padre y
 VALUE correctos; las 33 SET se resuelven a `SET_CONDITION_TRUE`; hay
 referencias IF/EVALUATE verificadas; `SemanticEffectsArtifact` contiene los
-`SET_CONDITION_TRUE` esperados; candidatos y reglas V1 permanecen en cero
-(patrón esperado, ver más abajo).
+`SET_CONDITION_TRUE` esperados; candidatos y reglas Q0/V1 permanecen en
+cero con `enhanced_candidates_enabled=false` explícito (patrón esperado,
+ver más abajo) — este test fija ese modo explícitamente porque su
+propósito es aislar el comportamiento Q0/V1. **Con el default actual
+(`enhanced_candidates_enabled=true` desde Fase 5E, sin override)**, el
+mismo paquete produce 13 candidatos `LEVEL_88_RETURN_CODE` reales (uno
+por padre con `semantic_tag=return_code` resuelto) — ver
+`docs/CAPABILITY_COVERAGE_1_17.md`.
 
 `examples/PAQUETE_SINTETICO_CATHERINE_CORREGIDO_APP_ACTUAL.zip` es el
 fixture de compatibilidad del workaround basado en `MOVE`: mismo programa
@@ -287,9 +310,15 @@ se incorporó a ningún test.
 
 - `CALL`, `EXEC CICS`, `LINKAGE SECTION`, `REDEFINES`, `OCCURS`.
 - Calificación `IN`/`OF` para desambiguar condition-names homónimos.
-- Candidatos V2 basados en `SET condición TO TRUE`/referencias
+- Candidatos **Q0/V1** basados en `SET condición TO TRUE`/referencias
   IF/EVALUATE a condition-names (Q0 sigue siendo exclusivamente el patrón
-  `Decision -[:LEADS_TO]-> DataItem{semantic_tag:'return_code'}`).
+  `Decision -[:LEADS_TO]-> DataItem{semantic_tag:'return_code'}`, sin
+  cambios). **Sí soportado como candidato productivo V2**
+  (`LEVEL_88_RETURN_CODE`, activo por default desde Fase 5E — ver
+  `docs/CAPABILITY_COVERAGE_1_17.md`) para el patrón específico
+  `SET condición TO TRUE` cuando el padre resuelve `semantic_tag=
+  return_code`; referencias IF/EVALUATE por sí solas (sin `SET` hacia un
+  padre `return_code`) siguen sin generar ningún candidato.
 - Evaluación de expresiones booleanas compuestas (`IF A AND B`): se
   conservan las referencias individuales verificables, nunca la
   estructura AND/OR completa ni su resultado.

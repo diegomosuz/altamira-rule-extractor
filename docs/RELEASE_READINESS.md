@@ -47,9 +47,17 @@ qué, en vez de tratar `None` como un valor arbitrario.
 ## Política actual (edición `fase-15b2-a-2026.08.05`)
 
 Los cinco criterios configurados exigen umbral `1.0` (ambigüedad cero):
-con un catálogo de ground truth pequeño (2 expectativas `POSITIVE`, 1
-caso `NEGATIVE`), cualquier valor de recall/precisión menor a `1.0` ya
-implica al menos una regresión concreta y nombrable.
+cualquier valor de recall/precisión menor a `1.0` ya implica al menos una
+regresión concreta y nombrable. El catálogo referenciado
+(`config/ground_truth/synthetic_engineering.yaml`) creció desde la
+edición original de esta política — edición actual del catálogo
+`fase-15b4-5d-safety-2026.08.13`: 14 casos (12 `POSITIVE`, 2 `NEGATIVE`),
+15 hechos productivos esperados en total (ver
+`docs/CAPABILITY_COVERAGE_1_17.md`). `config/release_readiness_policy.
+yaml` (`policy_edition: fase-15b2-a-2026.08.05`) no requirió cambios
+funcionales por este crecimiento — los cinco `criterion_id` siguen
+apuntando al mismo `FunctionalValidationReport`, que se recalcula contra
+el catálogo vigente en cada evaluación.
 
 ## Aplicabilidad del ground truth (checkpoint correctivo, cierre de Fase 15B2-A)
 

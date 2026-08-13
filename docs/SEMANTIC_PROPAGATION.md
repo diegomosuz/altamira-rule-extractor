@@ -272,13 +272,21 @@ aislado: `artifacts/03b-semantic-enrichment.json` byte a byte idéntico
 
 ## Uso posterior por los detectores V2 (Fase 5)
 
-`V2ShadowCandidatesArtifact` (`docs/V2_DETECTORS_SHADOW_MODE.md`,
-exclusivamente diagnóstico y bajo demanda) calcula este artefacto **en
-memoria** (nunca lee ni escribe `diagnostics/semantic-propagation.json`)
-y filtra sus `PropagatedValueFact` por `fact_kind` para proponer
-candidatos experimentales (`V2_RETURN_CODE_PROPAGATION`,
-`V2_STATE_CHANGE`) — nunca reimplementa el análisis de flujo descrito en
-este documento ni modifica ninguno de los modelos aquí definidos.
+`V2ShadowCandidatesArtifact` (`docs/V2_DETECTORS_SHADOW_MODE.md`; el
+comando CLI `v2-candidates-shadow` en sí sigue siendo exclusivamente
+diagnóstico y bajo demanda) calcula este artefacto **en memoria** (nunca
+lee ni escribe `diagnostics/semantic-propagation.json`) y filtra sus
+`PropagatedValueFact` por `fact_kind` para proponer candidatos
+(`V2_RETURN_CODE_PROPAGATION`, `V2_STATE_CHANGE`) — nunca reimplementa el
+análisis de flujo descrito en este documento ni modifica ninguno de los
+modelos aquí definidos. **Estado actual (Fase 15B4-CANDIDATE-QUALITY-5E)**:
+estas mismas funciones también se ejecutan dentro de `CANDIDATES_DETECTED`
+(`enhanced_candidate_integration.py`) para producir `RuleCandidate`
+productivos reales (`RETURN_CODE_PROPAGATION`, `STATE_TRANSITION` cuando el
+target tiene `semantic_tag ∈ {status, status_flag}`) en
+`06-candidates.json` cuando `enhanced_candidates_enabled=true` (default
+desde 5E) — ya no son puramente "experimentales" en ese camino. Ver
+`docs/CAPABILITY_COVERAGE_1_17.md`.
 
 ## Limitaciones
 

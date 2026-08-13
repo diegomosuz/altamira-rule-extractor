@@ -43,10 +43,12 @@ python -m altamira_extractor.cli v2-candidates-shadow <run_id> [--json]
   siguen siendo puramente diagnósticos. Un `V2ShadowCandidate` nunca se
   presenta como regla aprobada (CLAUDE.md, sección "Candidato, fidelidad
   y aprobación"). Ver "Fase 15B3-B" más abajo: desde esa fase, un
-  camino **separado y opt-in** (`CANDIDATES_DETECTED`,
-  `enhanced_candidate_integration.py`) reutiliza las mismas funciones
-  puras `detect_return_code_propagation`/`detect_level_88_return_code`
-  de `v2_detectors.py` para producir `RuleCandidate` V1 reales — pero
+  camino **separado y configurable vía flag**
+  (`CANDIDATES_DETECTED`, `enhanced_candidate_integration.py`, activo
+  por default desde Fase 15B4-CANDIDATE-QUALITY-5E — ver nota al final
+  de "Fase 15B3-B" más abajo) reutiliza las mismas funciones puras
+  `detect_return_code_propagation`/`detect_level_88_return_code` de
+  `v2_detectors.py` para producir `RuleCandidate` V1 reales — pero
   nunca lee ni escribe `v2-candidates-shadow.json`, y nunca a través de
   este comando CLI.
 - Q0 (`queries/v1/q0_candidates.cypher`, `pipeline/candidate_detector.py`)

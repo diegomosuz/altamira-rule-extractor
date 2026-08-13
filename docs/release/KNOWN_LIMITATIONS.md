@@ -19,13 +19,22 @@ aquí para que el cliente/QA los conozca antes de aceptar el release.
 
 ## Modo enhanced
 
-- `enhanced_candidates_enabled` permanece opt-in (default `false`) — ver
-  `docs/release/RELEASE_PROFILES.md`.
-- Habilitado, produce comportamiento de "near-duplicate" en patrones donde
-  una misma Decision escribe múltiples campos en la misma rama (hasta ~48%
-  de sobre-conteo medido en el caso peor real, `CATHERINE_CORREGIDO`) — carga
-  de revisión adicional, nunca pérdida de reglas ni falsos positivos
-  (evaluado y diferido explícitamente en Fase 15B3-C8-FIX-2-A).
+- Desde Fase 15B4-CANDIDATE-QUALITY-5E, `enhanced_candidates_enabled=true`
+  es el default del código — ver `docs/release/RELEASE_PROFILES.md`
+  ("Enhanced mode", incluye la discrepancia conocida y no resuelta con los
+  manifests `deploy/k3s/`, que siguen fijando `false` explícitamente).
+  `enhanced_candidates_enabled=false` sigue disponible como override
+  explícito (modo legacy/conservador, V1/Q0-only).
+- **HISTORICAL / SUPERSEDED**: el "near-duplicate" en patrones donde una
+  misma Decision escribe múltiples campos en la misma rama (hasta ~48% de
+  sobre-conteo medido en el caso peor real, `CATHERINE_CORREGIDO`) fue
+  evaluado en Fase 15B3-C8-FIX-2-A y posteriormente corregido en Fase
+  15B4-CANDIDATE-QUALITY-3B (`suppress_superseded_v1_return_code_ghosts`,
+  `pipeline/enhanced_candidate_integration.py`). Medición vigente (Fase
+  5E, corpus real): `CATHERINE_CORREGIDO` con `enhanced_candidates_enabled=
+  true` produce 14 candidatos `RETURN_CODE` (idéntico al baseline V1-only,
+  nunca 27) y 0 duplicados no explicados en todo el corpus de
+  verificación. Ya no es una limitación vigente de este release.
 
 ## Volumen
 

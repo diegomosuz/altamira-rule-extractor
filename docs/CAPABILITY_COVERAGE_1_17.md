@@ -11,6 +11,25 @@ el código hace" y "lo que el Ground Truth formal + los tests permanentes
 prueban". Se actualiza cuando cambia la clasificación de una capacidad, no en
 cada commit.
 
+**Default actual del código (Fase 15B4-CANDIDATE-QUALITY-5E)**:
+`enhanced_candidates_enabled=true` es el default de
+`src/altamira_extractor/config.py` — un run nuevo sin configuración
+adicional produce las cinco familias `PRODUCTIVE_RULE` (`RETURN_CODE`
+V1/Q0 siempre activo + `RETURN_CODE_PROPAGATION`/`LEVEL_88_RETURN_CODE`/
+`STATE_TRANSITION`/`CALCULATION` vía V2). El override explícito
+`enhanced_candidates_enabled=false` (modo legacy/conservador, V1/Q0-only)
+sigue disponible. Por eso, en la columna **"ENHANCED result"** de la
+matriz de abajo describe el comportamiento **out-of-the-box** de 1.17;
+la columna **"DEFAULT result"** preserva la nomenclatura histórica de
+Fase 5D (cuando `false` era el default del código) y ahora describe el
+comportamiento bajo el override explícito `enhanced_candidates_enabled=
+false`, no el estado "recién instalado". **Excepción conocida**: los
+manifests de despliegue `deploy/k3s/` fijan explícitamente
+`enhanced_candidates_enabled=false` (ver `docs/release/
+RELEASE_PROFILES.md`, "Enhanced mode") — un despliegue K3s sin editar
+`configmap.yaml` recibe el comportamiento de la columna "DEFAULT result"
+(legacy), no "ENHANCED result".
+
 ## Categorías (exactamente 4, sin quinta)
 
 - **PRODUCTIVE_RULE**: produce un `RuleCandidate` con `rule_family` que

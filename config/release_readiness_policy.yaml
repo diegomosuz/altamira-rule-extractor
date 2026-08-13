@@ -15,14 +15,14 @@ criteria:
 - criterion_id: functional-validation-minimum-precision
   kind: MINIMUM_PRECISION
   description: La precision (granularidad case-level para NEGATIVE, ver contracts/functional_validation.py)
-    del ultimo FunctionalValidationReport debe ser exactamente 1.0 -- con solo 1 caso NEGATIVE
-    en el catalogo actual, cualquier valor menor ya implica un falso positivo.
+    del ultimo FunctionalValidationReport debe ser exactamente 1.0 -- con 2 casos NEGATIVE
+    en el catalogo actual (fase-15b4-5d-safety-2026.08.13), cualquier valor menor ya implica un falso positivo.
   minimum_value: 1.0
 - criterion_id: functional-validation-minimum-recall
   kind: MINIMUM_RECALL
   description: El recall (granularidad expectation-level, ver contracts/functional_validation.py)
-    del ultimo FunctionalValidationReport debe ser exactamente 1.0 -- con solo 3 expectativas
-    POSITIVE en el catalogo actual, cualquier valor menor ya implica al menos una MISSING.
+    del ultimo FunctionalValidationReport debe ser exactamente 1.0 -- con 15 expectativas
+    POSITIVE en el catalogo actual (fase-15b4-5d-safety-2026.08.13), cualquier valor menor ya implica al menos una MISSING.
   minimum_value: 1.0
 - criterion_id: functional-validation-no-missing-positive-cases
   kind: NO_MISSING_POSITIVE_CASES

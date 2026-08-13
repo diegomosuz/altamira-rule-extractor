@@ -9,6 +9,28 @@ funcional obligatoria). Expone API JSON, UI HTML server-rendered
 diseno completo y `docs/CLAUDE_CODE_RUNBOOK.md` para la secuencia de
 implementacion por etapas.
 
+## Qué produce (familias de reglas productivas, 1.17)
+
+Con `enhanced_candidates_enabled=true` (default del código desde Fase
+15B4-CANDIDATE-QUALITY-5E), un run nuevo sin configuración adicional
+puede detectar candidatos de cinco familias `PRODUCTIVE_RULE`:
+`RETURN_CODE` (V1/Q0, siempre activo), `RETURN_CODE_PROPAGATION`,
+`LEVEL_88_RETURN_CODE`, `STATE_TRANSITION` y `CALCULATION` (COMPUTE/ADD/
+SUBTRACT/MULTIPLY/DIVIDE). El override explícito
+`enhanced_candidates_enabled=false` restringe la detección al modo
+legacy/conservador (solo `RETURN_CODE` V1/Q0). Otras construcciones COBOL
+(SQL, SQLCODE, `declared VALUE`, `GO TO`/`PERFORM`, `DomainTerm`,
+`ParameterTable`) enriquecen evidencia/contexto pero **nunca** se
+presentan como una `RuleFamily` propia; construcciones como `CALL`
+interprocedural, CICS, FD/FILE SECTION o formato `FREE` se detectan y
+diagnostican explícitamente pero no se productivizan (nunca pérdida
+silenciosa). Ver `docs/CAPABILITY_COVERAGE_1_17.md` para la matriz
+completa y evidencia versionada, y `docs/release/RELEASE_PROFILES.md`
+para los dos perfiles de producto (`DETERMINISTIC_OFFLINE`, sin LLM,
+termina en `CONTEXTS_BUILT`; `FULL_LLM`, con proveedor, llega a
+`COMPLETED`). Toda salida queda `NEEDS_FUNCTIONAL_REVIEW`: ninguna regla
+V1 se presenta como aprobada.
+
 ## Arquitectura resumida
 
 Exactamente dos servicios Docker:
