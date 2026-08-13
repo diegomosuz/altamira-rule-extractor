@@ -294,7 +294,11 @@ class _ConvertedCandidate:
     detector_version: str
     detector_score: float
     line_start: int
-    source_file: str
+    # str | None (Fase 15B4-CANDIDATE-QUALITY-5A): None cuando el
+    # Paragraph tiene location_kind distinto de EXACT (programas con
+    # COPY) -- nunca se descarta el candidato solo por esto, ver
+    # docstring de `RuleCandidate.source_file`.
+    source_file: str | None
     evidence_ids: tuple[str, ...]
     source_v2_candidate_id: str
 
@@ -326,12 +330,17 @@ def _convert_v2_candidate(
         )
 
     line_start = paragraph_node.properties.get("line_start")
-    source_file = paragraph_node.properties.get("source_file")
-    if not isinstance(line_start, int) or not isinstance(source_file, str) or not source_file:
+    if not isinstance(line_start, int):
         return None, (
             f"candidato V2 {v2_candidate.candidate_id!r} descartado: el nodo Paragraph "
-            f"{paragraph_node.id!r} no expone line_start/source_file validos"
+            f"{paragraph_node.id!r} no expone line_start valido"
         )
+    # source_file: str | None (Fase 15B4-CANDIDATE-QUALITY-5A) -- `None`
+    # es un estado legitimo (Paragraph con location_kind != EXACT, hoy
+    # exclusivamente COPY), nunca motivo de descarte por si solo. Ver
+    # docstring de `RuleCandidate.source_file`.
+    source_file_raw = paragraph_node.properties.get("source_file")
+    source_file: str | None = source_file_raw if isinstance(source_file_raw, str) else None
 
     rule_family = _LOCAL_RULE_FAMILY_BY_TYPE.get(v2_candidate.rule_type)
     if rule_family not in _PROMOTABLE_RULE_FAMILIES:
@@ -447,12 +456,15 @@ def _convert_unconditional_calculation(
         )
 
     line_start = paragraph_node.properties.get("line_start")
-    source_file = paragraph_node.properties.get("source_file")
-    if not isinstance(line_start, int) or not isinstance(source_file, str) or not source_file:
+    if not isinstance(line_start, int):
         return None, (
             f"candidato V2 {v2_candidate.candidate_id!r} descartado: el nodo Paragraph "
-            f"{paragraph_node.id!r} no expone line_start/source_file validos"
+            f"{paragraph_node.id!r} no expone line_start valido"
         )
+    # source_file: str | None -- ver comentario identico en
+    # _convert_v2_candidate (Fase 15B4-CANDIDATE-QUALITY-5A).
+    source_file_raw = paragraph_node.properties.get("source_file")
+    source_file: str | None = source_file_raw if isinstance(source_file_raw, str) else None
 
     target_key, formula_text = _calculation_target_and_formula(v2_candidate, ctx)
     # source_statement_id: tomado DIRECTAMENTE del campo real

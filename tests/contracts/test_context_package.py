@@ -35,6 +35,56 @@ def test_context_package_round_trips(valid_context_package: ContextPackage) -> N
     assert restored == valid_context_package
 
 
+def test_code_slice_and_evidence_source_file_none_matches_schema(
+    valid_context_package: ContextPackage, context_package_schema: dict[str, Any]
+) -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5A: `source_file=None` en
+    `CodeSliceEntry`/`EvidenceEntry` (programas con COPY, Paragraph con
+    location_kind != EXACT) es un estado legitimo -- debe seguir
+    validando tanto contra el contrato Pydantic como contra
+    `context-package.schema.json` (dos validaciones independientes,
+    ninguna debe quedar desincronizada de la otra)."""
+    payload = valid_context_package.model_dump(mode="json")
+    payload["code_slice"][0]["source_file"] = None
+    payload["evidence"][0]["source_file"] = None
+    restored = ContextPackage.model_validate(payload)
+    assert restored.code_slice[0].source_file is None
+    assert restored.evidence[0].source_file is None
+    assert_matches_schema(restored.model_dump(mode="json"), context_package_schema)
+
+
+def test_scope_source_file_still_required_non_null(
+    valid_context_package: ContextPackage,
+) -> None:
+    """`ContextPackageScope.source_file` proviene de `Program.source_file`
+    (Q1), que permanece siempre conocido incluso en programas con COPY
+    (a diferencia de `Paragraph.source_file`) -- nunca se vuelve
+    Optional."""
+    payload = valid_context_package.model_dump(mode="json")
+    payload["scope"]["source_file"] = None
+    with pytest.raises(ValidationError):
+        ContextPackage.model_validate(payload)
+
+
+def test_historical_string_source_file_still_valid_after_5a(
+    valid_context_package: ContextPackage, context_package_schema: dict[str, Any]
+) -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5A-SAFETY: `source_file` volverse
+    nullable (Fase 5A) es una relajacion PURAMENTE ADITIVA -- un
+    artefacto historico donde `code_slice[].source_file`/
+    `evidence[].source_file` son cadenas reales (el caso normal, sin
+    COPY) sigue validando exactamente igual, sin migracion, tanto
+    contra el contrato Pydantic como contra
+    `context-package.schema.json`. `valid_context_package` (fixture
+    compartida, usa strings reales) es en si mismo ese caso historico."""
+    assert isinstance(valid_context_package.code_slice[0].source_file, str)
+    assert isinstance(valid_context_package.evidence[0].source_file, str)
+    payload = valid_context_package.model_dump(mode="json")
+    restored = ContextPackage.model_validate(payload)
+    assert restored == valid_context_package
+    assert_matches_schema(restored.model_dump(mode="json"), context_package_schema)
+
+
 def test_context_package_requires_scope(valid_context_package: ContextPackage) -> None:
     payload = valid_context_package.model_dump(mode="json")
     del payload["scope"]

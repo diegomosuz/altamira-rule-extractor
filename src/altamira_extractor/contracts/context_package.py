@@ -65,9 +65,13 @@ class ContextPackageScope(AltamiraBaseModel):
 
 
 class CodeSliceEntry(AltamiraBaseModel):
+    """`source_file`: `None` es legitimo (Fase 15B4-CANDIDATE-QUALITY-5A,
+    Q2 lee `Paragraph.source_file`) -- mismo motivo que
+    `EvidenceEntry.source_file`."""
+
     paragraph_id: str = Field(min_length=1)
     paragraph: str = Field(min_length=1)
-    source_file: RelativePath
+    source_file: RelativePath | None = None
     source_text: str
     line_start: int = Field(ge=1)
     line_end: int = Field(ge=1)
@@ -213,9 +217,16 @@ class DomainGlossaryEntry(AltamiraBaseModel):
 
 
 class EvidenceEntry(AltamiraBaseModel):
+    """`source_file`: `None` es un estado legitimo (Fase
+    15B4-CANDIDATE-QUALITY-5A) -- ocurre cuando la evidencia proviene de
+    un `RuleCandidate`/Paragraph con `location_kind` distinto de `EXACT`
+    (hoy, programas con `COPY`; ver `contracts/candidate.py`,
+    docstring de `RuleCandidate.source_file`). Nunca se sustituye por un
+    valor inventado."""
+
     evidence_id: str = Field(min_length=1)
     kind: str = Field(min_length=1)
-    source_file: RelativePath
+    source_file: RelativePath | None = None
     line_start: int | None = Field(default=None, ge=1)
     line_end: int | None = Field(default=None, ge=1)
     source_package_hash: Sha256Hex

@@ -789,3 +789,32 @@ def test_enhanced_enabled_with_no_new_candidates_still_reports_dedup_warnings(
     )
     assert artifact.candidates == [v1]
     assert artifact.warnings == ["candidato V2 deduplicado contra V1"]
+
+
+def test_v1_candidate_without_source_file_is_preserved_with_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5A (P0-COPY-CANDIDATE-CRASH): un
+    RuleCandidate V1 con `source_file=None` (Paragraph con
+    location_kind != EXACT, hoy COPY) ya no hace fallar
+    CANDIDATES_DETECTED (antes: ValidationError sin capturar,
+    propagada como CandidateDetectionError) -- se persiste igual, con
+    un warning trazable en el artefacto, incluso con
+    `enhanced_candidates_enabled=False` (default)."""
+    kwargs, graph, semantic_graph_hash = _happy_kwargs(tmp_path)
+    active = _matching_active_graph_load(graph, semantic_graph_hash)
+    stub = _StubRepository(active=active)
+    _install_stub(monkeypatch, stub)
+    v1 = _v1_candidate().model_copy(update={"source_file": None})
+    _install_detect_candidates(monkeypatch, [v1])
+
+    run_candidates_detected_stage(**kwargs)
+
+    artifact = CandidateArtifact.model_validate_json(
+        kwargs["candidates_path"].read_text(encoding="utf-8")
+    )
+    assert artifact.candidates == [v1]
+    assert artifact.candidates[0].source_file is None
+    assert len(artifact.warnings) == 1
+    assert "sin source_file disponible" in artifact.warnings[0]
+    assert v1.candidate_id in artifact.warnings[0]

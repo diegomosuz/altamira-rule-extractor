@@ -150,7 +150,7 @@
             "type": "string"
           },
           "source_file": {
-            "type": "string"
+            "type": ["string", "null"]
           },
           "source_text": {
             "type": "string"
@@ -543,7 +543,7 @@
             "type": "string"
           },
           "source_file": {
-            "type": "string"
+            "type": ["string", "null"]
           },
           "line_start": {
             "type": [

@@ -50,6 +50,7 @@ from .v2_shadow_helpers import (
 )
 
 _RUN_ID = "run-15b3b"
+_UNSET = object()
 
 
 def assert_only_state_change_discard_warnings(warnings: list[str], *, targets: list[str]) -> None:
@@ -110,17 +111,27 @@ def _build_graph_with_source_file(
     program: CanonicalProgram,
     decisions: Sequence[tuple[str, int, str]],
     data_item_tags: dict[str, str | None],
+    paragraph_source_file: str | None | object = _UNSET,
 ) -> SemanticGraph:
     """Igual que `v2_shadow_helpers.build_semantic_graph`, pero con
     `source_file` en el nodo Paragraph (como produce realmente
     `semantic_graph_builder.py`) -- necesario para que
-    `_convert_v2_candidate` pueda construir un `RuleCandidate` completo."""
+    `_convert_v2_candidate` pueda construir un `RuleCandidate` completo.
+
+    `paragraph_source_file` (Fase 15B4-CANDIDATE-QUALITY-5A): por
+    defecto usa `program.source_file` (comportamiento historico, sin
+    cambios); pasar explicitamente `None` simula un Paragraph con
+    `location_kind` != EXACT (COPY) para probar que ya no se descarta
+    el candidato solo por eso."""
     program_name = program.program_name
     prog_node_id = program_node_id(program_name)
     nodes: list[GraphNode] = [
         GraphNode(id=prog_node_id, labels=[NodeLabel.PROGRAM], properties={"name": program_name})
     ]
     relationships: list[GraphRelationship] = []
+    effective_source_file = (
+        program.source_file if paragraph_source_file is _UNSET else paragraph_source_file
+    )
 
     for paragraph in program.paragraphs:
         para_node_id = paragraph_node_id(program_name, paragraph.name)
@@ -132,7 +143,7 @@ def _build_graph_with_source_file(
                     "name": paragraph.name,
                     "line_start": 1,
                     "line_end": 9999,
-                    "source_file": program.source_file,
+                    "source_file": effective_source_file,
                 },
             )
         )
@@ -257,6 +268,38 @@ def test_return_code_propagation_produces_a_promotable_rule_candidate() -> None:
     assert candidate.source_file == SRC
     assert candidate.evidence_ids != []
     assert candidate.evidence_ids == sorted(set(candidate.evidence_ids))
+
+
+def test_v2_candidate_with_paragraph_source_file_none_is_preserved_not_discarded() -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5A (P0-COPY-CANDIDATE-CRASH): un
+    Paragraph con `source_file=None` en el grafo (COPY en el programa)
+    ya NO causa que `_convert_v2_candidate` descarte el candidato --
+    antes de esta fase, el guard exigia `source_file` no vacio junto con
+    `line_start`, perdiendo la regla en silencio. Ahora unicamente
+    `line_start` sigue siendo obligatorio; `source_file=None` se
+    preserva honestamente en el `RuleCandidate` resultante."""
+    program, decisions = _case_a_program_and_decisions()
+    graph = _build_graph_with_source_file(
+        program=program,
+        decisions=decisions,
+        data_item_tags={"WS-AUX": None, "WS-COD-RETORNO": "return_code"},
+        paragraph_source_file=None,
+    )
+
+    new_candidates, warnings = detect_enhanced_candidates(
+        canonical_programs=[program],
+        semantic_graph=graph,
+        v1_candidates=_empty_v1_candidates(),
+        run_id=_RUN_ID,
+        source_package_hash=HASH,
+    )
+
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-AUX"])
+    assert len(new_candidates) == 1, new_candidates
+    candidate = new_candidates[0]
+    assert candidate.source_file is None
+    assert candidate.outcome_code == "0005"
+    assert candidate.evidence_ids != []
 
 
 # ---------------------------------------------------------------------------
@@ -1180,11 +1223,21 @@ def test_state_change_only_case_never_produces_a_candidate() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_paragraph_node_without_source_file_is_discarded_with_warning() -> None:
+def test_paragraph_node_without_source_file_no_longer_discards_return_code(
+) -> None:
     """`v2_shadow_helpers.build_ctx`/`build_semantic_graph` (compartido
-    por otros tests V2) no incluye `source_file` en el nodo Paragraph --
-    `_convert_v2_candidate` debe descartar el candidato con un warning
-    trazable, nunca fabricar un `source_file` sintetico ni lanzar."""
+    por otros tests V2) no incluye `source_file` en el nodo Paragraph.
+
+    Historicamente (hasta Fase 15B4-CANDIDATE-QUALITY-4A/5A)
+    `_convert_v2_candidate` descartaba CUALQUIER candidato anclado a ese
+    paragraph -- ese comportamiento es exactamente el defecto
+    P0-COPY-CANDIDATE-CRASH/perdida-silenciosa que 5A corrige: un
+    Paragraph sin `source_file` (hoy, programas con COPY) ya NO
+    descarta el candidato RETURN_CODE_PROPAGATION, que se preserva con
+    `source_file=None` (honesto, nunca fabricado). El candidato
+    V2_STATE_CHANGE de WS-AUX SI se sigue descartando, pero por su
+    motivo original y no relacionado (sin semantic_tag de relevancia
+    funcional) -- ver `assert_only_state_change_discard_warnings`."""
     program, decisions = _case_a_program_and_decisions()
     ctx = build_ctx(
         program=program,
@@ -1200,12 +1253,10 @@ def test_paragraph_node_without_source_file_is_discarded_with_warning() -> None:
         source_package_hash=HASH,
     )
 
-    # Sin source_file en el nodo Paragraph, TODO candidato ancla a ese
-    # paragraph se descarta -- incluye tanto el de RETURN_CODE_PROPAGATION
-    # (WS-COD-RETORNO) como el de V2_STATE_CHANGE (WS-AUX, Fase 15B3-C1).
-    assert new_candidates == []
-    assert len(warnings) == 2
-    assert all("line_start/source_file" in warning for warning in warnings)
+    assert_only_state_change_discard_warnings(warnings, targets=["WS-AUX"])
+    assert len(new_candidates) == 1, new_candidates
+    assert new_candidates[0].source_file is None
+    assert new_candidates[0].rule_family == UnifiedRuleFamily.RETURN_CODE
 
 
 # ---------------------------------------------------------------------------

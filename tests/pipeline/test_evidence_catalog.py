@@ -31,11 +31,30 @@ from altamira_extractor.contracts.rule_draft import Claim, RuleDraft
 from altamira_extractor.pipeline.evidence_catalog import (
     EvidenceCatalog,
     EvidenceCatalogEntry,
+    _describe_evidence,
     build_evidence_catalog,
     redact_rule_draft_for_prompt,
 )
 
 _HASH_A = "a" * 64
+
+
+def test_describe_evidence_source_file_none_renders_honest_placeholder() -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5A: `EvidenceEntry.source_file=None`
+    (programa con COPY) nunca se interpola como el texto literal
+    "None" en la descripcion que ve el LLM."""
+    entry = EvidenceEntry(
+        evidence_id="ev-1",
+        kind="decision",
+        source_file=None,
+        line_start=10,
+        line_end=12,
+        source_package_hash=_HASH_A,
+    )
+    description = _describe_evidence(entry)
+    assert "None" not in description
+    assert "ubicacion no determinable" in description
+    assert description == "decision (ubicacion no determinable:10-12)"
 
 
 def _package(

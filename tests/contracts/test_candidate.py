@@ -52,6 +52,23 @@ def test_rule_candidate_valid_with_a_real_rule_type() -> None:
     assert candidate.rule_type == "threshold-comparison"
 
 
+def test_rule_candidate_source_file_none_is_valid() -> None:
+    """Fase 15B4-CANDIDATE-QUALITY-5A: `source_file=None` es un estado
+    legitimo (Paragraph con location_kind != EXACT, hoy exclusivamente
+    COPY) -- nunca bloquea la construccion del candidato, y nunca se
+    sustituye por un valor inventado (cadena vacia, filename fabricado,
+    etc.)."""
+    candidate = _candidate(source_file=None)
+    assert candidate.source_file is None
+    restored = RuleCandidate.model_validate_json(candidate.to_stable_json())
+    assert restored.source_file is None
+
+
+def test_rule_candidate_source_file_real_value_still_valid() -> None:
+    candidate = _candidate(source_file="01-codigo/cobol/PROG.cbl")
+    assert candidate.source_file == "01-codigo/cobol/PROG.cbl"
+
+
 def test_rule_candidate_round_trips_with_rule_type_none() -> None:
     candidate = _candidate(rule_type=None)
     restored = RuleCandidate.model_validate_json(candidate.to_stable_json())

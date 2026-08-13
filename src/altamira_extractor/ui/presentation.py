@@ -86,7 +86,7 @@ def omit_keys(data: dict[str, object], *keys: str) -> dict[str, object]:
     return {key: value for key, value in data.items() if key not in keys}
 
 
-def program_name_from_source_file(source_file: str) -> str:
+def program_name_from_source_file(source_file: str | None) -> str:
     """Deriva un nombre de programa legible desde `source_file` (p. ej.
     `01-codigo/cobol/CLEGAR01.cbl` -> `CLEGAR01`) para presentacion
     UNICAMENTE -- `RuleCandidate`/`ContextPackageScope` no tienen un
@@ -95,7 +95,11 @@ def program_name_from_source_file(source_file: str) -> str:
     se persiste ni se usa para logica: puramente derivado para mostrar
     una columna "Programa" en el listado de candidatos. Si el nombre no
     tiene la forma esperada, devuelve el `source_file` completo en vez
-    de fallar."""
+    de fallar. `source_file=None` (Fase 15B4-CANDIDATE-QUALITY-5A,
+    programas con COPY) se presenta explicitamente como "(origen no
+    determinable)" -- nunca como el texto literal "None"."""
+    if source_file is None:
+        return "(origen no determinable)"
     if not source_file:
         return source_file
     return PurePosixPath(source_file).stem or source_file

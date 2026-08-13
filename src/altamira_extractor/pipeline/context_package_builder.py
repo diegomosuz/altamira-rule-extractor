@@ -162,8 +162,21 @@ def build_context_packages(
             queries=queries,
             settings=settings,
             canonical_paragraphs=paragraphs,
-            program_name=program_names.get(candidate.source_file),
-            symbol_table=symbol_tables.get(candidate.source_file),
+            # candidate.source_file: str | None (Fase
+            # 15B4-CANDIDATE-QUALITY-5A, programas con COPY) -- si es
+            # None, ningun source_file de data_items_by_source_file
+            # puede coincidir; el enriquecimiento queda ausente, nunca
+            # se busca con una clave fabricada.
+            program_name=(
+                program_names.get(candidate.source_file)
+                if candidate.source_file is not None
+                else None
+            ),
+            symbol_table=(
+                symbol_tables.get(candidate.source_file)
+                if candidate.source_file is not None
+                else None
+            ),
         )
         for candidate in candidates
     ]
@@ -750,7 +763,14 @@ def _enrich_decision_with_sql_causal_evidence(
     """Si la Decision es SQLCODE-related y el linkage es PROVEN, agrega
     un `EvidenceEntry` y su id a `decision.evidence_ids` -- cualquier
     otro caso (AMBIGUOUS/NOT_AVAILABLE/paragraph o decision no
-    correlacionables) devuelve `decision`/`evidence` sin modificar."""
+    correlacionables) devuelve `decision`/`evidence` sin modificar.
+
+    `candidate.source_file is None` (Fase 15B4-CANDIDATE-QUALITY-5A,
+    programas con COPY) nunca puede coincidir con una clave real de
+    `canonical_paragraphs`: el enriquecimiento SQLCODE queda ausente,
+    nunca se busca con una clave fabricada."""
+    if candidate.source_file is None:
+        return decision, evidence
     paragraph = canonical_paragraphs.get((candidate.source_file, candidate.paragraph_name))
     if paragraph is None:
         return decision, evidence

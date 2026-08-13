@@ -42,7 +42,7 @@
 <article class="code-entry">
   <div class="code-entry-head">
     <h3 class="mb-0">{{ entry.paragraph }} {{ status_badge(entry.inclusion_reason.value) }}</h3>
-    <span class="text-muted small">{{ entry.source_file }} ({{ entry.line_start }}-{{ entry.line_end }})</span>
+    <span class="text-muted small">{{ entry.source_file or "(origen no determinable)" }} ({{ entry.line_start }}-{{ entry.line_end }})</span>
   </div>
   <div class="source-block-wrap">
     <button type="button" class="copy-btn" data-copy-target="#code-slice-{{ loop.index }}">Copiar</button>

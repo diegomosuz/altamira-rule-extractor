@@ -61,7 +61,27 @@ DIVIDE) SIN `Decision` envolvente -- nunca con un `decision_id`/
 `condition` sintetico (`"<statement-id>"`, `"TRUE"`, `"UNCONDITIONAL"`
 estan prohibidos por diseno): "ser incondicional" se deriva
 EXCLUSIVAMENTE de `decision_id is None`/`condition is None`, nunca de
-un valor textual fabricado. Ver `_check_decision_anchor_by_family`."""
+un valor textual fabricado. Ver `_check_decision_anchor_by_family`.
+
+`source_file` (Fase 15B4-CANDIDATE-QUALITY-5A): representa el archivo
+fuente del Paragraph que contiene la Decision/statement del candidato
+(en V1, `Paragraph.source_file` via Q0; en V2, la misma propiedad leida
+directamente del nodo `Paragraph` en `enhanced_candidate_integration.py`
+-- nunca el archivo del DataItem afectado ni un "archivo primario de
+evidencia" agregado). `None` es un estado legitimo, no un error: ocurre
+cuando el Paragraph tiene `location_kind` distinto de `EXACT` (hoy,
+exclusivamente programas con `COPY` en algun punto -- ProLeap expone el
+stream ya expandido sin poder atribuir cada linea post-expansion a su
+archivo fisico de origen, ver `docs/SUPPORTED_COMPLEXITY_STRATEGY.md`
+fila 3). `line_start` sigue siendo un entero real (la posicion del
+Paragraph en el stream que ProLeap expone) incluso cuando `source_file`
+es `None`: nunca se fabrica un `source_file` de reemplazo (ni el
+`CanonicalProgram.source_file` del programa completo, que SI permanece
+siempre conocido, ni un valor inventado) porque emparejarlo con un
+`line_start` potencialmente desplazado por la expansion de COPY seria
+una atribucion enganosa. Todo consumidor de `source_file` (`EvidenceEntry`,
+`evidence_catalog.py`, renderizado UI) debe tratar `None` como "ubicacion
+no determinable", nunca sustituirlo silenciosamente."""
 
 from __future__ import annotations
 
@@ -88,7 +108,7 @@ class RuleCandidate(AltamiraBaseModel):
     outcome_code: str | None = None
     rule_type: str | None = None
     line_start: int = Field(ge=1)
-    source_file: RelativePath
+    source_file: RelativePath | None = None
     source_package_hash: Sha256Hex
     candidate_source: CandidateSource = CandidateSource.V1
     rule_family: UnifiedRuleFamily = UnifiedRuleFamily.RETURN_CODE

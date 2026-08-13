@@ -129,13 +129,20 @@ def _kind_of_anchor_path(path: str) -> str:
 def _describe_evidence(entry: EvidenceEntry | None) -> str:
     """Descripcion derivada EXCLUSIVAMENTE de metadatos reales ya
     recolectados por el pipeline (`EvidenceEntry.kind`/`source_file`/
-    `line_start`/`line_end`): nunca se inventa contenido nuevo."""
+    `line_start`/`line_end`): nunca se inventa contenido nuevo.
+
+    `source_file=None` (Fase 15B4-CANDIDATE-QUALITY-5A, programas con
+    COPY) se describe explicitamente como "ubicacion no determinable"
+    -- nunca se interpola como el texto literal "None"."""
     if entry is None:
         return "evidencia sin metadata adicional"
+    source_file = (
+        entry.source_file if entry.source_file is not None else "ubicacion no determinable"
+    )
     if entry.line_start is not None and entry.line_end is not None:
-        location = f"{entry.source_file}:{entry.line_start}-{entry.line_end}"
+        location = f"{source_file}:{entry.line_start}-{entry.line_end}"
     else:
-        location = entry.source_file
+        location = source_file
     return f"{entry.kind} ({location})"
 
 

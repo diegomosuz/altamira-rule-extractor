@@ -52,6 +52,23 @@ from .semantic_tagger import load_semantic_tags_config
 _REQUIRED_RETURN_CODE_TAG = "return_code"
 
 
+def _missing_source_file_warnings(candidates: list[RuleCandidate]) -> list[str]:
+    """Fase 15B4-CANDIDATE-QUALITY-5A: `RuleCandidate.source_file` puede
+    ser `None` (Paragraph con `location_kind` != EXACT, hoy
+    exclusivamente COPY) sin que el candidato se pierda ni se descarte
+    -- pero eso nunca debe quedar silencioso (CLAUDE.md, 'no ocultar
+    construcciones no soportadas'). No es un ERROR (el candidato es
+    valido y avanza igual), por eso vive en `warnings`, nunca bloquea la
+    etapa."""
+    return sorted(
+        f"candidato {candidate.candidate_id!r} sin source_file disponible "
+        f"(paragraph {candidate.paragraph_id!r} con location_kind distinto de EXACT; "
+        "ver warnings de 02-canonical para el programa, tipicamente por COPY)"
+        for candidate in candidates
+        if candidate.source_file is None
+    )
+
+
 def load_and_validate_candidate_artifact(candidates_path: Path) -> tuple[CandidateArtifact, str]:
     """Relee `06-candidates.json`, calcula su SHA-256 real y lo valida
     contra `CandidateArtifact`. Reutilizado por `contexts_built_stage.py`
@@ -273,6 +290,8 @@ def _build_candidate_artifact(
         # la misma decision (ver docstring de la funcion).
         candidates, ghost_warnings = suppress_superseded_v1_return_code_ghosts(candidates)
         warnings = sorted(set(enhanced_warnings) | set(ghost_warnings))
+
+    warnings = sorted(set(warnings) | set(_missing_source_file_warnings(candidates)))
 
     return CandidateArtifact(
         run_id=run_id,
