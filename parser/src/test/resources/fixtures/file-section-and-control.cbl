@@ -1,0 +1,25 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILETEST1.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT CLIENT-FILE ASSIGN TO CLIFILE
+               ORGANIZATION IS SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  CLIENT-FILE.
+       01  CLIENT-RECORD.
+           05 CR-ID               PIC 9(5).
+           05 CR-NOMBRE           PIC X(30).
+       WORKING-STORAGE SECTION.
+       01 WS-SALDO                PIC 9(7)V99 VALUE 0.
+       01 WS-COD-RETORNO          PIC X(4) VALUE SPACES.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN INPUT CLIENT-FILE.
+           READ CLIENT-FILE.
+           CLOSE CLIENT-FILE.
+           IF WS-SALDO < 0
+               MOVE 'R001' TO WS-COD-RETORNO
+           END-IF.
+           GOBACK.

@@ -20,8 +20,14 @@ import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryC
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryGroup;
 import io.proleap.cobol.asg.metamodel.data.datadescription.ValueClause;
 import io.proleap.cobol.asg.metamodel.data.datadescription.ValueInterval;
+import io.proleap.cobol.asg.metamodel.data.file.FileDescriptionEntry;
+import io.proleap.cobol.asg.metamodel.data.file.FileSection;
 import io.proleap.cobol.asg.metamodel.data.linkage.LinkageSection;
 import io.proleap.cobol.asg.metamodel.data.workingstorage.WorkingStorageSection;
+import io.proleap.cobol.asg.metamodel.environment.EnvironmentDivision;
+import io.proleap.cobol.asg.metamodel.environment.inputoutput.InputOutputSection;
+import io.proleap.cobol.asg.metamodel.environment.inputoutput.filecontrol.FileControlEntry;
+import io.proleap.cobol.asg.metamodel.environment.inputoutput.filecontrol.FileControlParagraph;
 import io.proleap.cobol.asg.metamodel.procedure.Paragraph;
 import io.proleap.cobol.asg.metamodel.procedure.ProcedureDivision;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
@@ -76,6 +82,8 @@ public final class CanonicalProgramExtractor {
                             + "atribuyen al programa principal)");
         }
 
+        extractFileSectionAndFileControlUnsupported(programUnit, ctx);
+
         List<CanonicalDataItem> dataItems = extractDataItems(programUnit, ctx);
         List<CanonicalConditionName> conditionNames = extractConditionNames(programUnit, ctx);
         List<CanonicalParagraph> paragraphs = extractParagraphs(programUnit, ctx, conditionNames);
@@ -102,6 +110,51 @@ public final class CanonicalProgramExtractor {
                 linkageDataItems,
                 entryParameters,
                 entryReturningDataItem);
+    }
+
+    /**
+     * Fase 15B4-CANDIDATE-QUALITY-5B (cierre de P1-FD-FILE-CONTROL-SILENT):
+     * FILE SECTION/FD y FILE-CONTROL/SELECT nunca se modelan
+     * productivamente (ningun {@code CanonicalDataItem} ni entidad de
+     * grafo nueva) -- esta funcion existe UNICAMENTE para que su
+     * presencia quede trazada via {@code ctx.unsupported(...)}, nunca
+     * silenciosa, reutilizando el mismo mecanismo de lista plana ya
+     * usado por cualquier otra construccion no soportada (nunca se
+     * amplia {@code ExtractionContext}/{@code CanonicalProgram}). Una
+     * entrada por FD y una por SELECT (nunca por campo 05 individual
+     * bajo el FD, ni por clausula individual de FILE-CONTROL) para
+     * evitar ruido. {@link FileControlEntry#getFileDescriptionEntry()}
+     * ya vincula SELECT con su FD -- se usa tal cual, sin construir un
+     * linker nuevo.
+     */
+    private void extractFileSectionAndFileControlUnsupported(
+            ProgramUnit programUnit, ExtractionContext ctx) {
+        DataDivision dataDivision = programUnit.getDataDivision();
+        FileSection fileSection = dataDivision == null ? null : dataDivision.getFileSection();
+        if (fileSection != null) {
+            for (FileDescriptionEntry fd : fileSection.getFileDescriptionEntries()) {
+                ctx.unsupported(
+                        "UNSUPPORTED_FILE_SECTION: FD " + fd.getName() + " (FILE SECTION, record "
+                                + "layout) detectado pero no modelado productivamente en esta version; "
+                                + "sus campos nunca se incluyen en data_items ni se mezclan con "
+                                + "WORKING-STORAGE");
+            }
+        }
+
+        EnvironmentDivision environmentDivision = programUnit.getEnvironmentDivision();
+        InputOutputSection inputOutputSection =
+                environmentDivision == null ? null : environmentDivision.getInputOutputSection();
+        FileControlParagraph fileControlParagraph =
+                inputOutputSection == null ? null : inputOutputSection.getFileControlParagraph();
+        if (fileControlParagraph != null) {
+            for (FileControlEntry entry : fileControlParagraph.getFileControlEntries()) {
+                ctx.unsupported(
+                        "UNSUPPORTED_FILE_CONTROL: SELECT " + entry.getName() + " (FILE-CONTROL) "
+                                + "detectado pero no modelado productivamente en esta version; ASSIGN/"
+                                + "ORGANIZATION/ACCESS MODE/RECORD KEY no se interpretan semanticamente, "
+                                + "no se crea ningun nodo Table/File");
+            }
+        }
     }
 
     /**
