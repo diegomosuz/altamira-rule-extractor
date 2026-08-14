@@ -37,6 +37,16 @@ spec:
         app.kubernetes.io/name: altamira-rule-extractor
         app.kubernetes.io/component: app
     spec:
+      # enableServiceLinks: false (defecto real encontrado y corregido
+      # en Fase 15B4-C, ver neo4j-statefulset.yaml para el detalle
+      # completo): sin esto, Kubernetes inyecta variables legacy
+      # "Docker links" para CADA Service del namespace, incluyendo
+      # NEO4J_PORT/NEO4J_SERVICE_HOST/etc. desde el Service "neo4j" --
+      # Settings usa varios nombres SIN prefijo ALTAMIRA_ (NEO4J_URI/
+      # NEO4J_USER/NEO4J_PASSWORD/NEO4J_DATABASE, ver README.md), asi
+      # que esta contaminacion de entorno es un riesgo real, no solo
+      # teorico, tambien en el pod de la app.
+      enableServiceLinks: false
       securityContext:
         # fsGroup asegura que el PVC (aprovisionado por el CSI driver
         # del cliente, tipicamente con ownership root:root inicial)
@@ -85,10 +95,24 @@ spec:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
+          # httpHeaders.Host (defecto real encontrado y corregido en
+          # Fase 15B4-C, nunca antes ejercitado contra un cluster
+          # real): las probes de Kubernetes conectan por IP de pod,
+          # nunca por el hostname configurado -- TrustedHostMiddleware
+          # (api/app.py, allowed_hosts=settings.trusted_hosts)
+          # rechaza con 400 cualquier Host header que no coincida
+          # exactamente con ALTAMIRA_TRUSTED_HOSTS (configmap.yaml),
+          # dejando el pod en CrashLoopBackOff permanente sin esto.
+          # Este valor DEBE coincidir con el primer hostname de
+          # ALTAMIRA_TRUSTED_HOSTS en configmap.yaml -- actualizar
+          # ambos juntos si el operador cambia el hostname real.
           startupProbe:
             httpGet:
               path: /health
               port: http
+              httpHeaders:
+                - name: Host
+                  value: altamira.internal.example.com
             periodSeconds: 2
             timeoutSeconds: 3
             failureThreshold: 30
@@ -96,6 +120,9 @@ spec:
             httpGet:
               path: /health
               port: http
+              httpHeaders:
+                - name: Host
+                  value: altamira.internal.example.com
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -103,6 +130,9 @@ spec:
             httpGet:
               path: /ready
               port: http
+              httpHeaders:
+                - name: Host
+                  value: altamira.internal.example.com
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3

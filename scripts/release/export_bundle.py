@@ -5,6 +5,23 @@ checksum SHA256 del tarball. Nunca asume que el cliente tiene Docker
 (`ctr images import`, ver docs/release/INSTALL_K3S.md), este script
 solo produce el artefacto de TRANSFERENCIA.
 
+PRERREQUISITO OBLIGATORIO (Fase 15B4-C, defectos P1/P2, cerrados en
+Fase 15B4-C-RC-PACKAGING-REPRODUCIBILITY): ambas imagenes de entrada
+DEBEN ya ser manifests planos/importables antes de invocar este
+script -- ejecutar primero `python -m scripts.release.
+build_release_images`, que construye `--app-image` sin provenance/SBOM
+y repackea Neo4j (ver `scripts/release/neo4j-offline.Dockerfile`) como
+`altamira-dependencies/neo4j:5.26.28`. Con ese repack ya aplicado,
+invocar este script con `--neo4j-source-image` IGUAL a
+`--neo4j-bundle-reference` (el repack ya dejo la imagen tageada
+directamente con la referencia final; `create_local_alias` de abajo se
+vuelve un `docker tag` no-op sobre si misma, inofensivo). Pasar
+directamente la referencia oficial flotante `neo4j:5-community` como
+`--neo4j-source-image` SIN repack previo produce un archive que
+`ctr images import` rechaza (verificado empiricamente: "content digest
+... not found" / "mismatched image rootfs and manifest layers") --
+error real, no teorico.
+
 Referencia offline de Neo4j (Fase 15B4-B2, corrige 15B4-B): un digest
 puro (`neo4j@sha256:...`) es un riesgo como referencia offline --
 verificado empiricamente (auditoria de archive real via `docker save`,
@@ -12,20 +29,17 @@ scratch fuera del repo) que el archive resultante trae, en su INDICE
 OCI, la anotacion `io.containerd.image.name` asociada a la imagen
 (nunca solo el digest); para la imagen original esa anotacion resuelve
 a `docker.io/library/neo4j:5-community` (la referencia flotante que se
-queria evitar). Que `ctr images import` (containerd) efectivamente use
-esa anotacion para nombrar la imagen registrada es comportamiento
-documentado de containerd, no una importacion real ejecutada en esta
-fase (sin instalar containerd aqui, ver Fase 15B4-C para la
-verificacion end-to-end contra un cluster real). Este script SIEMPRE
-crea primero un alias LOCAL controlado por el release
-(`docker tag <source> <bundle-reference>`, idempotente) antes de
-`docker save` -- el alias es el que se transporta, nunca la imagen
-bajo su tag original.
+queria evitar). Este script SIEMPRE crea primero un alias LOCAL
+controlado por el release (`docker tag <source> <bundle-reference>`,
+idempotente) antes de `docker save` -- el alias es el que se
+transporta, nunca la imagen bajo su tag original.
 
-Uso:
+Uso (secuencia oficial completa, ver
+docs/release/QA_TO_PROD_AND_ROLLBACK.md):
+    python -m scripts.release.build_release_images
     python -m scripts.release.export_bundle \\
         --app-image altamira-rule-extractor-app:1.17.0 \\
-        --neo4j-source-image neo4j:5-community \\
+        --neo4j-source-image altamira-dependencies/neo4j:5.26.28 \\
         --neo4j-bundle-reference altamira-dependencies/neo4j:5.26.28 \\
         --output-dir dist/release/1.17.0
 

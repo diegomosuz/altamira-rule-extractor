@@ -52,8 +52,17 @@ data:
   # reverse proxy del cliente antes de produccion (ver
   # docs/REVERSE_PROXY_SECURITY_REQUIREMENTS.md, requisito 6). El
   # default "*" de Settings es permisivo y nunca debe usarse en
-  # produccion real.
-  ALTAMIRA_TRUSTED_HOSTS: "altamira.internal.example.com"
+  # produccion real. `trusted_hosts: list[str]` (Pydantic Settings)
+  # exige JSON valido desde una env var -- un string plano hace
+  # fallar el arranque completo con SettingsError (defecto real
+  # encontrado y corregido en Fase 15B4-C, nunca antes ejercitado
+  # contra una app real). Formato: lista JSON de 1+ hostnames.
+  # ACOPLADO a app-deployment.yaml: el primer hostname de esta lista
+  # DEBE coincidir con el httpHeaders.Host de las 3 probes del
+  # contenedor app (TrustedHostMiddleware rechaza el Host real de las
+  # probes de Kubernetes, que conectan por IP de pod) -- actualizar
+  # ambos juntos.
+  ALTAMIRA_TRUSTED_HOSTS: '["altamira.internal.example.com"]'
 
   # TLS termina en el reverse proxy externo (nunca en este Service,
   # que permanece ClusterIP). Activar solo si el proxy del cliente

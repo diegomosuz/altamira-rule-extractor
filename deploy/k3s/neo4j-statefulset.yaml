@@ -59,6 +59,17 @@ spec:
         app.kubernetes.io/name: altamira-rule-extractor
         app.kubernetes.io/component: neo4j
     spec:
+      # enableServiceLinks: false (defecto real encontrado y corregido
+      # en Fase 15B4-C, nunca antes ejercitado contra un cluster real):
+      # sin esto, Kubernetes inyecta variables de entorno legacy
+      # estilo "Docker links" para CADA Service del namespace, incluido
+      # este mismo Service "neo4j" (NEO4J_PORT_7687_TCP_PORT,
+      # NEO4J_SERVICE_HOST, etc.) -- la imagen oficial de Neo4j
+      # interpreta CUALQUIER env var con prefijo NEO4J_ como config
+      # override (guion bajo -> punto), asi que NEO4J_PORT_7687_TCP_PORT
+      # se traduce a la clave invalida "PORT.7687.TCP.PORT" y Neo4j
+      # rechaza arrancar (server.config.strict_validation.enabled).
+      enableServiceLinks: false
       containers:
         - name: neo4j
           image: "altamira-dependencies/neo4j:5.26.28"
@@ -73,51 +84,67 @@ spec:
             - name: http
               containerPort: 7474
           env:
-            - name: NEO4J_USER
+            # HEALTHCHECK_NEO4J_USER/HEALTHCHECK_NEO4J_PASSWORD (nunca
+            # NEO4J_USER/NEO4J_PASSWORD -- defecto real encontrado y
+            # corregido en Fase 15B4-C, mismo naming ya usado en
+            # docker-compose.yml): la imagen oficial trata CUALQUIER
+            # variable de entorno con prefijo NEO4J_ como un override
+            # de configuracion del servidor, incluso si su unico
+            # proposito real es alimentar NEO4J_AUTH/las probes via
+            # sustitucion nativa de Kubernetes -- NEO4J_USER/
+            # NEO4J_PASSWORD como tal se traducen a las claves
+            # invalidas "USER"/"PASSWORD" y Neo4j rechaza arrancar
+            # (server.config.strict_validation.enabled). El comentario
+            # anterior de este archivo asumia lo contrario sin haberlo
+            # ejercitado contra un Neo4j real -- ya corregido.
+            - name: HEALTHCHECK_NEO4J_USER
               valueFrom:
                 configMapKeyRef:
                   name: altamira-config
                   key: NEO4J_USER
-            - name: NEO4J_PASSWORD
+            - name: HEALTHCHECK_NEO4J_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: altamira-secrets
                   key: NEO4J_PASSWORD
-            # La imagen oficial UNICAMENTE interpreta NEO4J_AUTH
-            # (nunca NEO4J_USER/NEO4J_PASSWORD como settings propios,
-            # ver comentario ya existente en docker-compose.yml) --
-            # $(...) es sustitucion nativa de Kubernetes contra
-            # variables YA declaradas en este mismo contenedor, nunca
-            # un secreto adicional expuesto en claro en el manifest.
+            # La imagen oficial UNICAMENTE interpreta NEO4J_AUTH como
+            # mecanismo de credenciales -- $(...) es sustitucion nativa
+            # de Kubernetes contra las variables HEALTHCHECK_ ya
+            # declaradas arriba en este mismo contenedor, nunca un
+            # secreto adicional expuesto en claro en el manifest.
             - name: NEO4J_AUTH
-              value: "$(NEO4J_USER)/$(NEO4J_PASSWORD)"
+              value: "$(HEALTHCHECK_NEO4J_USER)/$(HEALTHCHECK_NEO4J_PASSWORD)"
           volumeMounts:
             - name: neo4j-data
               mountPath: /data
           readinessProbe:
             # Mismo mecanismo ya probado en docker-compose.yml -- sin
             # dependencia HTTP externa, nunca en /ready de la app (ver
-            # Fase 15B4-A2 Seccion 12/14).
+            # Fase 15B4-A2 Seccion 12/14). `sh -c` (defecto real
+            # encontrado y corregido en Fase 15B4-C, nunca antes
+            # ejercitado contra un cluster real): la sustitucion
+            # nativa `$(VAR)` de Kubernetes SOLO aplica a
+            # container.command/args -- nunca a probe.exec.command
+            # (un argv literal, sin shell) -- "$(HEALTHCHECK_NEO4J_
+            # USER)"/"$(HEALTHCHECK_NEO4J_PASSWORD)" quedaban como
+            # texto literal sin resolver (cypher-shell recibia -u/-p
+            # vacios, probe siempre en timeout). Envolver en `sh -c`
+            # obliga la expansion real de entorno ($VAR) dentro del
+            # contenedor, donde las variables SI existen (confirmado).
             exec:
               command:
-                - cypher-shell
-                - -u
-                - "$(NEO4J_USER)"
-                - -p
-                - "$(NEO4J_PASSWORD)"
-                - "RETURN 1"
+                - sh
+                - -c
+                - 'cypher-shell -u "$HEALTHCHECK_NEO4J_USER" -p "$HEALTHCHECK_NEO4J_PASSWORD" "RETURN 1"'
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 20
           livenessProbe:
             exec:
               command:
-                - cypher-shell
-                - -u
-                - "$(NEO4J_USER)"
-                - -p
-                - "$(NEO4J_PASSWORD)"
-                - "RETURN 1"
+                - sh
+                - -c
+                - 'cypher-shell -u "$HEALTHCHECK_NEO4J_USER" -p "$HEALTHCHECK_NEO4J_PASSWORD" "RETURN 1"'
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5

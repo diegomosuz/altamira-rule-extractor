@@ -3,7 +3,7 @@
 ## Promoción QA → PROD
 
 ```
-BUILD ONCE
+BUILD ONCE (scripts/release/build_release_images.py -- app + repack Neo4j)
   → SCAN (Syft + Grype, scripts/release/sbom_scan.py)
   → EXPORT / REGISTER imagen inmutable (digest capturado, scripts/release/export_bundle.py)
   → DEPLOY QA
@@ -12,11 +12,46 @@ BUILD ONCE
   → DEPLOY PROD
 ```
 
+**BUILD ONCE, en detalle** (Fase 15B4-C-RC-PACKAGING-REPRODUCIBILITY —
+único procedimiento versionado, nunca comandos manuales de una sesión
+de qualification):
+
+```bash
+python -m scripts.release.build_release_images
+python -m scripts.release.export_bundle \
+    --app-image altamira-rule-extractor-app:<version> \
+    --neo4j-source-image altamira-dependencies/neo4j:5.26.28 \
+    --neo4j-bundle-reference altamira-dependencies/neo4j:5.26.28 \
+    --output-dir dist/release/<version>
+python -m scripts.release.build_release_metadata \
+    --app-image altamira-rule-extractor-app:<version> \
+    --output dist/release/<version>/release-metadata.json
+```
+
+`build_release_images.py` construye la imagen `app` (`--target runtime`,
+labels de identidad correctos, `--provenance=false --sbom=false` —
+sin esto, `ctr images import` en K3s/containerd rechaza la imagen,
+ver defecto P1 abajo) y repackea `neo4j:5-community` (imagen oficial,
+un índice multi-plataforma con un manifest-referrer de atestación
+adjunto) hacia un manifest plano tageado directamente como
+`altamira-dependencies/neo4j:5.26.28` (defecto P2). Ambos defectos
+fueron encontrados durante el rehearsal real contra un cluster
+`kind` efímero — nunca teóricos — y quedan cerrados por este único
+script, verificado mediante reconstrucción limpia + import offline +
+despliegue exitoso sin ningún paso correctivo manual posterior.
+
 **Nunca se reconstruye la imagen entre QA y PROD.** El digest capturado por
 `scripts/release/build_release_metadata.py` en el momento del build es la
 identidad inmutable que se promueve sin cambios — solo cambian los
 manifests/ConfigMap/Secret que apuntan al ambiente (namespace, `NEO4J_URI`,
 `ALTAMIRA_TRUSTED_HOSTS`, credenciales), nunca la imagen en sí.
+
+**Build vs runtime**: el build de `BUILD ONCE` puede requerir acceso a
+registry/dependency acquisition (Maven Central, PyPI, Docker Hub para
+`neo4j:5-community`) — nunca se afirma "build air-gapped". El claim de
+offline aplica exclusivamente al **runtime** (import del archive vía
+`ctr images import`/`kind load image-archive` + despliegue, sin acceso
+externo), ver `docs/release/INSTALL_K3S.md`.
 
 ## Rollback
 
