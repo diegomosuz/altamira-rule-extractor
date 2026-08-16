@@ -24,6 +24,7 @@ from ..api.reads import (
     require_stage_succeeded,
 )
 from ..api.run_actions import create_and_submit_run, submit_existing_run
+from ..api.run_cleanup import clean_run
 from ..api.validation import validate_candidate_id, validate_run_id
 from ..config import Settings
 from ..contracts.context_manifest import ContextDirectoryManifest
@@ -44,11 +45,20 @@ from ..pipeline.operational_governance_reader import (
 )
 from .csrf import verify_same_origin
 from .deps import get_executor, get_settings, get_templates
-from .presentation import program_name_from_source_file
+from .presentation import compute_pipeline_progress, program_name_from_source_file
 
 router = APIRouter(prefix="/ui", tags=["ui"], include_in_schema=False)
 
 _TERMINAL_STAGES = (PipelineStage.COMPLETED, PipelineStage.FAILED)
+
+
+def _is_terminal(state: RunState) -> bool:
+    """Un registro de referencia duplicado (Feature 6,
+    `duplicate_of_run_id is not None`) nunca progresa por si mismo --
+    tratarlo como no-terminal haria que `_status_fragment.html` siguiera
+    haciendo polling HTMX cada 3s indefinidamente sin que nada pueda
+    cambiar nunca."""
+    return state.current_stage in _TERMINAL_STAGES or state.duplicate_of_run_id is not None
 
 
 def _run_dir(settings: Settings, run_id: str) -> Path:
@@ -77,6 +87,19 @@ def _list_run_states(settings: Settings) -> list[RunState]:
                 continue
     states.sort(key=lambda s: s.run_id, reverse=True)
     return states
+
+
+def _original_run_for_duplicate(settings: Settings, state: RunState) -> RunState | None:
+    """`None` si `state` no es un registro de referencia (Feature 6), o si
+    su run autoritativo ya no existe (limpiado sin pasar por la cascada
+    de `run_cleanup.py`, p. ej. manipulacion manual del filesystem) --
+    nunca revienta la pantalla del registro de referencia por esto."""
+    if state.duplicate_of_run_id is None:
+        return None
+    try:
+        return read_run_state(_run_dir(settings, state.duplicate_of_run_id))
+    except ApiError:
+        return None
 
 
 def _run_summary_counts(run_dir: Path, state: RunState) -> dict[str, int | None]:
@@ -164,6 +187,14 @@ def _render_upload_form(
     )
 
 
+@router.get("/about", response_class=HTMLResponse, name="ui_about")
+def about_ui(
+    request: Request,
+    templates: Jinja2Templates = Depends(get_templates),
+) -> HTMLResponse:
+    return templates.TemplateResponse(request, "about.html", {})
+
+
 @router.get("/upload", response_class=HTMLResponse, name="ui_upload_form")
 def upload_form(
     request: Request,
@@ -202,6 +233,7 @@ def list_runs_ui(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     settings: Settings = Depends(get_settings),
+    executor: RunExecutor = Depends(get_executor),
     templates: Jinja2Templates = Depends(get_templates),
 ) -> HTMLResponse:
     states = _list_run_states(settings)
@@ -214,6 +246,17 @@ def list_runs_ui(
     in_progress_count = total - completed_count - failed_count
     last_run_at = states[0].updated_at if states else None
     page = states[offset : offset + limit]
+    active_run_ids = {state.run_id for state in page if executor.is_active(state.run_id)}
+    # Estado real de la ejecucion ORIGINAL de cada registro de referencia
+    # de esta pagina (Feature 6 + CHECK 7 del pre-commit review): nunca
+    # se etiqueta un duplicado de un run FALLIDO como "YA PROCESADO"
+    # (implicaria exito que no ocurrio). Solo se resuelve para las filas
+    # visibles (maximo `limit`), nunca para todo el historico.
+    original_runs_by_id = {
+        state.run_id: _original_run_for_duplicate(settings, state)
+        for state in page
+        if state.duplicate_of_run_id is not None
+    }
     return templates.TemplateResponse(
         request,
         "runs.html",
@@ -230,6 +273,8 @@ def list_runs_ui(
             "has_next": offset + limit < total,
             "previous_offset": max(0, offset - limit),
             "next_offset": offset + limit,
+            "active_run_ids": active_run_ids,
+            "original_runs_by_id": original_runs_by_id,
         },
     )
 
@@ -239,6 +284,7 @@ def run_status_ui(
     request: Request,
     run_id: str,
     settings: Settings = Depends(get_settings),
+    executor: RunExecutor = Depends(get_executor),
     templates: Jinja2Templates = Depends(get_templates),
 ) -> HTMLResponse:
     run_dir = _run_dir(settings, run_id)
@@ -248,8 +294,12 @@ def run_status_ui(
         "run_status.html",
         {
             "run": state,
-            "is_terminal": state.current_stage in _TERMINAL_STAGES,
+            "is_terminal": _is_terminal(state),
             "summary_counts": _run_summary_counts(run_dir, state),
+            "progress": compute_pipeline_progress(
+                state, is_actively_owned=executor.is_active(run_id)
+            ),
+            "original_run": _original_run_for_duplicate(settings, state),
         },
     )
 
@@ -261,6 +311,7 @@ def run_status_fragment_ui(
     request: Request,
     run_id: str,
     settings: Settings = Depends(get_settings),
+    executor: RunExecutor = Depends(get_executor),
     templates: Jinja2Templates = Depends(get_templates),
 ) -> HTMLResponse:
     # GET puro: nunca programa ni reanuda una ejecucion, solo lee
@@ -272,8 +323,12 @@ def run_status_fragment_ui(
         "_status_fragment.html",
         {
             "run": state,
-            "is_terminal": state.current_stage in _TERMINAL_STAGES,
+            "is_terminal": _is_terminal(state),
             "summary_counts": _run_summary_counts(run_dir, state),
+            "progress": compute_pipeline_progress(
+                state, is_actively_owned=executor.is_active(run_id)
+            ),
+            "original_run": _original_run_for_duplicate(settings, state),
         },
     )
 
@@ -293,6 +348,26 @@ def resume_ui(
     # segunda ruta de render especial dentro de este handler.
     submit_existing_run(run_dir, run_id, state, settings, executor)
     return _redirect(request, "ui_run_status", {"run_id": run_id})
+
+
+@router.post(
+    "/runs/{run_id}/clean", name="ui_clean_run", dependencies=[Depends(verify_same_origin)]
+)
+def clean_run_ui(
+    request: Request,
+    run_id: str,
+    settings: Settings = Depends(get_settings),
+    executor: RunExecutor = Depends(get_executor),
+) -> Response:
+    """ "Limpiar job" (Fase v1.17.1, Feature 5): POST, nunca GET (accion
+    destructiva). `clean_run` reverifica server-side que el run no este
+    activo (nunca confia solo en que la UI ya deshabilito el boton) y
+    propaga `RunAlreadyActiveError`/`RunNotFoundError`/`RunCleanupError`
+    al manejador HTML generico (`error.html`), mismo patron que
+    `resume_ui`."""
+    run_dir = _run_dir(settings, run_id)
+    clean_run(run_dir, run_id, settings, executor)
+    return _redirect(request, "ui_runs", {})
 
 
 @router.get("/runs/{run_id}/candidates", response_class=HTMLResponse, name="ui_candidates")

@@ -7,6 +7,9 @@
   hx-swap="outerHTML"
   {% endif %}
 >
+  {% if run.duplicate_of_run_id %}
+  {% include "_duplicate_notice.html" %}
+  {% else %}
   <dl class="meta-grid">
     <dt>Run ID</dt><dd class="cell-mono">{{ run.run_id }}</dd>
     <dt>Etapa actual</dt><dd>{{ status_badge(run.current_stage.value) }}</dd>
@@ -27,33 +30,70 @@
   </div>
   {% endif %}
 
+  {% if progress %}
+  <section class="progress-overall" aria-labelledby="progress-overall-heading">
+    <div class="progress-overall-head">
+      <h2 id="progress-overall-heading" class="mb-0">Progreso general</h2>
+      <span class="progress-overall-value">{{ progress.overall_percent }}&nbsp;%</span>
+    </div>
+    <progress class="progress-bar{% if run.current_stage.value == 'FAILED' %} progress-bar-failed{% endif %}"
+      aria-labelledby="progress-overall-heading"
+      value="{{ progress.overall_percent }}" max="100">{{ progress.overall_percent }}%</progress>
+  </section>
+  {% endif %}
+
   <h2>Etapas del pipeline</h2>
   <ol class="stepper">
-    {% for stage in run.stages %}
-    <li class="step" data-status="{{ stage.status.value | lower }}">
+    {% if progress %}
+    {% for stage_progress in progress.stages %}
+    {% set execution = run.stages | selectattr("stage.value", "equalto", stage_progress.stage) | first %}
+    <li class="step" data-status="{{ 'interrupted' if stage_progress.stale else stage_progress.status | lower }}">
       <div class="step-head">
-        <span class="step-name">{{ stage.stage.value | status_label }} <span class="text-muted small cell-mono">{{ stage.stage.value }}</span></span>
-        {{ status_badge(stage.status.value) }}
+        <span class="step-name">{{ stage_progress.label }} <span class="text-muted small cell-mono">{{ stage_progress.stage }}</span></span>
+        {% if stage_progress.stale %}
+        <span class="badge badge-interrupted"><span class="badge-dot" aria-hidden="true"></span>Interrumpida<span class="badge-code">RUNNING</span></span>
+        {% else %}
+        {{ status_badge(stage_progress.status) }}
+        {% endif %}
       </div>
+      {% if stage_progress.stale %}
+      {# Etapa RUNNING persistida pero SIN ejecucion activa real (ver
+         docstring de StageProgressView.stale, ui/presentation.py):
+         nunca se muestra una barra animada -- eso implicaria trabajo en
+         curso que no existe. #}
+      <p class="text-muted small stage-stale-notice">
+        Interrumpida antes de completarse (posible reinicio del servicio). Use "Reanudar" para continuar.
+      </p>
+      {% elif stage_progress.percent is none %}
+      <progress class="progress-bar progress-bar-sm" aria-label="Progreso de {{ stage_progress.label }}" max="100"></progress>
+      <span class="progress-bar-label small text-muted">En curso</span>
+      {% else %}
+      <progress class="progress-bar progress-bar-sm{% if stage_progress.status == 'FAILED' %} progress-bar-failed{% endif %}" aria-label="Progreso de {{ stage_progress.label }}" value="{{ stage_progress.percent }}" max="100">{{ stage_progress.percent }}%</progress>
+      <span class="progress-bar-label small text-muted">{{ stage_progress.percent }}&nbsp;%</span>
+      {% endif %}
+      {% if execution %}
       <div class="step-meta">
-        <span>Inicio: {{ stage.started_at.strftime("%d/%m/%Y %H:%M:%S") if stage.started_at else "No informado" }}</span>
-        <span>Fin: {{ stage.finished_at.strftime("%d/%m/%Y %H:%M:%S") if stage.finished_at else "No informado" }}</span>
-        {% if stage.duration_seconds is not none %}<span>Duracion: {{ "%.2f" | format(stage.duration_seconds) }} s</span>{% endif %}
+        <span>Inicio: {{ execution.started_at.strftime("%d/%m/%Y %H:%M:%S") if execution.started_at else "No informado" }}</span>
+        <span>Fin: {{ execution.finished_at.strftime("%d/%m/%Y %H:%M:%S") if execution.finished_at else "No informado" }}</span>
+        {% if execution.duration_seconds is not none %}<span>Duracion: {{ "%.2f" | format(execution.duration_seconds) }} s</span>{% endif %}
       </div>
-      {% if stage.warnings or stage.error %}
+      {% if execution.warnings or execution.error %}
       <div class="step-body">
-        {% if stage.warnings %}
+        {% if execution.warnings %}
         <details class="collapsible">
-          <summary>{{ stage.warnings | length }} advertencia(s)</summary>
-          <ul>{% for warning in stage.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+          <summary>{{ execution.warnings | length }} advertencia(s)</summary>
+          <ul>{% for warning in execution.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
         </details>
         {% endif %}
-        {% if stage.error %}
-        <div class="alert alert-error" role="alert">{{ stage.error }}</div>
+        {% if execution.error %}
+        <div class="alert alert-error" role="alert">{{ execution.error }}</div>
         {% endif %}
       </div>
       {% endif %}
+      {% endif %}
     </li>
     {% endfor %}
+    {% endif %}
   </ol>
+  {% endif %}
 </div>

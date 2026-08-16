@@ -1,0 +1,35 @@
+{% from "_components.html" import status_badge, duplicate_status_badge %}
+{% from "_icons.html" import icon %}
+<div class="alert alert-info duplicate-notice" role="status">
+  <div class="duplicate-notice-head">
+    {{ icon("alert") }}
+    {{ duplicate_status_badge(original_run) }}
+  </div>
+  <p class="mb-0">
+    Este paquete (identificado por su hash exacto, nunca por el nombre del archivo) ya fue
+    subido anteriormente. FIERN no volvio a ejecutar el pipeline completo: esta es una
+    referencia liviana a la ejecucion original.
+  </p>
+  <dl class="meta-grid">
+    <dt>SHA-256 del paquete</dt>
+    <dd class="cell-mono small" title="{{ run.source_package_hash }}">{{ run.source_package_hash }}</dd>
+    <dt>Ejecucion original</dt>
+    <dd class="cell-mono"><a href="{{ url_for('ui_run_status', run_id=run.duplicate_of_run_id) }}">{{ run.duplicate_of_run_id }}</a></dd>
+    {% if original_run %}
+    <dt>Estado de la ejecucion original</dt>
+    <dd>{{ status_badge(original_run.current_stage.value) }}</dd>
+    <dt>Fecha de la ejecucion original</dt>
+    <dd><time datetime="{{ original_run.created_at.isoformat() }}">{{ original_run.created_at.strftime("%d/%m/%Y %H:%M:%S") }}</time></dd>
+    {% else %}
+    <dt>Estado de la ejecucion original</dt>
+    <dd class="text-muted">No disponible (la ejecucion original ya no existe)</dd>
+    {% endif %}
+    <dt>Intento de subida detectado</dt>
+    <dd><time datetime="{{ run.created_at.isoformat() }}">{{ run.created_at.strftime("%d/%m/%Y %H:%M:%S") }}</time></dd>
+  </dl>
+  {% if original_run %}
+  <div class="actions mt-0">
+    <a class="btn btn-primary" href="{{ url_for('ui_run_status', run_id=run.duplicate_of_run_id) }}">Ver ejecucion original</a>
+  </div>
+  {% endif %}
+</div>

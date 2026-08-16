@@ -161,6 +161,19 @@ class OperationalPreconditionError(ApiError):
         super().__init__(message, status_code=409, code="operational_precondition_failed")
 
 
+class RunCleanupError(ApiError):
+    """ "Limpiar job" (Fase v1.17.1, Feature 5) no pudo completarse de
+    forma segura -- p. ej. Neo4j no alcanzable mientras el run limpiado
+    es dueno del grafo activo. Nunca se reporta exito parcial como si
+    hubiera completado: el filesystem del run permanece intacto (el
+    orden de limpieza es Neo4j primero, filesystem despues -- ver
+    `api/run_cleanup.py`) y la operacion puede reintentarse. 502 (fallo
+    de un recurso dependiente, no un error del cliente)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, status_code=502, code="run_cleanup_failed")
+
+
 class RequestBodyTooLargeError(ApiError):
     """Un endpoint de formulario (no de upload de paquete -- ver
     `UploadTooLargeError` para eso) recibio un cuerpo mayor al limite

@@ -11,3 +11,21 @@
 {% endmacro %}
 
 {% macro status_badge(value) %}<span class="badge badge-{{ value | lower }}"><span class="badge-dot" aria-hidden="true"></span>{{ value | status_label }}<span class="badge-code">{{ value }}</span></span>{% endmacro %}
+
+{# Registro de referencia duplicado (Fase v1.17.1, Feature 6): el estado
+   de la ejecucion ORIGINAL determina la etiqueta -- nunca "YA PROCESADO"
+   (implica exito) para una ejecucion original que en realidad fallo o
+   que todavia esta en proceso. `original_run` es `None` cuando la
+   ejecucion original ya no existe (ver `_original_run_for_duplicate`,
+   ui/router.py). #}
+{% macro duplicate_status_badge(original_run) %}
+{%- if original_run is none -%}
+<span class="badge badge-already-processed"><span class="badge-dot" aria-hidden="true"></span>Paquete ya registrado</span>
+{%- elif original_run.current_stage.value == "COMPLETED" -%}
+<span class="badge badge-already-processed"><span class="badge-dot" aria-hidden="true"></span>YA PROCESADO</span>
+{%- elif original_run.current_stage.value == "FAILED" -%}
+<span class="badge badge-duplicate-failed"><span class="badge-dot" aria-hidden="true"></span>Paquete ya registrado &mdash; ejecuci&oacute;n original fallida</span>
+{%- else -%}
+<span class="badge badge-duplicate-active"><span class="badge-dot" aria-hidden="true"></span>Paquete ya en proceso</span>
+{%- endif -%}
+{% endmacro %}

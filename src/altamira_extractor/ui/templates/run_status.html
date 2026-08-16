@@ -14,6 +14,7 @@
     <h1>Detalle de la ejecucion</h1>
     <p class="page-lede">Seguimiento del pipeline completo de extraccion de reglas para este paquete.</p>
   </div>
+  {% if not run.duplicate_of_run_id %}
   <div class="actions mt-0">
     {% if run.current_stage.value != "COMPLETED" %}
     <form method="post" action="{{ url_for('ui_resume', run_id=run.run_id) }}">
@@ -29,6 +30,7 @@
     <a class="btn btn-secondary" href="{{ url_for('ui_candidates', run_id=run.run_id) }}">Ver candidatos</a>
     <a class="btn btn-secondary" href="{{ url_for('ui_governance', run_id=run.run_id) }}">Gobierno operativo</a>
   </div>
+  {% endif %}
 </div>
 
 {% include "_status_fragment.html" %}

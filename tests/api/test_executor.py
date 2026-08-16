@@ -43,7 +43,17 @@ def test_capacity_exceeded_returns_503_and_preserves_run(
 
     monkeypatch.setattr(run_actions_module, "run_ingestion", _blocking_run_ingestion)  # type: ignore[attr-defined]
 
+    # Bytes DISTINTOS para cada paquete (Fase v1.17.1, Feature 6:
+    # deteccion de duplicados por hash exacto) -- esta prueba ejercita
+    # capacidad del executor para DOS paquetes no relacionados, nunca la
+    # deteccion de duplicados (que intercepta un segundo upload de bytes
+    # IDENTICOS antes de llegar al executor, ver
+    # api/duplicate_detection.py).
     zip_path = build_valid_package_zip(tmp_path / "package.zip")
+    second_zip_path = build_valid_package_zip(
+        tmp_path / "package-b.zip",
+        extra={"01-codigo/EXTRA-B.txt": b"segundo paquete, bytes distintos"},
+    )
     try:
         with zip_path.open("rb") as fh:
             first = client.post(
@@ -52,7 +62,7 @@ def test_capacity_exceeded_returns_503_and_preserves_run(
         assert first.status_code == 202
         assert started.wait(timeout=5)
 
-        with zip_path.open("rb") as fh:
+        with second_zip_path.open("rb") as fh:
             second = client.post(
                 "/api/runs", files={"file": ("b.zip", fh, "application/zip")}
             )

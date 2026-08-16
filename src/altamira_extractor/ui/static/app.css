@@ -174,26 +174,48 @@ code {
 
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-3);
   text-decoration: none;
   color: var(--text-inverse);
 }
 
 .brand-mark {
   font-weight: 800;
-  letter-spacing: 0.04em;
-  font-size: 1.05rem;
+  letter-spacing: 0.03em;
+  /* Marca de texto PwC (no hay asset de imagen en el repo -- nunca se
+     fabrica una aproximacion casera del logo real): visualmente mas
+     grande y prominente que antes, proporcional al resto del header. */
+  font-size: 2rem;
+  line-height: 1;
   background: linear-gradient(90deg, var(--pwc-orange), var(--pwc-amber));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-.brand-name {
-  font-weight: 600;
-  font-size: 1.05rem;
+.brand-product {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-left: var(--space-3);
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.brand-fiern {
+  font-weight: 800;
+  font-size: 1.3rem;
+  letter-spacing: 0.02em;
   color: var(--text-inverse);
+  line-height: 1.1;
+}
+
+.brand-fiern-full {
+  font-weight: 500;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: #d8d5cf;
+  max-width: 26rem;
 }
 
 .main-nav {
@@ -306,11 +328,16 @@ section { margin-bottom: var(--space-6); }
   .main-nav.is-open { display: flex; flex-direction: column; align-items: stretch; }
   .nav-toggle { display: inline-flex; align-items: center; gap: var(--space-2); }
   .header-inner { padding: var(--space-3) var(--space-4); }
+  .brand-fiern-full { max-width: 18rem; }
 }
 
 @media (max-width: 40rem) {
   main { padding: var(--space-4); }
   .breadcrumb { padding: var(--space-2) var(--space-4); }
+  .brand-mark { font-size: 1.5rem; }
+  .brand-fiern { font-size: 1.1rem; }
+  .brand-product { padding-left: var(--space-2); }
+  .brand-fiern-full { max-width: 14rem; }
 }
 
 /* ============================ Definition lists ========================= */
@@ -444,6 +471,159 @@ table.compact th, table.compact td { padding: 0.4rem 0.6rem; font-size: 0.85rem;
   border-radius: 50%;
   background: currentColor;
   flex: none;
+}
+
+/* Etapa RUNNING persistida sin ejecucion activa real (Fase v1.17.1,
+   Feature 2/3 -- ver StageProgressView.stale, ui/presentation.py):
+   nunca se reutiliza el color de RUNNING (implicaria progreso activo,
+   que no existe) ni el de FAILED (no fallo, quedo interrumpida) -- tono
+   propio, deliberadamente distinto de ambos. */
+.badge-interrupted {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--neutral-bg);
+  color: var(--pwc-burgundy);
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.badge-interrupted .badge-code {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  opacity: 0.75;
+  font-size: 0.9em;
+}
+
+.stage-stale-notice {
+  margin: var(--space-2) 0 0.15rem;
+}
+
+/* Duplicado por hash exacto (Fase v1.17.1, Feature 6): overlay de
+   presentacion, nunca un PipelineStage nuevo -- acento distintivo propio
+   (no reutiliza badge-* de status_label) porque "YA PROCESADO" no es un
+   estado tecnico de pipeline, es una clasificacion de presentacion sobre
+   un registro de referencia. */
+.badge-already-processed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--info-bg);
+  color: var(--info);
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+/* CHECK 7 del pre-commit review: un duplicado de una ejecucion original
+   FALLIDA/EN PROCESO nunca reutiliza el tono de badge-already-processed
+   (implicaria exito) -- acentos propios, consistentes con el badge real
+   de FAILED/RUNNING en `.badge-failed`/`.badge-running` mas arriba. */
+.badge-duplicate-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--danger-bg);
+  color: var(--danger);
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.badge-duplicate-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--warning-bg);
+  color: var(--warning);
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+/* ============================ Progreso del pipeline ===================== */
+/* Fase v1.17.1, Feature 2/3: nunca basado en timers -- derivado
+   exclusivamente de RunState.stages (ver ui/presentation.py::
+   compute_pipeline_progress). */
+
+.progress-overall {
+  margin-bottom: var(--space-5);
+}
+
+.progress-overall-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.progress-overall-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--accent-primary-hover);
+}
+
+/* <progress> nativo (nunca un <div style="width:...">, ver
+   test_ui_escaping.py::test_template_never_has_inline_style_tag):
+   value/max son ATRIBUTOS HTML, no CSS inline -- el navegador ya expone
+   role=progressbar/aria-valuenow/aria-valuemin/aria-valuemax de forma
+   implicita a partir de ellos. Sin `value` (RUNNING sin contador interno
+   verificable, ver docstring de compute_pipeline_progress) el propio
+   navegador renderiza el estado "indeterminado" nativo -- nunca se
+   fabrica una animacion ni un porcentaje inventado. */
+.progress-bar {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  width: 100%;
+  height: 0.9rem;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar-sm {
+  height: 0.5rem;
+  margin: var(--space-2) 0 0.15rem;
+}
+
+.progress-bar::-webkit-progress-bar {
+  background: var(--neutral-bg);
+  border-radius: 999px;
+}
+.progress-bar::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--pwc-orange), var(--pwc-amber));
+  border-radius: 999px;
+  transition: width var(--transition-fast, 0.2s ease);
+}
+.progress-bar::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--pwc-orange), var(--pwc-amber));
+  border-radius: 999px;
+}
+
+.progress-bar-failed::-webkit-progress-value { background: var(--danger); }
+.progress-bar-failed::-moz-progress-bar { background: var(--danger); }
+
+.progress-bar-label {
+  display: inline-block;
+  margin-bottom: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar::-webkit-progress-value { transition: none; }
 }
 
 /* ================================ Buttons =============================== */
@@ -598,6 +778,29 @@ input[type="search"] {
 .file-summary-name { font-weight: 600; word-break: break-all; }
 .file-summary-size { color: var(--text-secondary); font-size: 0.85rem; }
 
+/* ============================ Dialogo de confirmacion ==================== */
+/* Fase v1.17.1, Feature 5 ("Limpiar job"): <dialog> nativo del navegador --
+   focus trap y manejo de Escape ya incluidos por la plataforma, sin
+   ninguna libreria de UI nueva. */
+
+.confirm-dialog {
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  max-width: 32rem;
+  width: min(90vw, 32rem);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(20, 18, 16, 0.55);
+}
+
+.confirm-dialog h2 {
+  margin-top: 0;
+}
+
 /* ================================ Alerts ================================= */
 
 .alert {
@@ -613,6 +816,20 @@ input[type="search"] {
 .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, transparent); }
 .alert-info { background: var(--info-bg); color: var(--info); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
 .alert-success { background: var(--success-bg); color: var(--success); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
+
+.duplicate-notice {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+.duplicate-notice-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.duplicate-notice .meta-grid { margin-top: var(--space-2); }
 
 .notice {
   background: var(--info-bg);

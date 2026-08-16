@@ -93,6 +93,7 @@ registro en RunState.stages, que se reemplaza en los reintentos.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 import shutil
@@ -145,6 +146,8 @@ from .safe_extractor import extract_package
 from .semantic_enrichment_stage import run_semantic_enrichment_stage
 from .semantic_graph_load_stage import run_semantic_graph_load_stage
 from .semantic_graph_stage import run_semantic_graph_stage
+
+logger = logging.getLogger(__name__)
 
 _COPY_CHUNK_SIZE = 1024 * 1024
 
@@ -347,6 +350,41 @@ def _mark_failed(
     return _persist_run_state(state, run_json_path, stage=stage, transition="FAILED")
 
 
+def _mark_running(
+    state: RunState, run_json_path: Path, stage: PipelineStage, started_at: datetime
+) -> RunState:
+    """Registra el INICIO real de una etapa (CLAUDE.md, seccion Pipeline:
+    "registrar inicio, fin, duracion") -- ANTES de esta funcion, `run.json`
+    solo reflejaba el estado retroactivamente (una etapa aparecia recien
+    al terminar, exito o fallo); una consulta durante la ejecucion real
+    (polling HTMX de `_status_fragment.html` cada 3s) siempre mostraba la
+    etapa ANTERIOR. `StageExecution` ya validaba `RUNNING` desde su
+    diseno original (`contracts/run_state.py::_check_state_coherence`)
+    pero ningun llamador lo emitia -- esta es la primera vez que se usa.
+
+    Deliberadamente NO pasa por `_persist_run_state` (la via critica de
+    SUCCEEDED/FAILED, con reintentos extendidos y artefacto de
+    emergencia): un fallo al persistir un marcador RUNNING nunca debe
+    abortar ni degradar la etapa real -- es observabilidad best-effort
+    para la UI de progreso, no evidencia terminal. Best-effort explicito:
+    si `atomic_write_json` no logra escribir dentro de su deadline por
+    defecto, se registra un warning y la etapa continua exactamente igual
+    que si esta funcion no existiera."""
+    _upsert_stage(
+        state, StageExecution(stage=stage, status=StageStatus.RUNNING, started_at=started_at)
+    )
+    try:
+        atomic_write_json(run_json_path, state)
+    except AtomicWriteError:
+        logger.warning(
+            "no se pudo persistir el marcador RUNNING de %s para run_id=%s "
+            "(best-effort, la etapa continua sin bloquearse)",
+            stage.value,
+            state.run_id,
+        )
+    return state
+
+
 def _mark_succeeded(
     state: RunState,
     run_json_path: Path,
@@ -464,6 +502,7 @@ def _run_received(
         input_zip_path.unlink()  # residuo de un intento RECEIVED fallido: se limpia y reintenta.
 
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.RECEIVED, started_at)
     try:
         package_hash = _copy_and_hash(source_zip, input_zip_path)
     except OSError as exc:
@@ -477,6 +516,7 @@ def _run_validated(
     state: RunState, input_zip_path: Path, settings: Settings, run_json_path: Path
 ) -> tuple[RunState, ValidatedPackage | None]:
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.VALIDATED, started_at)
     try:
         validated = validate_package(input_zip_path, settings)
     except PackageValidationError as exc:
@@ -509,6 +549,7 @@ def _run_extracted(
             shutil.rmtree(extracted_dir)
 
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.EXTRACTED, started_at)
     try:
         extract_package(input_zip_path, work_dir, settings)
     except ExtractionError as exc:
@@ -541,6 +582,7 @@ def _run_inventoried(
         raise PipelineError("no se puede construir el inventario sin un ValidatedPackage")
 
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.INVENTORIED, started_at)
     try:
         inventory = build_inventory(
             extracted_dir, state.run_id, state.source_package_hash or "", validated.manifest
@@ -570,6 +612,7 @@ def _run_parsed(
     siempre revalida cada artefacto contra Inventory antes de decidir si
     reutilizarlo o reprocesarlo (ver docstring de ese modulo)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.PARSED, started_at)
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     client = ProLeapParserClient(
         java_bin=settings.java_bin,
@@ -616,6 +659,7 @@ def _run_dependencies_built(
     sigue siendo consistente con los artefactos actuales; en caso
     contrario lo reconstruye entero (ver dependencies_stage.py)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.DEPENDENCIES_BUILT, started_at)
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     try:
         warnings = run_dependencies_built_stage(
@@ -654,6 +698,7 @@ def _run_semantic_enrichment_built(
     recomputado es identico al existente; en caso contrario lo reconstruye
     entero (ver semantic_enrichment_stage.py)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.SEMANTIC_ENRICHMENT_BUILT, started_at)
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     try:
         warnings = run_semantic_enrichment_stage(
@@ -699,6 +744,7 @@ def _run_semantic_graph_built(
     identico al existente; en caso contrario lo reconstruye entero (ver
     semantic_graph_stage.py)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.SEMANTIC_GRAPH_BUILT, started_at)
     inventory = Inventory.model_validate_json(inventory_path.read_text(encoding="utf-8"))
     try:
         warnings = run_semantic_graph_stage(
@@ -731,6 +777,7 @@ def _run_semantic_graph_loaded(
     No hay optimizacion de skip-load: recargar siempre permite reparar
     drift o modificaciones manuales en Neo4j."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.SEMANTIC_GRAPH_LOADED, started_at)
     try:
         result = run_semantic_graph_load_stage(
             run_stages=state.stages,
@@ -768,6 +815,7 @@ def _run_graph_validated(
     `artifacts/05-invariants.json`. Un invariante ERROR incumplido marca
     la etapa como FAILED (ver graph_validated_stage.py)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.GRAPH_VALIDATED, started_at)
     try:
         warnings = run_graph_validated_stage(
             run_id=state.run_id,
@@ -804,6 +852,7 @@ def _run_candidates_detected(
     `artifacts/06-candidates.json` solo si el resultado recomputado
     difiere del existente (ver candidates_detected_stage.py)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.CANDIDATES_DETECTED, started_at)
     try:
         warnings = run_candidates_detected_stage(
             run_id=state.run_id,
@@ -840,6 +889,7 @@ def _run_contexts_built(
     reconstruye `artifacts/07-context/` solo si el resultado recomputado
     difiere del existente (ver contexts_built_stage.py)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.CONTEXTS_BUILT, started_at)
     try:
         warnings = run_contexts_built_stage(
             run_id=state.run_id,
@@ -872,6 +922,7 @@ def _run_rule_drafts_generated(
     delega en `rule_drafts_generated_stage.run_rule_drafts_generated_stage`,
     que nunca promueve un exito parcial (ver ese modulo)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.RULE_DRAFTS_GENERATED, started_at)
     try:
         warnings = run_rule_drafts_generated_stage(
             run_id=state.run_id,
@@ -904,6 +955,7 @@ def _run_guardrails_applied(
     `guardrails_applied_stage.run_guardrails_applied_stage`, que se
     detiene en el primer candidato REJECTED definitivo (ver ese modulo)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.GUARDRAILS_APPLIED, started_at)
     try:
         warnings = run_guardrails_applied_stage(
             run_id=state.run_id,
@@ -938,6 +990,7 @@ def _run_rules_rendered(
     `StageExecution(stage=COMPLETED, ...)`, simetrico a cualquier otra
     etapa real (ver docstring de `rules_rendered_stage.py`)."""
     started_at = _now()
+    state = _mark_running(state, run_json_path, PipelineStage.COMPLETED, started_at)
     try:
         warnings = run_rules_rendered_stage(
             run_id=state.run_id,

@@ -60,3 +60,16 @@ class RunState(AltamiraBaseModel):
     stages: list[StageExecution] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    # duplicate_of_run_id (Fase v1.17.1, Feature 6): `str | None`,
+    # default `None` -- extension retrocompatible, un run.json de v1.17.0
+    # sin este campo se lee identico a un run real (`None`). No-None
+    # UNICAMENTE para un registro de referencia liviano creado cuando el
+    # analista sube un paquete cuyo hash exacto ya tiene un run
+    # autoritativo (activo, completado, o fallido con hash ya
+    # establecido -- ver `api/duplicate_detection.py`): ese registro
+    # nunca ejecuta el pipeline real, solo persiste `run.json` con
+    # `current_stage=RECEIVED`/una unica `StageExecution` SUCCEEDED, y
+    # apunta aqui al `run_id` autoritativo. La UI trata su presencia como
+    # override de presentacion ("YA PROCESADO"), nunca como un nuevo
+    # `PipelineStage`.
+    duplicate_of_run_id: str | None = Field(default=None, min_length=1)

@@ -37,6 +37,10 @@ def test_at_least_the_expected_templates_exist() -> None:
         # e iconos SVG inline) -- nunca logica nueva, solo presentacion.
         "_icons.html",
         "_components.html",
+        # Fase v1.17.1 (Feature 4/6): pagina "Acerca de..." y el panel de
+        # registro de referencia duplicado (ver ui/router.py, Feature 6).
+        "about.html",
+        "_duplicate_notice.html",
         # Gobierno operativo read-only (Fase 15A).
         "governance.html",
         "_governance_summary.html",

@@ -13,6 +13,7 @@ handlers originales."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -21,6 +22,7 @@ from ..config import Settings
 from ..contracts.enums import PipelineStage
 from ..contracts.run_state import RunState
 from ..pipeline.runner import prepare_received, run_ingestion
+from .duplicate_detection import create_duplicate_reference, find_authoritative_run
 from .errors import (
     ArtifactCorruptedError,
     ExecutorAtCapacityError,
@@ -38,7 +40,17 @@ def create_and_submit_run(file: UploadFile, settings: Settings, executor: RunExe
     executor. Puede lanzar `ServiceUnavailableError`/
     `ExecutorAtCapacityError`/`RunAlreadyActiveError` (este ultimo
     inalcanzable en la practica para un `run_id` recien generado, se
-    maneja por completitud, igual que antes)."""
+    maneja por completitud, igual que antes).
+
+    Deteccion de duplicados (Fase v1.17.1, Feature 6): DESPUES de que
+    RECEIVED tenga exito real (el `source_package_hash` exacto ya esta
+    establecido -- identidad de paquete nunca por filename, ver
+    `duplicate_detection.py`), si ya existe un run autoritativo real con
+    el MISMO hash, este run recien creado (solo `input/package.zip` +
+    `run.json`, nunca sometido al executor) se descarta y se persiste en
+    su lugar un registro de referencia liviano que apunta al run
+    autoritativo -- nunca se lanza un segundo pipeline identico ni se
+    guarda una segunda copia del ZIP (ver "DUPLICATE RECORD OWNERSHIP")."""
     temp_path = stream_upload_to_incoming(file, settings)
     try:
         state = prepare_received(temp_path, settings)
@@ -52,7 +64,20 @@ def create_and_submit_run(file: UploadFile, settings: Settings, executor: RunExe
         )
 
     run_id = state.run_id
-    input_zip_path = settings.runs_dir / run_id / "input" / "package.zip"
+    run_dir = settings.runs_dir / run_id
+    input_zip_path = run_dir / "input" / "package.zip"
+
+    if state.source_package_hash is not None:
+        match = find_authoritative_run(
+            settings, executor, state.source_package_hash, exclude_run_id=run_id
+        )
+        if match is not None:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            return create_duplicate_reference(
+                settings,
+                source_package_hash=state.source_package_hash,
+                original_run_id=match.run_id,
+            )
 
     result = executor.try_submit(
         run_id, lambda: run_ingestion(input_zip_path, settings, run_id=run_id)

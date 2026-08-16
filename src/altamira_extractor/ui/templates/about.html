@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% set active_nav = "about" %}
+{% block title %}Acerca de FIERN{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Acerca de FIERN</h1>
+    <p class="page-lede">Framework Inteligente para la Extracci&oacute;n de Reglas de Negocio.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('ui_runs') }}" data-history-back>Volver</a>
+</div>
+
+<section class="panel">
+  <h2>Qu&eacute; es FIERN</h2>
+  <p>
+    FIERN (Framework Inteligente para la Extracci&oacute;n de Reglas de Negocio) es la
+    aplicaci&oacute;n que utiliza el equipo funcional para transformar programas COBOL
+    heredados en documentaci&oacute;n de reglas de negocio clara, trazable y revisable.
+  </p>
+  <p class="mb-0">
+    El problema que resuelve: el conocimiento de negocio de muchos sistemas cr&iacute;ticos
+    solo existe hoy dentro del c&oacute;digo COBOL, disperso y dif&iacute;cil de interpretar
+    para quien no programa. FIERN localiza los fragmentos de c&oacute;digo con relevancia
+    funcional real (validaciones, c&oacute;digos de retorno, transiciones de estado,
+    c&aacute;lculos) y redacta un borrador de regla de negocio para cada uno, siempre con
+    referencias exactas a la evidencia t&eacute;cnica que la sustenta.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Qu&eacute; se sube a FIERN</h2>
+  <p class="mb-0">
+    Un <strong>paquete Altamira</strong>: un archivo <code>.zip</code> con la estructura
+    est&aacute;ndar acordada (c&oacute;digo fuente COBOL, y opcionalmente definiciones de
+    tablas param&eacute;tricas). El tama&ntilde;o m&aacute;ximo permitido se indica en la
+    pantalla de subida.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>C&oacute;mo funciona, en l&iacute;neas generales</h2>
+  <ol>
+    <li>El analista sube un paquete Altamira desde <strong>Nueva ejecuci&oacute;n</strong>.</li>
+    <li>FIERN valida y analiza el c&oacute;digo, y construye un modelo del programa y sus
+      dependencias.</li>
+    <li>Detecta autom&aacute;ticamente los <strong>candidatos</strong> a regla de negocio.</li>
+    <li>Para cada candidato arma un <strong>contexto</strong> completo: d&oacute;nde
+      est&aacute; en el c&oacute;digo, qu&eacute; datos usa, qu&eacute; tablas
+      param&eacute;tricas aplican, qu&eacute; efectos produce.</li>
+    <li>Si hay un proveedor de enriquecimiento configurado, redacta un borrador de regla en
+      lenguaje funcional para cada candidato.</li>
+    <li>El analista revisa el resultado desde el detalle de la ejecuci&oacute;n y descarga
+      las reglas finales.</li>
+  </ol>
+  <p class="mb-0">
+    Cada subida se procesa como una <strong>ejecuci&oacute;n</strong> (tambi&eacute;n
+    llamada <em>job</em>) independiente, visible en <strong>Ejecuciones</strong>, con su
+    propio progreso y su propio resultado.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Las fases del an&aacute;lisis, explicadas funcionalmente</h2>
+  <dl class="meta-grid">
+    <dt>Recepci&oacute;n y validaci&oacute;n</dt>
+    <dd>El paquete se recibe, se verifica su integridad y su estructura.</dd>
+    <dt>Extracci&oacute;n e inventario</dt>
+    <dd>Se desempaqueta y se cataloga cada programa y archivo incluido.</dd>
+    <dt>An&aacute;lisis del c&oacute;digo</dt>
+    <dd>Se interpreta la estructura real de cada programa COBOL.</dd>
+    <dt>Dependencias y enriquecimiento sem&aacute;ntico</dt>
+    <dd>Se identifican relaciones entre programas y se asocia significado de negocio a los
+      datos relevantes (por ejemplo, qu&eacute; campo representa un c&oacute;digo de
+      retorno).</dd>
+    <dt>Modelo de conocimiento</dt>
+    <dd>Toda esta informaci&oacute;n se organiza en un modelo consultable que sostiene el
+      resto del an&aacute;lisis.</dd>
+    <dt>Detecci&oacute;n de candidatos</dt>
+    <dd>Se identifican los puntos del c&oacute;digo con relevancia funcional demostrable.</dd>
+    <dt>Construcci&oacute;n de contexto</dt>
+    <dd>Se re&uacute;ne toda la evidencia necesaria para redactar cada candidato con
+      precisi&oacute;n.</dd>
+    <dt>Redacci&oacute;n y validaci&oacute;n de reglas</dt>
+    <dd>Se genera el borrador funcional de cada regla y se verifica que toda afirmaci&oacute;n
+      tenga evidencia real que la respalde.</dd>
+  </dl>
+</section>
+
+<section class="panel">
+  <h2>Qu&eacute; es un candidato</h2>
+  <p class="mb-0">
+    Un <strong>candidato</strong> es un patr&oacute;n del c&oacute;digo que FIERN identific&oacute;
+    como estructuralmente relevante para una posible regla de negocio (por ejemplo, una
+    condici&oacute;n que determina un c&oacute;digo de retorno, o un cambio de estado). Un
+    candidato es un hallazgo, nunca todav&iacute;a una regla confirmada: recorre el resto
+    del an&aacute;lisis antes de convertirse en un borrador revisable.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Qu&eacute; es el "contexto" de un candidato</h2>
+  <p class="mb-0">
+    El <strong>contexto</strong> (tambi&eacute;n llamado <em>ContextPackage</em>) es el
+    expediente completo de un candidato: en qu&eacute; programa y l&iacute;nea aparece,
+    qu&eacute; condici&oacute;n eval&uacute;a, qu&eacute; tablas param&eacute;tricas influyen,
+    qu&eacute; efecto produce (por ejemplo, qu&eacute; c&oacute;digo de retorno asigna) y qu&eacute;
+    evidencia t&eacute;cnica respalda cada uno de esos hechos. Es la &uacute;nica informaci&oacute;n
+    que se usa para redactar el borrador de regla: nunca se afirma nada que no est&eacute;
+    respaldado por el contexto.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Enriquecimiento con inteligencia artificial</h2>
+  <p>
+    <strong>Con un proveedor configurado</strong>: FIERN redacta autom&aacute;ticamente un
+    borrador de regla en lenguaje funcional para cada candidato, a partir exclusivamente de
+    su contexto, y aplica una verificaci&oacute;n autom&aacute;tica que rechaza cualquier
+    afirmaci&oacute;n sin evidencia.
+  </p>
+  <p class="mb-0">
+    <strong>Sin un proveedor configurado</strong>: la ejecuci&oacute;n se detiene antes de
+    esa etapa. Los candidatos y su contexto completo quedan disponibles igualmente para
+    revisi&oacute;n manual, pero no se genera el borrador redactado autom&aacute;ticamente.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Qu&eacute; puede consultar el analista</h2>
+  <ul class="mb-0">
+    <li>La lista de candidatos detectados en cada ejecuci&oacute;n.</li>
+    <li>El contexto completo de cada candidato.</li>
+    <li>El borrador de regla propuesto y su verificaci&oacute;n de evidencia, cuando el
+      enriquecimiento est&aacute; disponible.</li>
+    <li>El paquete final de reglas, descargable una vez completada la ejecuci&oacute;n.</li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Qu&eacute; significa el estado de una ejecuci&oacute;n</h2>
+  <dl class="meta-grid">
+    <dt>En ejecuci&oacute;n</dt>
+    <dd>FIERN est&aacute; procesando el paquete en este momento.</dd>
+    <dt>Completado</dt>
+    <dd>El an&aacute;lisis termin&oacute; con &eacute;xito y las reglas est&aacute;n
+      disponibles.</dd>
+    <dt>Fallido</dt>
+    <dd>El an&aacute;lisis se detuvo en alg&uacute;n punto; el detalle de la ejecuci&oacute;n
+      indica en qu&eacute; fase y por qu&eacute;. Puede reanudarse.</dd>
+    <dt>Ya procesado</dt>
+    <dd>El paquete subido (identificado por su huella digital exacta, no por el nombre del
+      archivo) ya hab&iacute;a sido procesado antes; se muestra la ejecuci&oacute;n
+      original en lugar de repetir el an&aacute;lisis completo.</dd>
+  </dl>
+</section>
+
+<section class="panel">
+  <h2>C&oacute;mo se identifica un paquete ya procesado</h2>
+  <p class="mb-0">
+    FIERN calcula una huella digital criptogr&aacute;fica (SHA-256) del contenido exacto de
+    cada paquete subido. Dos archivos con el mismo nombre pero contenido distinto son
+    paquetes <strong>diferentes</strong>; el mismo contenido subido con otro nombre de
+    archivo es el <strong>mismo</strong> paquete. Si un paquete con la huella exacta ya
+    tiene una ejecuci&oacute;n existente (en curso, completada o fallida), FIERN no vuelve a
+    procesarlo desde cero: muestra una referencia a la ejecuci&oacute;n original.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Qu&eacute; hace "Limpiar job"</h2>
+  <p>
+    Elimina de forma permanente todo el rastro de una ejecuci&oacute;n: sus resultados, sus
+    artefactos y los datos que haya cargado en el modelo de conocimiento. Esta acci&oacute;n
+    requiere confirmaci&oacute;n expl&iacute;cita y no puede aplicarse a una ejecuci&oacute;n
+    que est&aacute; en curso.
+  </p>
+  <p class="mb-0">
+    Una vez limpiado el job, el mismo paquete (mismos bytes exactos) puede volver a subirse y
+    ser procesado <strong>como si nunca se hubiera analizado antes</strong>.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Precauciones importantes</h2>
+  <ul class="mb-0">
+    <li>"Limpiar job" es una acci&oacute;n permanente: no hay forma de deshacerla desde la
+      aplicaci&oacute;n.</li>
+    <li>Un borrador de regla es siempre material de <strong>revisi&oacute;n funcional</strong>,
+      nunca una regla oficialmente aprobada por s&iacute; sola.</li>
+    <li>Verifique siempre la evidencia citada antes de dar por v&aacute;lida una regla
+      propuesta.</li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Versi&oacute;n</h2>
+  <p class="mb-0">FIERN{% if app_version %} &mdash; versi&oacute;n {{ app_version }}{% endif %}.</p>
+</section>
+
+<div class="actions">
+  <a class="btn btn-secondary" href="{{ url_for('ui_runs') }}" data-history-back>Volver</a>
+</div>
+{% endblock %}

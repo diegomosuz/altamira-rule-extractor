@@ -330,6 +330,30 @@ class Neo4jRepository:
                 f"fallo ejecutando la carga transaccional: {type(exc).__name__}"
             ) from exc
 
+    # --- Limpieza para "Limpiar job" (Fase v1.17.1, Feature 5) ---
+
+    def delete_managed_graph(self) -> None:
+        """Elimina TODO el grafo semantico administrado (metadata +
+        nodos/relaciones `_altamira_managed=true`) -- exactamente los
+        mismos dos pasos de limpieza que ya ejecuta `_load_transaction`
+        antes de recargar, aqui SIN una recarga posterior. Seguro de
+        llamar UNICAMENTE cuando el llamador ya confirmo, via
+        `read_active_graph_load().source_package_hash`, que el grafo
+        activo pertenece al run que se esta limpiando -- este metodo en
+        si mismo no vuelve a verificar ownership (ver
+        `api/run_cleanup.py`, unico llamador real)."""
+        try:
+            with self._driver.session(database=self._database) as session:
+                session.execute_write(_delete_managed_graph_transaction)
+        except AuthError as exc:
+            raise Neo4jAuthenticationError("credenciales rechazadas por el servidor Neo4j") from exc
+        except ServiceUnavailable as exc:
+            raise Neo4jUnavailableError("el servidor Neo4j no esta disponible") from exc
+        except (ClientError, CypherSyntaxError) as exc:
+            raise Neo4jQueryError(
+                f"fallo eliminando el grafo administrado: {type(exc).__name__}"
+            ) from exc
+
     # --- Lectura para GRAPH_VALIDATED ---
 
     def read_active_graph_load(self) -> ActiveGraphLoad | None:
@@ -510,6 +534,15 @@ def _diff_ids_and_edges(
     )["extra"]
 
     return list(missing_ids), list(extra_ids), list(missing_edges), list(extra_edges)
+
+
+def _delete_managed_graph_transaction(tx: neo4j.ManagedTransaction) -> None:
+    """Mismos dos pasos exactos que `_load_transaction` (pasos 1-2)
+    ANTES de la recarga -- reutilizados aqui para eliminar el grafo
+    administrado sin reconstruirlo. Nunca toca un nodo/relacion sin
+    `_altamira_managed=true`."""
+    tx.run(f"MATCH (m:{METADATA_LABEL} {{id: $id}}) DETACH DELETE m", id=_METADATA_ID).consume()
+    tx.run(f"MATCH (n) WHERE n.{_MANAGED_FLAG} = true DETACH DELETE n").consume()
 
 
 def _load_transaction(

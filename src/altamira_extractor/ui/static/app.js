@@ -261,6 +261,42 @@
     });
   }
 
+  /* --------------------- Volver (historial del navegador) --------------- */
+
+  function initHistoryBackLinks() {
+    document.body.addEventListener("click", function (event) {
+      var link = event.target.closest("[data-history-back]");
+      if (!link) return;
+      if (window.history.length > 1) {
+        event.preventDefault();
+        window.history.back();
+      }
+      // Sin historial util: se deja seguir el href normal (fallback seguro
+      // ya presente en el propio enlace, p. ej. /ui/runs).
+    });
+  }
+
+  /* --------------- Confirmacion de "Limpiar job" (Feature 5) ------------ */
+
+  function initCleanJobDialogs() {
+    document.body.addEventListener("click", function (event) {
+      var trigger = event.target.closest("[data-clean-job-trigger]");
+      if (trigger) {
+        var dialogId = trigger.getAttribute("data-clean-job-trigger");
+        var dialog = document.getElementById(dialogId);
+        if (dialog && typeof dialog.showModal === "function") {
+          dialog.showModal();
+        }
+        return;
+      }
+      var cancel = event.target.closest("[data-clean-job-cancel]");
+      if (cancel) {
+        var openDialog = cancel.closest("dialog");
+        if (openDialog) openDialog.close();
+      }
+    });
+  }
+
   /* ------------------------------ Inicio --------------------------------- */
 
   function init() {
@@ -271,6 +307,8 @@
     initTableFilters();
     initSortableTables();
     initCompactToggle();
+    initHistoryBackLinks();
+    initCleanJobDialogs();
   }
 
   init();

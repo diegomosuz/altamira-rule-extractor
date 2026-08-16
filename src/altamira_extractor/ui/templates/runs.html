@@ -3,7 +3,7 @@
 {% block title %}Ejecuciones -- Altamira Rule Extractor{% endblock %}
 {% block content %}
 {% from "_icons.html" import icon %}
-{% from "_components.html" import status_badge %}
+{% from "_components.html" import status_badge, duplicate_status_badge %}
 <div class="page-header">
   <div>
     <h1>Ejecuciones</h1>
@@ -63,9 +63,34 @@
     {% for run in runs %}
     <tr data-status="{{ run.current_stage.value }}" data-search-text="{{ run.run_id }} {{ run.source_package_hash or '' }}">
       <td class="cell-mono">{{ run.run_id }}</td>
-      <td>{{ status_badge(run.current_stage.value) }}</td>
-      <td class="cell-mono small text-muted">{{ run.source_package_hash or "No informado" }}</td>
-      <td class="cell-actions"><a class="btn btn-sm" href="{{ url_for('ui_run_status', run_id=run.run_id) }}">Ver detalle</a></td>
+      <td>
+        {% if run.duplicate_of_run_id %}
+        {{ duplicate_status_badge(original_runs_by_id.get(run.run_id)) }}
+        {% else %}
+        {{ status_badge(run.current_stage.value) }}
+        {% endif %}
+      </td>
+      <td class="cell-mono small text-muted" title="{{ run.source_package_hash or '' }}">{{ (run.source_package_hash[:12] ~ "...") if run.source_package_hash else "No informado" }}</td>
+      <td class="cell-actions">
+        <a class="btn btn-sm" href="{{ url_for('ui_run_status', run_id=run.run_id) }}">Ver detalle</a>
+        {% set is_active = run.run_id in active_run_ids %}
+        <button type="button" class="btn btn-sm btn-danger" data-clean-job-trigger="clean-dialog-{{ run.run_id }}"{% if is_active %} disabled aria-disabled="true" title="No se puede limpiar una ejecucion en curso"{% endif %}>Limpiar job</button>
+        <dialog id="clean-dialog-{{ run.run_id }}" class="confirm-dialog" aria-labelledby="clean-dialog-title-{{ run.run_id }}">
+          <form method="post" action="{{ url_for('ui_clean_run', run_id=run.run_id) }}">
+            <h2 id="clean-dialog-title-{{ run.run_id }}">Limpiar job</h2>
+            <p>
+              Esta accion eliminara de forma permanente la ejecucion
+              <strong class="cell-mono">{{ run.run_id }}</strong> y todo su rastro (resultados,
+              artefactos y, si corresponde, los datos que haya cargado en el modelo de
+              conocimiento). El paquete podra volver a procesarse como una ejecucion nueva.
+            </p>
+            <div class="actions mt-0">
+              <button type="button" class="btn btn-secondary" data-clean-job-cancel>Cancelar</button>
+              <button type="submit" class="btn btn-danger">Limpiar job</button>
+            </div>
+          </form>
+        </dialog>
+      </td>
     </tr>
     {% endfor %}
   </tbody>

@@ -15,7 +15,10 @@
   <div class="header-inner">
     <a class="brand" href="{{ url_for('ui_runs') }}">
       <span class="brand-mark">PwC</span>
-      <span class="brand-name">Altamira Rule Extractor</span>
+      <span class="brand-product">
+        <span class="brand-fiern">FIERN</span>
+        <span class="brand-fiern-full">Framework Inteligente para la Extracci&oacute;n de Reglas de Negocio</span>
+      </span>
     </a>
     <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="main-nav">
       {% from "_icons.html" import icon %}{{ icon("menu") }}
@@ -24,6 +27,7 @@
     <nav id="main-nav" class="main-nav" aria-label="navegacion principal">
       <a href="{{ url_for('ui_upload_form') }}"{% if active_nav == "upload" %} aria-current="page"{% endif %}>Nueva ejecucion</a>
       <a href="{{ url_for('ui_runs') }}"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Ejecuciones</a>
+      <a href="{{ url_for('ui_about') }}"{% if active_nav == "about" %} aria-current="page"{% endif %}>Acerca de...</a>
       <a href="/docs">Documentacion de API</a>
     </nav>
   </div>
