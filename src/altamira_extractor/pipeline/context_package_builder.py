@@ -266,7 +266,7 @@ def _build_one_context_package(
     )
 
     try:
-        return ContextPackage(
+        package = ContextPackage(
             schema_version="2.0",
             candidate=ContextPackageCandidate(
                 candidate_id=candidate.candidate_id,
@@ -289,6 +289,77 @@ def _build_one_context_package(
         raise ContextBuildError(
             f"ContextPackage invalido para el candidato {candidate.candidate_id!r}: {exc}"
         ) from exc
+
+    # Fail-closed antes de considerar CONTEXTS_BUILT exitoso para este
+    # candidato: un ContextPackage puede ser Pydantic-valido (outcome_code
+    # null es un valor estructuralmente legitimo) y aun asi ser
+    # semanticamente incompleto si RuleCandidate ya tenia el hecho
+    # determinista resuelto. Nunca continua hacia generacion de RuleDraft
+    # con una perdida silenciosa de este tipo.
+    _validate_deterministic_integrity(candidate, package)
+    return package
+
+
+def _validate_deterministic_integrity(candidate: RuleCandidate, package: ContextPackage) -> None:
+    """Guardia fail-closed en el limite 06 -> 07 (Fase DETERMINISTIC
+    INTEGRITY HARDENING, post-v1.17.0): confirma que ningun hecho
+    determinista ya autoritativo en `RuleCandidate` se perdio o fue
+    sustituido silenciosamente por una representacion secundaria (p.ej.
+    la propiedad `Decision.outcome_code` del grafo, que para candidatos
+    V2 es una computacion estructuralmente distinta -- ver
+    `_build_decision`). Solo valida hechos donde `RuleCandidate` es la
+    fuente autoritativa confirmada (outcome_code, condition, identidad);
+    nunca valida hechos GRAPH_OWNED (rule_type, code_slice, parameter/
+    table context, batch, domain glossary) que `RuleCandidate` no posee
+    y para los que el grafo SI es la fuente autoritativa -- fallar ahi
+    seria un falso positivo, no una proteccion real.
+
+    candidate.outcome_code no es simplemente "preservado o no": es
+    autoritativo de forma INCONDICIONAL (Fase 1/2 del hardening) -- un
+    valor de grafo contradictorio (no solo null) NUNCA debe preferirse
+    silenciosamente ni disparar este fallo, porque `Decision.outcome_code`
+    del grafo es una heuristica V1-only (unico literal MOVE resuelto)
+    que nunca tuvo el contrato de representar el outcome real de un
+    candidato V2; una discrepancia ahi es esperada y normal (confirmado
+    empiricamente: Catherine real produce esta discrepancia en sus 13/13
+    candidatos V2), no una senal de corrupcion. Por eso esta funcion
+    nunca compara contra el valor de fila Q4/Q5a (ya descartado en
+    `_build_decision`/`_build_return_codes`): valida unicamente que el
+    propio `ContextPackage` ya construido refleje `candidate.outcome_code`
+    sin perdida, sin importar que trajo el grafo."""
+
+    def _violation(invariant: str, upstream: object, downstream: object) -> ContextBuildError:
+        return ContextBuildError(
+            "DETERMINISTIC_INTEGRITY_VIOLATION "
+            f"candidate={candidate.candidate_id!r} invariant={invariant} "
+            f"upstream={upstream!r} downstream={downstream!r}"
+        )
+
+    if package.candidate.candidate_id != candidate.candidate_id:
+        raise _violation(
+            "CANDIDATE_ID_STABILITY", candidate.candidate_id, package.candidate.candidate_id
+        )
+    if package.candidate.decision_id != candidate.decision_id:
+        raise _violation(
+            "DECISION_ID_STABILITY", candidate.decision_id, package.candidate.decision_id
+        )
+
+    if candidate.outcome_code is not None:
+        downstream_outcome = package.decision.outcome_code if package.decision else None
+        if downstream_outcome != candidate.outcome_code:
+            raise _violation(
+                "OUTCOME_CODE_PRESERVATION", candidate.outcome_code, downstream_outcome
+            )
+        return_codes = [effect.code for effect in package.effects.return_codes]
+        if return_codes != [candidate.outcome_code]:
+            raise _violation(
+                "RETURN_CODE_EFFECT_PRESERVATION", candidate.outcome_code, return_codes
+            )
+
+    if candidate.condition is not None:
+        downstream_condition = package.decision.expression if package.decision else None
+        if downstream_condition != candidate.condition:
+            raise _violation("CONDITION_PRESERVATION", candidate.condition, downstream_condition)
 
 
 def _dedupe_evidence(entries: list[EvidenceEntry]) -> list[EvidenceEntry]:
@@ -960,6 +1031,13 @@ def _build_decision(
             )
         operands = [str(item) for item in parsed]
 
+    # outcome_code se toma de candidate.outcome_code (nunca de la fila Q4):
+    # los detectores V2 (p.ej. V2_LEVEL_88_RETURN_CODE) resuelven el valor
+    # en memoria a partir de hechos de propagacion semantica y nunca lo
+    # escriben en Decision.outcome_code del grafo -- usar la fila aqui
+    # perderia silenciosamente ese hecho determinista en D4/D5. Para
+    # candidatos V1/Q0 esto es un no-op: su propio outcome_code ya proviene
+    # de esa misma propiedad del grafo (ver queries/v1/q0_candidates.cypher).
     evidence_id = _evidence_id(
         logical_query="Q4",
         candidate_id=candidate.candidate_id,
@@ -969,7 +1047,7 @@ def _build_decision(
             "condition": row["condition"],
             "normalized_condition": row["normalized_condition"],
             "operands_json": operands_raw,
-            "outcome_code": row["outcome_code"],
+            "outcome_code": candidate.outcome_code,
         },
     )
     evidence = [
@@ -989,7 +1067,7 @@ def _build_decision(
             normalized_expression=row["normalized_condition"],
             operands=operands,
             rule_type=row["rule_type"],
-            outcome_code=row["outcome_code"],
+            outcome_code=candidate.outcome_code,
             evidence_ids=[evidence_id],
         )
     except ValidationError as exc:
@@ -1042,9 +1120,11 @@ def _build_return_codes(
             "se esperaba exactamente 1"
         )
     row = rows[0]
-    if row["return_code"] is None:
-        # Decision con outcome_code ambiguo (varios LEADS_TO resueltos):
-        # no se puede afirmar un return code effect de valor unico.
+    # Igual que en D4: el valor autoritativo es candidate.outcome_code, no
+    # la fila Q5a (Decision.outcome_code del grafo, ambiguo o ausente para
+    # candidatos V2 que resuelven en memoria -- ver _build_decision). Sin
+    # outcome_code no hay return code effect que afirmar.
+    if candidate.outcome_code is None:
         return [], []
 
     evidence_id = _evidence_id(
@@ -1052,7 +1132,7 @@ def _build_return_codes(
         candidate_id=candidate.candidate_id,
         origin_entity_id=row["decision_id"],
         evidence_kind="return_code_effect",
-        content={"return_code": row["return_code"], "triggered_when": row["triggered_when"]},
+        content={"return_code": candidate.outcome_code, "triggered_when": row["triggered_when"]},
     )
     evidence = [
         EvidenceEntry(
@@ -1070,7 +1150,7 @@ def _build_return_codes(
     # "Candidato, fidelidad y aprobacion").
     try:
         effect = ReturnCodeEffect(
-            code=row["return_code"], approved_for_rule_text=True, evidence_ids=[evidence_id]
+            code=candidate.outcome_code, approved_for_rule_text=True, evidence_ids=[evidence_id]
         )
     except ValidationError as exc:
         raise ContextBuildError(f"Q5a: fila con estructura invalida: {exc}") from exc

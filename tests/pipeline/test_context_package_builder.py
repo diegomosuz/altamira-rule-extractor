@@ -15,7 +15,23 @@ import pytest
 
 from altamira_extractor.config import Settings
 from altamira_extractor.contracts.candidate import RuleCandidate
-from altamira_extractor.contracts.candidate_promotion_assessment import UnifiedRuleFamily
+from altamira_extractor.contracts.candidate_promotion_assessment import (
+    CandidateSource,
+    UnifiedRuleFamily,
+)
+from altamira_extractor.contracts.context_package import (
+    BatchContext,
+    CodeSliceEntry,
+    Completeness,
+    ContextPackage,
+    ContextPackageCandidate,
+    ContextPackageDecision,
+    ContextPackageOperation,
+    ContextPackageScope,
+    DataContext,
+    Effects,
+    EvidenceEntry,
+)
 from altamira_extractor.contracts.enums import (
     ApplicabilityStatus,
     AttributionScope,
@@ -25,6 +41,7 @@ from altamira_extractor.contracts.enums import (
 )
 from altamira_extractor.pipeline.context_package_builder import (
     ContextQuerySet,
+    _validate_deterministic_integrity,
     build_context_packages,
 )
 from altamira_extractor.pipeline.cypher_query_loader import LoadedContextQuery
@@ -84,7 +101,13 @@ def _candidate(**overrides: object) -> RuleCandidate:
         "detector_id": "det",
         "detector_version": "1.0",
         "detector_score": 1.0,
-        "condition": "A",
+        # Igual que outcome_code: coincide con _q4_row()'s condition por
+        # diseno -- ambos derivan de la MISMA propiedad Decision.expression
+        # del grafo en el sistema real (Q0 y Q4 leen d.expression/
+        # dec.expression para el mismo decision_id), invariante ahora
+        # exigida por _validate_deterministic_integrity
+        # (CONDITION_PRESERVATION).
+        "condition": "WS-COD = 'R001'",
         "outcome_code": "R001",
         "rule_type": None,
         "line_start": 10,
@@ -166,10 +189,15 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**overrides)  # type: ignore[arg-type]
 
 
-def _build(rows: dict[str, list[dict[str, Any]]], *, settings: Settings | None = None) -> Any:
+def _build(
+    rows: dict[str, list[dict[str, Any]]],
+    *,
+    settings: Settings | None = None,
+    candidate: RuleCandidate | None = None,
+) -> Any:
     tx = _FakeTx(rows)
     packages = build_context_packages(
-        tx, [_candidate()], queries=_query_set(), settings=settings or _settings()
+        tx, [candidate or _candidate()], queries=_query_set(), settings=settings or _settings()
     )
     return packages, tx
 
@@ -332,14 +360,91 @@ def test_q4_rule_type_none_is_preserved() -> None:
     assert packages[0].decision.rule_type is None
 
 
+# --- D4/D5 se derivan de candidate.outcome_code, no de la fila Q4/Q5a
+# (regresion: bug de perdida silenciosa 06 -> 07 en candidatos V2 cuyo
+# outcome_code se resuelve en memoria y nunca se escribe en
+# Decision.outcome_code del grafo, p.ej. V2_LEVEL_88_RETURN_CODE) ---
+
+
+def test_v2_level_88_return_code_outcome_survives_null_graph_row() -> None:
+    candidate = _candidate(
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        outcome_code="9999",
+    )
+    rows = _happy_rows()
+    # El grafo nunca resolvio esta Decision (mecanismo V2 desacoplado):
+    # Q4/Q5a devuelven outcome_code/return_code en None.
+    rows["Q4_MARKER"] = [_q4_row(outcome_code=None)]
+    rows["Q5A_MARKER"] = [_q5a_row(return_code=None)]
+    packages, _ = _build(rows, candidate=candidate)
+    assert packages[0].decision.outcome_code == "9999"
+    assert [effect.code for effect in packages[0].effects.return_codes] == ["9999"]
+
+
+def test_v2_level_88_return_code_outcome_survives_null_graph_row_second_value() -> None:
+    candidate = _candidate(
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        outcome_code="0003",
+    )
+    rows = _happy_rows()
+    rows["Q4_MARKER"] = [_q4_row(outcome_code=None)]
+    rows["Q5A_MARKER"] = [_q5a_row(return_code=None)]
+    packages, _ = _build(rows, candidate=candidate)
+    assert packages[0].decision.outcome_code == "0003"
+    assert [effect.code for effect in packages[0].effects.return_codes] == ["0003"]
+
+
+def test_candidate_outcome_code_none_stays_none_even_if_graph_row_has_value() -> None:
+    # No inferir/recuperar un outcome_code que el candidato (06) no afirma,
+    # aunque la fila Q4/Q5a traiga un valor (p.ej. otra Decision resuelta
+    # por MOVE-literal en el mismo Paragraph).
+    candidate = _candidate(outcome_code=None)
+    rows = _happy_rows()
+    rows["Q4_MARKER"] = [_q4_row(outcome_code="R999")]
+    rows["Q5A_MARKER"] = [_q5a_row(return_code="R999")]
+    packages, _ = _build(rows, candidate=candidate)
+    assert packages[0].decision.outcome_code is None
+    assert packages[0].effects.return_codes == []
+
+
+def test_v1_candidate_outcome_code_matching_graph_row_is_unchanged() -> None:
+    # Comportamiento V1 preexistente: candidate.outcome_code coincide
+    # tautologicamente con la fila del grafo (mismo origen, ver
+    # queries/v1/q0_candidates.cypher) -- no debe cambiar con el fix.
+    packages, _ = _build(_happy_rows())
+    assert packages[0].decision.outcome_code == "R001"
+    assert [effect.code for effect in packages[0].effects.return_codes] == ["R001"]
+
+
+def test_rule_family_is_never_coerced_into_rule_type() -> None:
+    candidate = _candidate(
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        outcome_code="9999",
+    )
+    rows = _happy_rows()
+    rows["Q4_MARKER"] = [_q4_row(outcome_code=None, rule_type=None)]
+    rows["Q5A_MARKER"] = [_q5a_row(return_code=None)]
+    packages, _ = _build(rows, candidate=candidate)
+    assert packages[0].decision.rule_type is None
+
+
 # --- Q5a: scope al return_code null ---
 
 
 def test_q5a_null_return_code_produces_empty_return_codes() -> None:
+    # El guard vive en candidate.outcome_code (no en la fila Q5a, ver
+    # test_context_decision_and_effects_source_outcome_from_candidate_*
+    # abajo) -- este caso cubre "sin outcome_code en absoluto", tanto en
+    # el candidato como en el grafo.
     rows = _happy_rows()
     rows["Q5A_MARKER"] = [_q5a_row(return_code=None)]
-    packages, _ = _build(rows)
+    rows["Q4_MARKER"] = [_q4_row(outcome_code=None)]
+    packages, _ = _build(rows, candidate=_candidate(outcome_code=None))
     assert packages[0].effects.return_codes == []
+    assert packages[0].decision.outcome_code is None
 
 
 def test_q5a_wrong_row_count_is_fatal() -> None:
@@ -654,3 +759,204 @@ def test_max_parameter_entries_per_context_exceeded_is_fatal() -> None:
     settings = _settings(max_parameter_entries_per_context=1)
     with pytest.raises(ContextBuildError):
         _build(rows, settings=settings)
+
+
+# =====================================================================
+# Deterministic integrity hardening (post-v1.17.0): suite parametrizada
+# de preservacion 06 -> 07 sobre TODAS las familias PRODUCTIVE_RULE
+# actuales, mas los casos adversariales de autoridad de fuente. Nunca
+# compara contra la fila Q4/Q5a (el sistema real puede traer null o un
+# valor de una computacion V1-only no relacionada, ver docstring de
+# _validate_deterministic_integrity) -- solo confirma que
+# candidate.outcome_code/candidate.condition, ya autoritativos, llegan
+# intactos al ContextPackage resultante.
+# =====================================================================
+
+_FAMILY_MATRIX = [
+    pytest.param(
+        {
+            "candidate_source": CandidateSource.V1,
+            "rule_family": UnifiedRuleFamily.RETURN_CODE,
+            "detector_id": "q0-return-code-decision",
+            "outcome_code": "R001",
+        },
+        id="V1_RETURN_CODE",
+    ),
+    pytest.param(
+        {
+            "candidate_source": CandidateSource.V2,
+            # V2_RETURN_CODE_PROPAGATION normaliza a la MISMA rule_family
+            # que V1 (ver enhanced_candidate_integration.py
+            # ::_LOCAL_RULE_FAMILY_BY_TYPE) -- confirmado contra Catherine
+            # real (corregido/app-actual): son detector_id distintos,
+            # nunca una rule_family separada.
+            "rule_family": UnifiedRuleFamily.RETURN_CODE,
+            "detector_id": "V2_RETURN_CODE_PROPAGATION",
+            "outcome_code": "0002",
+        },
+        id="V2_RETURN_CODE_PROPAGATION",
+    ),
+    pytest.param(
+        {
+            "candidate_source": CandidateSource.V2,
+            "rule_family": UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+            "detector_id": "V2_LEVEL_88_RETURN_CODE",
+            "outcome_code": "9999",
+        },
+        id="V2_LEVEL_88_RETURN_CODE",
+    ),
+    pytest.param(
+        {
+            "candidate_source": CandidateSource.V2,
+            "rule_family": UnifiedRuleFamily.STATE_TRANSITION,
+            "detector_id": "V2_STATE_TRANSITION",
+            "outcome_code": "R",
+        },
+        id="STATE_TRANSITION",
+    ),
+    pytest.param(
+        {
+            "candidate_source": CandidateSource.V2,
+            "rule_family": UnifiedRuleFamily.CALCULATION,
+            "detector_id": "V2_CALCULATION",
+            "outcome_code": None,
+        },
+        id="CALCULATION_conditioned",
+    ),
+]
+
+
+@pytest.mark.parametrize("candidate_kwargs", _FAMILY_MATRIX)
+def test_family_matrix_authoritative_candidate_survives_null_graph_row(
+    candidate_kwargs: dict[str, object],
+) -> None:
+    """Familia matrix (Fase 3 del hardening): para cada familia
+    productiva actual, un candidato con outcome_code/condition ya
+    resueltos debe sobrevivir aunque el grafo (Q4/Q5a) no tenga el
+    outcome_code (null -- el caso real V2, confirmado empiricamente
+    contra Catherine)."""
+    candidate = _candidate(**candidate_kwargs)
+    rows = _happy_rows()
+    rows["Q4_MARKER"] = [_q4_row(outcome_code=None)]
+    rows["Q5A_MARKER"] = [_q5a_row(return_code=None)]
+    packages, _ = _build(rows, candidate=candidate)
+    package = packages[0]
+
+    assert package.candidate.candidate_id == candidate.candidate_id
+    assert package.decision is not None
+    assert package.decision.expression == candidate.condition
+    if candidate.outcome_code is None:
+        assert package.decision.outcome_code is None
+        assert package.effects.return_codes == []
+    else:
+        assert package.decision.outcome_code == candidate.outcome_code
+        assert [e.code for e in package.effects.return_codes] == [candidate.outcome_code]
+    # rule_family nunca se filtra a rule_type, para ninguna familia.
+    assert package.decision.rule_type is None
+
+
+@pytest.mark.parametrize("candidate_kwargs", _FAMILY_MATRIX)
+def test_family_matrix_authoritative_candidate_wins_over_contradictory_graph_row(
+    candidate_kwargs: dict[str, object],
+) -> None:
+    """Caso adversarial critico (Fase 7): el grafo trae un outcome_code
+    CONTRADICTORIO (no solo null, p.ej. de otra Decision resuelta por
+    MOVE-literal en el mismo Paragraph). Decision contractual explicita
+    (ver docstring de _validate_deterministic_integrity): el candidato
+    es autoritativo de forma INCONDICIONAL -- el grafo nunca gana, y una
+    discrepancia aqui nunca dispara DETERMINISTIC_INTEGRITY_VIOLATION
+    (esa proteccion existe para PERDIDA, no para que el grafo tenga una
+    computacion V1-only distinta, algo esperado y normal para V2)."""
+    candidate = _candidate(**candidate_kwargs)
+    rows = _happy_rows()
+    rows["Q4_MARKER"] = [_q4_row(outcome_code="CONTRADICTORY")]
+    rows["Q5A_MARKER"] = [_q5a_row(return_code="CONTRADICTORY")]
+    packages, _ = _build(rows, candidate=candidate)
+    package = packages[0]
+
+    if candidate.outcome_code is None:
+        assert package.decision.outcome_code is None
+        assert package.effects.return_codes == []
+    else:
+        assert package.decision.outcome_code == candidate.outcome_code
+        assert package.decision.outcome_code != "CONTRADICTORY"
+        assert [e.code for e in package.effects.return_codes] == [candidate.outcome_code]
+
+
+def test_deterministic_integrity_violation_fails_closed_if_decision_ever_diverged() -> None:
+    """Nunca deberia poder ocurrir por construccion (_build_decision ya
+    usa candidate.outcome_code incondicionalmente) -- esta prueba llama
+    al validador directamente para probar el mecanismo de fail-closed en
+    si mismo, independiente de que ninguna ruta real del builder pueda
+    disparar esta condicion hoy."""
+    candidate = _candidate(outcome_code="9999")
+    package = ContextPackage(
+        schema_version="2.0",
+        candidate=ContextPackageCandidate(
+            candidate_id=candidate.candidate_id,
+            decision_id=candidate.decision_id,
+            detector_id=candidate.detector_id,
+            detector_version=candidate.detector_version,
+            detector_score=candidate.detector_score,
+        ),
+        scope=ContextPackageScope(
+            country="AR",
+            application="Transferencias",
+            operation=ContextPackageOperation(logical_name="OP", description="desc"),
+            program="PROG1",
+            program_version="1.0",
+            paragraph="MAIN",
+            source_file="01-codigo/cobol/PROG.cbl",
+            line_start=10,
+            line_end=20,
+            source_package_hash=_HASH_A,
+        ),
+        code_slice=[
+            CodeSliceEntry(
+                paragraph_id=candidate.paragraph_id,
+                paragraph=candidate.paragraph_name,
+                source_file="01-codigo/cobol/PROG.cbl",
+                source_text="IF WS-COD = 'R001'",
+                line_start=10,
+                line_end=10,
+                inclusion_reason=InclusionReason.CANDIDATE,
+                evidence_ids=["evidence::0000000000000000"],
+            )
+        ],
+        data_context=DataContext(parameter_tables=[], transactional_tables_read=[]),
+        # BUG SIMULADO: decision.outcome_code deliberadamente distinto de
+        # candidate.outcome_code -- nunca alcanzable por el builder real
+        # tras el fix, pero prueba que el validador SI lo detecta.
+        decision=ContextPackageDecision(
+            expression=candidate.condition or "X",
+            normalized_expression=candidate.condition or "X",
+            operands=[],
+            rule_type=None,
+            outcome_code="WRONG",
+            evidence_ids=[],
+        ),
+        effects=Effects(return_codes=[], table_effects=[]),
+        batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
+        domain_glossary=[],
+        evidence=[
+            EvidenceEntry(
+                evidence_id="evidence::0000000000000000",
+                kind="code_slice",
+                source_file="01-codigo/cobol/PROG.cbl",
+                line_start=10,
+                line_end=10,
+                source_package_hash=_HASH_A,
+            )
+        ],
+        completeness=Completeness(
+            D1=CompletenessStatus.COMPLETE,
+            D2=CompletenessStatus.COMPLETE,
+            D3=CompletenessStatus.NOT_AVAILABLE,
+            D4=CompletenessStatus.COMPLETE,
+            D5=CompletenessStatus.NOT_AVAILABLE,
+            D6=CompletenessStatus.NOT_AVAILABLE,
+            D7=CompletenessStatus.NOT_AVAILABLE,
+        ),
+    )
+    with pytest.raises(ContextBuildError, match="OUTCOME_CODE_PRESERVATION"):
+        _validate_deterministic_integrity(candidate, package)
