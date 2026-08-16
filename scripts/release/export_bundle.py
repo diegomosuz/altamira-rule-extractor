@@ -38,10 +38,10 @@ Uso (secuencia oficial completa, ver
 docs/release/QA_TO_PROD_AND_ROLLBACK.md):
     python -m scripts.release.build_release_images
     python -m scripts.release.export_bundle \\
-        --app-image altamira-rule-extractor-app:1.17.0 \\
+        --app-image altamira-rule-extractor-app:1.18.0 \\
         --neo4j-source-image altamira-dependencies/neo4j:5.26.28 \\
         --neo4j-bundle-reference altamira-dependencies/neo4j:5.26.28 \\
-        --output-dir dist/release/1.17.0
+        --output-dir dist/release/1.18.0
 
 No hace push. No hace tag remoto. No maneja secretos.
 """

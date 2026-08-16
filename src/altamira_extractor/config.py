@@ -54,6 +54,23 @@ def _discover_repo_root(start: Path | None = None) -> Path:
     )
 
 
+def get_app_version() -> str:
+    """Version del PRODUCTO (release): `altamira_extractor.__version__`,
+    una de las "tres fuentes de verdad" ya sincronizadas y verificadas
+    por `scripts/release/version_check.py`/`tests/deployment/
+    test_release_version.py` (junto a `pyproject.toml` y
+    `parser/pom.xml`) -- nunca la version de contrato OpenAPI de
+    `api/app.py::create_app` (`FastAPI(version="1.0")`, deliberadamente
+    independiente: identifica la FORMA del contrato HTTP, no el release
+    del producto). Se lee el propio atributo del paquete en ejecucion
+    (nunca se re-parsea `pyproject.toml`/TOML): siempre disponible,
+    incluso si el arbol fuente completo no esta presente en el
+    contenedor -- solo el paquete instalado lo esta."""
+    from . import __version__
+
+    return __version__
+
+
 def _default_manifest_xsd_path() -> Path:
     return _discover_repo_root() / "schemas" / "manifest.xsd"
 

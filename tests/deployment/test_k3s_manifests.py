@@ -78,7 +78,7 @@ def test_app_container_image_is_not_latest_tag() -> None:
     deployment = _find(_load_documents("app-deployment.yaml"), "Deployment")
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
     assert not image.endswith(":latest")
-    assert "1.17.0" in image
+    assert "1.18.0" in image
 
 
 def test_app_container_uses_if_not_present_pull_policy() -> None:

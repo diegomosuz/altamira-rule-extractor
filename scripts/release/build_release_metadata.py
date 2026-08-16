@@ -5,7 +5,7 @@ release.
 
 Uso:
     python -m scripts.release.build_release_metadata \\
-        --app-image altamira-rule-extractor-app:1.17.0 \\
+        --app-image altamira-rule-extractor-app:1.18.0 \\
         --neo4j-source-image neo4j:5-community \\
         --neo4j-bundle-reference altamira-dependencies/neo4j:5.26.28 \\
         --output release-metadata.json \\

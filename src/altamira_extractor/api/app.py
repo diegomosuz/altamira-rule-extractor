@@ -55,7 +55,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import ui
-from ..config import Settings, load_settings
+from ..config import Settings, get_app_version, load_settings
 from ..contracts.observability import ObservabilityMode
 from ..contracts.security_config import AuthenticationMode
 from ..logging_setup import LogEventName, configure_logging, log_event
@@ -335,7 +335,12 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.templates.env.filters["status_label"] = status_label
         app.state.templates.env.filters["program_name"] = program_name_from_source_file
         app.state.templates.env.filters["omit_keys"] = omit_keys
-        app.state.templates.env.globals["app_version"] = app.version
+        # app.version ("1.0", ver FastAPI(...) mas abajo) es la version
+        # de CONTRATO OpenAPI -- deliberadamente independiente del
+        # release del producto. `app_version` (mostrado en el pie de
+        # pagina y en /ui/about) debe reflejar el RELEASE real (Fase
+        # v1.18.0, release preparation): ver config.py::get_app_version.
+        app.state.templates.env.globals["app_version"] = get_app_version()
 
         # Cierre Fase 15B1 ("DISABLED_DEV explicito"): la AUSENCIA de
         # `config/security.yaml`, o un archivo presente pero invalido,
