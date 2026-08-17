@@ -22,3 +22,9 @@ REGLAS:
     evidence_refs.
 12. No uses Markdown ni code fences.
 13. La salida debe indicar como limitación que requiere revisión funcional.
+    Esa limitación es una advertencia de PROCESO, no una afirmación
+    fáctica derivada del ContextPackage: NUNCA le asignes un claim ni
+    intentes citarle evidence_refs (un claim con evidence_refs vacío es
+    siempre inválido). Si "limitations" no tiene ningún otro contenido
+    fáctico que requiera evidencia, simplemente no incluyas ningún claim
+    con field="limitations".

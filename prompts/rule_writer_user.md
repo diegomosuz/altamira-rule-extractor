@@ -18,22 +18,31 @@ alias del catálogo, exactamente como están escritos ahí.
 
 Incluye:
 
-- título;
-- contexto;
-- enunciado;
-- condición;
-- parámetros únicamente aprobados;
-- efecto únicamente aprobado;
-- fuente paramétrica;
-- trazabilidad;
-- limitaciones;
+- título: string;
+- contexto: string;
+- enunciado: string;
+- condición: string;
+- parámetros únicamente aprobados: ARRAY JSON de strings (puede ser
+  vacío: []);
+- efecto únicamente aprobado: string;
+- fuente paramétrica: string o null;
+- trazabilidad: ARRAY JSON de strings, con AL MENOS 1 elemento (nunca
+  un string suelto sin corchetes, incluso si solo tiene una frase);
+- limitaciones: ARRAY JSON de strings, con AL MENOS 1 elemento (nunca
+  un string suelto sin corchetes, incluso si solo tiene una frase);
 - claims, cada uno con: claim_id, field y evidence_refs (lista no vacía
   de alias del catálogo). field debe ser EXACTAMENTE uno de estos
   valores (nunca otro, sin alias ni traducciones):
   {{ALLOWED_CLAIM_FIELDS_JSON}}
   Si un claim no puede expresarse con ninguno de esos valores, no
   inventes uno nuevo: omite ese claim o reformúlalo usando un valor
-  permitido.
+  permitido. NO es obligatorio crear un claim por cada campo de esa
+  lista ni por cada campo del RuleDraft: crea un claim UNICAMENTE
+  cuando exista al menos un alias real del catálogo que respalde ese
+  campo. En particular, la limitación de "revisión funcional" (regla 13
+  del system prompt) es procedimental, no fáctica: nunca le crees un
+  claim (un claim con evidence_refs vacío es siempre inválido y será
+  rechazado).
 
 No agregues claves fuera del schema. No incluyas evidence_ids ni
 evidence_paths en ningún claim.
@@ -44,5 +53,16 @@ parameters, effect, parameter_source, traceability y limitations son
 texto libre en español dirigido a un SME bancario: nunca escribas ahí un
 alias del catálogo ni ningún otro identificador técnico. traceability es
 una explicación breve en lenguaje humano de en qué evidencia se basa la
-regla (por ejemplo: "Basado en la decisión del párrafo X del programa
-Y"), nunca una lista de alias.
+regla, SIEMPRE como array JSON de un solo elemento como mínimo (por
+ejemplo: ["Basado en la decisión implementada en el programa Y."]),
+nunca una lista de alias.
+
+Si mencionas en traceability (o en cualquier otro campo) un identificador
+específico que incluya un número (por ejemplo, el nombre de un párrafo
+COBOL como "2000-VALIDAR-ENTRADA"), el claim de ese campo debe citar en
+evidence_refs TODOS los alias del catálogo necesarios para respaldar ese
+número -- no solo el alias que respalda la decisión en sí. Si ningún
+alias disponible respalda ese número específico, no lo menciones: usa
+una descripción funcional sin el identificador numérico (por ejemplo,
+"el párrafo de validación de entrada" en vez de "el párrafo
+2000-VALIDAR-ENTRADA").
