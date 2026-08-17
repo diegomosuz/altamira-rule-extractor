@@ -32,6 +32,13 @@ def build_rule_response(artifact: GuardrailCandidateArtifact) -> RuleResponse:
                 for v in report.violations
             ],
             warnings=artifact.warnings,
-            repair_attempts_used=len(artifact.repair_history),
+            # Cuenta solo intentos LLM reales (response_hash no nulo),
+            # nunca la sanitizacion deterministica sintetica de
+            # traceability (checkpoint correctivo v1.18.2): esa
+            # correccion no consume presupuesto LLM_REPAIR_ATTEMPTS ni
+            # es una "reparacion" desde la perspectiva del usuario.
+            repair_attempts_used=sum(
+                1 for attempt in artifact.repair_history if attempt.response_hash is not None
+            ),
         ),
     )

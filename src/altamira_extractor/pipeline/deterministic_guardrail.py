@@ -403,6 +403,82 @@ def _check_numbers_and_dates(
     return violations
 
 
+def _text_contains_token(text: str, token: str) -> bool:
+    """Reutiliza EXACTAMENTE la misma tokenizacion que
+    `_check_numbers_and_dates` (nunca una comparacion de substring
+    ingenua, que podria confundir '01' dentro de '4001' con el token
+    real): un elemento "contiene" el token unicamente si la MISMA
+    extraccion regex que genero la violacion tambien lo encuentra ahi."""
+    if _ISO_DATE_TOKEN_RE.fullmatch(token):
+        return token in _ISO_DATE_TOKEN_RE.findall(text)
+    text_without_dates = _AMBIGUOUS_DATE_TOKEN_RE.sub(" ", _ISO_DATE_TOKEN_RE.sub(" ", text))
+    return token in _NUMBER_TOKEN_RE.findall(text_without_dates)
+
+
+def sanitize_traceability_number_date_violations(
+    rule_draft: RuleDraft, violations: list[GuardrailViolation]
+) -> RuleDraft | None:
+    """Correccion deterministica ACOTADA (checkpoint correctivo v1.18.2,
+    fallas reales unsupported_explicit_number sobre traceability
+    reproducidas con gpt-4o-mini y gpt-4.1-2025-04-14, siempre en el
+    campo traceability, nunca en un campo de negocio): nunca fuzzy,
+    nunca inventa texto, nunca sustituye evidencia. Si TODAS las
+    violaciones ERROR actuales son unsupported_explicit_number/
+    unsupported_explicit_date sobre field="traceability", elimina
+    UNICAMENTE los elementos de `traceability` que efectivamente
+    contienen el numero/fecha literal no soportado y devuelve el
+    RuleDraft resultante para que el llamador lo reevalue -- nunca
+    reintroduce el elemento, nunca reescribe su contenido.
+
+    Justificacion (ver rule_writer_system.md/rule_writer_user.md/
+    rule_repair_system.md, contrato documentado y sin cambios):
+    traceability es EXCLUSIVAMENTE una explicacion humana breve de en
+    que evidencia se basa la regla -- nunca porta un hecho de negocio
+    (outcome_code, condition, effect y parameters permanecen
+    intocados). Los tres incidentes reales confirmados (v1.18.0 gpt-4.1
+    parrafo 2000-VALIDAR-ENTRADA, v1.18.0 gpt-4o-mini parrafo
+    4000-VALIDAR-PRODUCTO, v1.18.1 manual gpt-4o-mini copiando
+    verbatim la descripcion del catalogo de evidencia) fueron todos
+    fugas de identificadores tecnicos (nombre de parrafo, metadata del
+    catalogo) hacia texto narrativo, nunca una afirmacion de negocio no
+    soportada. Eliminar el elemento ofensivo nunca altera ningun hecho
+    determinista ni evidencia real.
+
+    Nunca se aplica a ningun otro campo (condition/effect/parameters/
+    context/statement/parameter_source): un numero no soportado ahi
+    puede ser un hecho de negocio real (p. ej. un codigo de retorno) y
+    DEBE seguir fallando cerrado via el ciclo de reparacion LLM
+    existente, sin cambios -- esta funcion nunca se invoca para esos
+    campos.
+
+    Devuelve `None` (nunca sanea, el llamador continua con el ciclo de
+    reparacion LLM existente sin cambios) si:
+    - alguna violacion ERROR no es de este tipo/campo (violaciones
+      mixtas nunca se sanean parcialmente);
+    - la saneacion dejaria `traceability` vacio (el schema exige al
+      menos 1 elemento) o no elimina ningun elemento -- en ambos casos
+      el campo se considera irreparable deterministicamente."""
+    error_violations = [v for v in violations if v.severity == Severity.ERROR]
+    if not error_violations:
+        return None
+    if not all(
+        v.rule in ("unsupported_explicit_number", "unsupported_explicit_date")
+        and v.field == ClaimField.TRACEABILITY.value
+        for v in error_violations
+    ):
+        return None
+
+    offending_tokens = {v.violation_id.rsplit("::", 1)[-1] for v in error_violations}
+    kept = [
+        text
+        for text in rule_draft.traceability
+        if not any(_text_contains_token(text, token) for token in offending_tokens)
+    ]
+    if not kept or len(kept) == len(rule_draft.traceability):
+        return None
+    return rule_draft.model_copy(update={"traceability": kept})
+
+
 def evaluate_guardrail(rule_draft: RuleDraft, package: ContextPackage) -> list[GuardrailViolation]:
     """Ejecuta todos los checks deterministicos y devuelve la lista de
     violaciones (posiblemente vacia). No construye `GuardrailReport`: el

@@ -61,7 +61,11 @@ from .atomic_directory_swap import (
     new_temp_directory,
     swap_directory,
 )
-from .deterministic_guardrail import GUARDRAIL_VERSION, evaluate_guardrail
+from .deterministic_guardrail import (
+    GUARDRAIL_VERSION,
+    evaluate_guardrail,
+    sanitize_traceability_number_date_violations,
+)
 from .errors import GuardrailError, LlmClientError, PromptTemplateError
 from .evidence_catalog import EvidenceCatalog, build_evidence_catalog, redact_rule_draft_for_prompt
 from .llm_client import ChatMessage, LlmProfile, OpenAICompatibleChatClient, resolve_llm_profile
@@ -382,6 +386,38 @@ def _build_failure_diagnostics(
     }
 
 
+def _apply_deterministic_traceability_sanitization(
+    rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
+) -> tuple[RuleDraft, list[GuardrailViolation]]:
+    """Checkpoint correctivo v1.18.2: intenta
+    `sanitize_traceability_number_date_violations` ANTES de que el
+    llamador decida si consumir un intento de reparacion LLM. Nunca
+    llama al modelo, nunca reintroduce el elemento eliminado, nunca se
+    aplica a ningun campo salvo traceability (ver docstring de esa
+    funcion). Si no aplica (violaciones mixtas, o dejaria traceability
+    vacio), devuelve `rule_draft`/`violations` sin cambios (misma
+    identidad de objeto -- el llamador la usa para detectar si hubo
+    cambio) y el llamador continua exactamente como antes (ciclo de
+    reparacion LLM existente, sin modificar).
+
+    Provenance: cuando esto cambia el borrador ANTES de cualquier
+    intento LLM (repair_history aun vacio), el llamador registra un
+    `RepairAttemptRecord` sintetico con `response_hash=None` -- para
+    que `GuardrailCandidateArtifact` (contracts/guardrail_candidate.py)
+    conserve su cadena de provenance existente (todo cambio de
+    contenido debe quedar trazado en repair_history) sin exigir
+    ninguna modificacion de schema: `response_hash` ya era opcional, y
+    `None` distingue de forma legible "correccion deterministica, cero
+    llamadas al modelo" de un intento LLM real. Cuando esto cambia el
+    borrador DESPUES de un intento LLM real (dentro del bucle), el
+    resultado sanitizado se pliega en el MISMO `RepairAttemptRecord` que
+    ese intento ya iba a registrar -- no se crea una entrada separada."""
+    sanitized = sanitize_traceability_number_date_violations(rule_draft, violations)
+    if sanitized is None:
+        return rule_draft, violations
+    return sanitized, evaluate_guardrail(sanitized, package)
+
+
 async def _resolve_one_candidate(
     *,
     candidate_id: str,
@@ -407,6 +443,34 @@ async def _resolve_one_candidate(
     current_draft = initial_draft
     violations = evaluate_guardrail(current_draft, package)
     repair_history: list[RepairAttemptRecord] = []
+
+    sanitized_draft, sanitized_violations = _apply_deterministic_traceability_sanitization(
+        current_draft, package, violations
+    )
+    if sanitized_draft is not current_draft:
+        # Provenance sintetica: el borrador cambio antes de cualquier
+        # intento LLM. response_hash=None marca explicitamente que
+        # NINGUNA llamada al modelo produjo este cambio (ver docstring
+        # de _apply_deterministic_traceability_sanitization) y evita que
+        # GuardrailCandidateArtifact rechace un final_rule_draft que ya
+        # no coincide con initial_rule_draft_hash sin ningun intento
+        # structurally_valid registrado.
+        repair_history.append(
+            RepairAttemptRecord(
+                attempt_number=1,
+                structurally_valid=True,
+                response_hash=None,
+                produced_rule_draft_hash=rule_draft_json_hash(sanitized_draft),
+                error_count_before=sum(1 for v in violations if v.severity == Severity.ERROR),
+                error_count_after=sum(
+                    1 for v in sanitized_violations if v.severity == Severity.ERROR
+                ),
+                warning_count_after=sum(
+                    1 for v in sanitized_violations if v.severity == Severity.WARNING
+                ),
+            )
+        )
+    current_draft, violations = sanitized_draft, sanitized_violations
     previous_attempt_failed_structurally = False
 
     while any(v.severity == Severity.ERROR for v in violations):
@@ -510,6 +574,9 @@ async def _resolve_one_candidate(
             continue
 
         new_violations = evaluate_guardrail(repaired_draft, package)
+        repaired_draft, new_violations = _apply_deterministic_traceability_sanitization(
+            repaired_draft, package, new_violations
+        )
         new_error_count = sum(1 for v in new_violations if v.severity == Severity.ERROR)
         new_warning_count = sum(1 for v in new_violations if v.severity == Severity.WARNING)
         repair_history.append(
@@ -602,7 +669,17 @@ async def _resolve_all_candidates(
                         artifact.to_stable_json().encode("utf-8")
                     ).hexdigest(),
                     final_evidence_validation_status=EvidenceValidationStatus.EVIDENCE_VALIDATED,
-                    repair_attempts_used=len(artifact.repair_history),
+                    # repair_attempts_used cuenta intentos LLM reales
+                    # (con response_hash), nunca la sanitizacion
+                    # deterministica sintetica de traceability (checkpoint
+                    # correctivo v1.18.2, response_hash=None) -- esa
+                    # correccion no consume presupuesto LLM_REPAIR_ATTEMPTS
+                    # ni debe reportarse como "reparacion" en la UI/API.
+                    repair_attempts_used=sum(
+                        1
+                        for attempt in artifact.repair_history
+                        if attempt.response_hash is not None
+                    ),
                     repair_response_hashes=[
                         attempt.response_hash
                         for attempt in artifact.repair_history
