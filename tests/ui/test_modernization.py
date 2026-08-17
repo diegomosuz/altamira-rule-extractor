@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from altamira_extractor.config import Settings
+from altamira_extractor.config import Settings, get_app_version
 from altamira_extractor.contracts.enums import PipelineStage, StageStatus
 from altamira_extractor.ui import STATIC_DIR, TEMPLATES_DIR
 from altamira_extractor.ui.presentation import status_label
@@ -306,7 +306,18 @@ def test_footer_version_comes_from_declared_app_version(
     client: TestClient,
 ) -> None:
     response = client.get("/ui/upload")
-    assert "Version 1.0" in response.text
+    assert f"Version {get_app_version()}" in response.text
+
+
+def test_openapi_contract_version_is_independent_of_release_version(
+    client: TestClient,
+) -> None:
+    # Version de contrato OpenAPI ("1.0"): identifica la forma del
+    # contrato HTTP, deliberadamente independiente de get_app_version()
+    # (ver config.py) -- no debe empezar a seguir el numero de release
+    # por accidente.
+    response = client.get("/openapi.json")
+    assert response.json()["info"]["version"] == "1.0"
 
 
 def test_no_hardcoded_release_tag_string_in_templates() -> None:
