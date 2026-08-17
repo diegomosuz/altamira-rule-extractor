@@ -6,7 +6,7 @@
 
   <groupId>com.altamira.extractor</groupId>
   <artifactId>parser</artifactId>
-  <version>1.18.1</version>
+  <version>1.18.2</version>
   <packaging>jar</packaging>
 
   <name>altamira-extractor-parser</name>
