@@ -147,6 +147,80 @@ def _package(candidate_id: str, decision_id: str = "dec-1") -> ContextPackage:
     )
 
 
+def _package_with_numeric_decision(candidate_id: str) -> ContextPackage:
+    """Variante de `_package()` cuya evidencia de decision contiene un
+    numero literal aislado ("500000") en `expression`/
+    `normalized_expression` -- a diferencia de `_package()`, cuyo unico
+    numero ("R001") nunca se extrae como token aislado (letra-prefijo).
+    Permite probar el caso positivo dedicado: un numero de NEGOCIO
+    genuinamente respaldado por evidencia nunca dispara violacion ni
+    saneamiento ni reparacion LLM."""
+    evidence = EvidenceEntry(
+        evidence_id="ev-1",
+        kind="decision",
+        source_file="cobol/PROG1.cbl",
+        line_start=10,
+        line_end=10,
+        source_package_hash=_HASH_A,
+    )
+    return ContextPackage(
+        schema_version="2.0",
+        candidate=ContextPackageCandidate(
+            candidate_id=candidate_id,
+            decision_id="dec-1",
+            detector_id="det",
+            detector_version="1.0",
+            detector_score=1.0,
+        ),
+        scope=ContextPackageScope(
+            country="AR",
+            application="Transferencias",
+            operation=ContextPackageOperation(logical_name="OP1", description=None),
+            program="PROG1",
+            program_version="1",
+            paragraph="MAIN",
+            source_file="cobol/PROG1.cbl",
+            line_start=10,
+            line_end=10,
+            source_package_hash=_HASH_A,
+        ),
+        code_slice=[
+            CodeSliceEntry(
+                paragraph_id="p1",
+                paragraph="MAIN",
+                source_file="cobol/PROG1.cbl",
+                source_text="IF WS-MONTO > 500000",
+                line_start=10,
+                line_end=10,
+                inclusion_reason=InclusionReason.CANDIDATE,
+                evidence_ids=["ev-1"],
+            )
+        ],
+        data_context=DataContext(parameter_tables=[], transactional_tables_read=[]),
+        decision=ContextPackageDecision(
+            expression="WS-MONTO > 500000",
+            normalized_expression="WS-MONTO > 500000",
+            operands=[],
+            rule_type=None,
+            outcome_code="R001",
+            evidence_ids=["ev-1"],
+        ),
+        effects=Effects(return_codes=[], table_effects=[]),
+        batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
+        domain_glossary=[],
+        evidence=[evidence],
+        completeness=Completeness(
+            D1=CompletenessStatus.COMPLETE,
+            D2=CompletenessStatus.COMPLETE,
+            D3=CompletenessStatus.NOT_AVAILABLE,
+            D4=CompletenessStatus.COMPLETE,
+            D5=CompletenessStatus.NOT_AVAILABLE,
+            D6=CompletenessStatus.NOT_AVAILABLE,
+            D7=CompletenessStatus.NOT_AVAILABLE,
+        ),
+    )
+
+
 def _package_with_extra_evidence(candidate_id: str) -> ContextPackage:
     """Variante de `_package()` con una segunda evidencia (`ev-2`) citada
     por un `code_slice` adicional -- usada para confirmar que el
@@ -1206,3 +1280,196 @@ def test_guardrails_applied_does_not_fail_with_placeholder_error_using_real_prom
         (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
     )
     assert manifest.guardrail_count == 1
+
+
+# --- checkpoint correctivo v1.18.2: saneamiento deterministico de
+# traceability (reproduce los tres incidentes reales: v1.18.0 gpt-4.1
+# parrafo 2000-VALIDAR-ENTRADA, v1.18.0 gpt-4o-mini parrafo
+# 4000-VALIDAR-PRODUCTO, v1.18.1 manual gpt-4o-mini copiando la
+# descripcion del catalogo de evidencia verbatim) ---
+
+
+def _draft_with_traceability_claim(traceability: list[str], **overrides: Any) -> RuleDraft:
+    """Variante de `_valid_draft()` con un claim EXPLICITO para
+    field=traceability citando `$.decision`/`ev-1` (el mismo patron real
+    observado en los tres incidentes forenses) -- necesario porque
+    `_check_numbers_and_dates` solo evalua un campo cuando al menos un
+    claim lo referencia."""
+    base = _valid_draft()
+    claims = [*base.claims, Claim(
+        claim_id="c-trace", field=ClaimField.TRACEABILITY,
+        evidence_paths=["$.decision"], evidence_ids=["ev-1"],
+    )]
+    return base.model_copy(update={"traceability": traceability, "claims": claims, **overrides})
+
+
+def _read_final_draft(kwargs: dict[str, Any]) -> RuleDraft:
+    artifact = GuardrailCandidateArtifact.model_validate_json(
+        (kwargs["guardrail_dir"] / _filename("cand-1")).read_text(encoding="utf-8")
+    )
+    return artifact.final_rule_draft
+
+
+def test_traceability_unsupported_paragraph_number_sanitized_without_llm_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reproduce el mecanismo real v1.18.0 (parrafo con prefijo numerico
+    mencionado en traceability, citando unicamente la evidencia de la
+    decision -- $.decision nunca contiene el identificador del parrafo).
+    _PoisonClient prueba que CERO llamadas LLM ocurren: el saneamiento
+    deterministico resuelve la violacion antes de que el llamador
+    considere consumir un intento de reparacion."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _draft_with_traceability_claim(
+        [
+            "Basado en la decision de validacion del producto solicitado.",
+            "Basado en la decision implementada en el parrafo 4000-VALIDAR-PRODUCTO.",
+        ]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 0
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.traceability == ["Basado en la decision de validacion del producto solicitado."]
+    # nunca se toco ningun campo de negocio
+    assert final.condition == draft.condition
+    assert final.effect == draft.effect
+
+
+def test_traceability_verbatim_catalog_description_leak_sanitized_without_llm_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reproduce el mecanismo real v1.18.1 manual: el modelo copio
+    literalmente la descripcion auto-generada del EVIDENCE_CATALOG
+    ("decision (cobol/PROG1.cbl:10-10)") como un elemento de
+    traceability, en vez de prosa nueva. El elemento ofensivo se
+    elimina; el elemento legitimo (sin numeros) permanece."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _draft_with_traceability_claim(
+        [
+            "Basado en la validacion del codigo de estado de la cuenta.",
+            "decision (cobol/PROG1.cbl:10-10)",
+        ]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.traceability == ["Basado en la validacion del codigo de estado de la cuenta."]
+
+
+def test_unsupported_number_in_condition_is_never_sanitized_fails_closed_via_llm_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Un numero no soportado en un campo de NEGOCIO (condition) nunca
+    se elimina deterministicamente -- podria ser un hecho de negocio
+    real (p. ej. un codigo/umbral). Debe seguir exigiendo una reparacion
+    LLM real, exactamente como antes de este checkpoint."""
+    draft = _valid_draft().model_copy(
+        update={"condition": "WS-COD = 'R001' Y WS-MONTO > 550000"}
+    )
+    calls = _install_fake_client(monkeypatch, [_valid_repair_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 1
+
+
+def test_sanitization_never_empties_traceability_falls_back_to_llm_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Si traceability tiene un UNICO elemento y ese elemento es el
+    ofensivo, el saneamiento debe rehusarse (dejaria el campo vacio,
+    invalido contra el schema) y delegar al ciclo de reparacion LLM
+    existente, sin cambios."""
+    draft = _draft_with_traceability_claim(["decision (cobol/PROG1.cbl:10-10)"])
+    calls = _install_fake_client(monkeypatch, [_valid_repair_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+
+
+def test_mixed_traceability_and_business_field_violations_not_partially_sanitized(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Si traceability Y otro campo (condition) tienen violaciones
+    unsupported_explicit_number simultaneamente, el saneamiento nunca
+    se aplica parcialmente -- ambas violaciones se dejan intactas para
+    el ciclo de reparacion LLM existente (nunca se sanea solo la mitad
+    "facil" mientras la otra mitad, potencialmente de negocio, se
+    ignora en silencio)."""
+    draft = _draft_with_traceability_claim(
+        ["decision (cobol/PROG1.cbl:10-10)", "Nota adicional sin numeros."],
+        condition="WS-MONTO > 770000",
+    )
+    calls = _install_fake_client(monkeypatch, [_valid_repair_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+
+
+def test_supported_number_in_traceability_is_never_removed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Un numero en traceability que no dispara ninguna violacion
+    (p. ej. un codigo alfanumerico como "R001", nunca extraido como
+    numero aislado por el mismo tokenizador que usa la deteccion) nunca
+    activa el saneamiento: el elemento permanece exactamente como el
+    modelo lo escribio, y no se consume ningun intento de reparacion."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _draft_with_traceability_claim(["Basado en la decision con codigo R001."])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    final = _read_final_draft(kwargs)
+    assert final.traceability == ["Basado en la decision con codigo R001."]
+
+
+def test_supported_number_in_condition_is_never_touched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Caso positivo dedicado: un numero literal AISLADO (no un codigo
+    alfanumerico como R001) en un campo de NEGOCIO (condition), pero
+    genuinamente respaldado por la evidencia citada ("500000" aparece
+    tanto en el condition como en `$.decision.expression`), nunca
+    dispara ninguna violacion -- por lo tanto
+    `sanitize_traceability_number_date_violations` nunca se invoca
+    siquiera (no hay violaciones que sanear) y el ciclo de reparacion
+    LLM tampoco se activa. Distingue el caso ya cubierto por
+    `test_unsupported_number_in_condition_is_never_sanitized_fails_closed_via_llm_repair`
+    (numero de negocio NO soportado, debe fallar cerrado via LLM)."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _valid_draft().model_copy(update={"condition": "WS-MONTO > 500000"})
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package_with_numeric_decision("cand-1")], drafts={"cand-1": draft}
+    )
+
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 0
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.condition == "WS-MONTO > 500000"

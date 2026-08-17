@@ -35,6 +35,7 @@ from altamira_extractor.contracts.rule_draft import Claim, ClaimField, RuleDraft
 from altamira_extractor.pipeline.deterministic_guardrail import (
     evaluate_guardrail,
     resolve_json_path,
+    sanitize_traceability_number_date_violations,
 )
 
 _HASH = "a" * 64
@@ -903,3 +904,131 @@ def test_batch_available_structured_citation_is_not_flagged() -> None:
     violations = evaluate_guardrail(draft, package_with_batch)
     assert not any(v.rule == "batch_structured_evidence_when_unavailable" for v in violations)
     assert not any(v.rule == "batch_mentioned_without_evidence" for v in violations)
+
+
+# --- checkpoint correctivo v1.18.2: sanitize_traceability_number_date_violations ---
+
+
+def test_sanitize_removes_only_offending_traceability_element() -> None:
+    draft = _draft(
+        traceability=[
+            "Basado en la decision del programa CONSALDO.",
+            "decision (01-codigo/cobol/cobol1.cbl:346-360)",
+        ],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    sanitized = sanitize_traceability_number_date_violations(draft, violations)
+    assert sanitized is not None
+    assert sanitized.traceability == ["Basado en la decision del programa CONSALDO."]
+    assert not any(
+        v.rule == "unsupported_explicit_number" for v in evaluate_guardrail(sanitized, _package())
+    )
+
+
+def test_sanitize_removes_element_with_unsupported_date() -> None:
+    package = _package_with_snapshot_date()
+    draft = _draft(
+        context="Vigente desde 2099-01-01",
+        traceability=[
+            "Basado en la fecha de vigencia 2099-01-01.",
+            "Explicacion adicional sin fechas.",
+        ],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONTEXT,
+                evidence_paths=["$.data_context.parameter_tables[0].snapshot_date"],
+                evidence_ids=["ev-param"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.data_context.parameter_tables[0].snapshot_date"],
+                evidence_ids=["ev-param"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    date_violations = [v for v in violations if v.field == "traceability"]
+    sanitized = sanitize_traceability_number_date_violations(draft, date_violations)
+    assert sanitized is not None
+    assert sanitized.traceability == ["Explicacion adicional sin fechas."]
+
+
+def test_sanitize_returns_none_when_only_element_is_offending() -> None:
+    """Nunca deja traceability vacio: el schema exige al menos 1
+    elemento. Si el UNICO elemento es el ofensivo, se delega al ciclo
+    de reparacion LLM (comportamiento sin cambios)."""
+    draft = _draft(
+        traceability=["decision (01-codigo/cobol/cobol1.cbl:346-360)"],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    assert sanitize_traceability_number_date_violations(draft, violations) is None
+
+
+def test_sanitize_returns_none_for_mixed_field_violations() -> None:
+    """Si ADEMAS de traceability otro campo tiene una violacion
+    unsupported_explicit_number (p. ej. condition, potencialmente un
+    hecho de negocio real), el saneamiento nunca se aplica -- ni
+    siquiera parcialmente a traceability -- para no dejar sin resolver
+    una violacion de negocio en silencio."""
+    draft = _draft(
+        condition="WS-MONTO > 550000",
+        traceability=["decision (01-codigo/cobol/cobol1.cbl:346-360)"],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision.expression"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    assert sanitize_traceability_number_date_violations(draft, violations) is None
+
+
+def test_sanitize_returns_none_for_unrelated_violation_rule() -> None:
+    """Un unknown_evidence_id (posible fuga de alias real) nunca se
+    sanea via este mecanismo, aunque el campo sea traceability: solo
+    unsupported_explicit_number/unsupported_explicit_date califican."""
+    draft = _draft(
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-does-not-exist"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    assert any(v.rule == "unknown_evidence_id" for v in violations)
+    assert sanitize_traceability_number_date_violations(draft, violations) is None
+
+
+def test_sanitize_returns_none_when_no_error_violations() -> None:
+    draft = _draft()
+    assert sanitize_traceability_number_date_violations(draft, []) is None
