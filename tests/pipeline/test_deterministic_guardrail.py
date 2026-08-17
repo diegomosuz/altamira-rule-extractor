@@ -237,6 +237,99 @@ def _draft(**overrides: object) -> RuleDraft:
     return RuleDraft(**defaults)  # type: ignore[arg-type]
 
 
+# --- regresion real (v1.18.1, real gpt-4o-mini/gpt-4.1-2025-04-14,
+# Catherine/CONSALDO): traceability nombrando el parrafo de origen
+# (identificador COBOL con prefijo numerico, p. ej. "2000-VALIDAR-
+# ENTRADA") mientras el claim cita UNICAMENTE la evidencia de la
+# decision -- el objeto $.decision nunca incluye el identificador del
+# parrafo (deliberadamente acotado a expression/operands/outcome_code),
+# asi que el numero del nombre del parrafo queda sin respaldo. La causa
+# raiz real era el prompt (rule_writer_user.md ensenaba a nombrar el
+# parrafo en traceability sin instruir citar TAMBIEN la evidencia que
+# lo respalda); este check deterministico ya se comportaba
+# correctamente y permanece SIN CAMBIOS -- estos tests prueban que
+# sigue rechazando la cita insuficiente y que la cita correcta (la que
+# el prompt corregido ahora enseña) pasa limpio, nunca que se relajo
+# nada aqui.
+
+
+def _package_with_numbered_paragraph() -> ContextPackage:
+    package = _package()
+    numbered_slice = package.code_slice[0].model_copy(
+        update={
+            "paragraph": "2000-VALIDAR-ENTRADA",
+            "source_text": "2000-VALIDAR-ENTRADA. IF WS-MONTO > WS-LIMITE ...",
+        }
+    )
+    return package.model_copy(update={"code_slice": [numbered_slice]})
+
+
+def test_unsupported_explicit_number_rejects_traceability_citing_only_decision() -> None:
+    """Reproduce el mecanismo exacto del bug real: traceability nombra el
+    parrafo ("2000-VALIDAR-ENTRADA") pero el unico claim de ese field
+    cita EXCLUSIVAMENTE `$.decision` (nunca contiene el identificador del
+    parrafo) -- debe seguir rechazandose, exactamente como en el run
+    real preservado."""
+    package = _package_with_numbered_paragraph()
+    draft = _draft(
+        traceability=[
+            "Basado en la decisión implementada en el párrafo 2000-VALIDAR-ENTRADA."
+        ],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision.expression"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_number"]
+    assert len(matches) == 1
+    assert matches[0].severity == Severity.ERROR
+    assert "2000" in matches[0].message
+
+
+def test_unsupported_explicit_number_passes_when_traceability_cites_paragraph_evidence_too() -> (
+    None
+):
+    """La correccion real (prompt): el claim de traceability debe citar
+    TAMBIEN la evidencia que respalda el identificador del parrafo
+    (`$.code_slice[0]`, cuyo `paragraph`/`source_text` SI contiene
+    "2000") ademas de `$.decision` -- nunca se aproxima ni se inventa
+    evidencia, solo se amplia la cita a lo que realmente la respalda.
+    Prueba que el contrato es alcanzable, no que el guardrail se relajo."""
+    package = _package_with_numbered_paragraph()
+    draft = _draft(
+        traceability=[
+            "Basado en la decisión implementada en el párrafo 2000-VALIDAR-ENTRADA."
+        ],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision.expression"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision", "$.code_slice[0]"],
+                evidence_ids=["ev-decision", "ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_number" for v in violations)
+
+
 # --- resolve_json_path ---
 
 
