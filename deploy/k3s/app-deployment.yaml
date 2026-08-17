@@ -60,7 +60,7 @@ spec:
           # (scripts/release/) reemplaza esta referencia por la imagen
           # inmutable real (digest incluido) antes de entregar el
           # bundle al cliente. Nunca ":latest".
-          image: altamira-rule-extractor-app:1.18.0
+          image: altamira-rule-extractor-app:1.18.1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
