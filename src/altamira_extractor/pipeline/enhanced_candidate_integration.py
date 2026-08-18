@@ -131,7 +131,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..contracts.candidate import CandidateArtifact, RuleCandidate
 from ..contracts.candidate_promotion_assessment import CandidateSource, UnifiedRuleFamily
@@ -281,6 +281,16 @@ class _ConvertedCandidate:
     observaciones o con un `RuleCandidate` V1 existente."""
 
     key: str
+    # Ciclo 4 (v1.18.2, gate de compatibilidad de candidate_id): `key`
+    # que se habria calculado ANTES de que branch_condition (rama WHEN
+    # limpia) corrigiera `condition` -- es decir, la MISMA formula de
+    # `functional_identity_key` pero con el `condition` bare-subject que
+    # el nodo Decision del grafo ya exponia (identico al que v1.18.1
+    # habria calculado, byte a byte). `_finalize_collision_safe_keys`
+    # (unico lector) usa este campo para decidir si `key` puede
+    # revertirse a `legacy_key` sin riesgo de colision -- ver su
+    # docstring.
+    legacy_key: str
     paragraph_id: str
     paragraph_name: str
     # str | None (Fase 15B3-C2-B2): None unicamente para CALCULATION
@@ -342,6 +352,12 @@ def _convert_v2_candidate(
     # (nunca el dump ANTLR de la WhenPhrase completa) -- por eso preferir
     # branch_condition sin verificacion de forma es seguro: en el peor caso
     # coincide exactamente con el valor que ya se iba a usar.
+    # legacy_condition: el `condition` bare-subject tal como quedaba ANTES
+    # de esta correccion -- unica entrada usada para `legacy_key` (ver
+    # docstring de `_ConvertedCandidate.legacy_key` y
+    # `_finalize_collision_safe_keys`, gate de compatibilidad de
+    # candidate_id del Ciclo 4).
+    legacy_condition = condition
     anchor_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
     branch_condition = anchor_statement.branch_condition if anchor_statement else None
     if isinstance(branch_condition, str) and branch_condition.strip():
@@ -411,9 +427,17 @@ def _convert_v2_candidate(
         effect=effect,
         rule_family=rule_family,
     )
+    legacy_key = functional_identity_key(
+        paragraph_id=paragraph_node.id,
+        decision_id=v2_candidate.decision_id,
+        condition=legacy_condition,
+        effect=effect,
+        rule_family=rule_family,
+    )
     return (
         _ConvertedCandidate(
             key=key,
+            legacy_key=legacy_key,
             paragraph_id=paragraph_node.id,
             paragraph_name=v2_candidate.paragraph,
             decision_id=v2_candidate.decision_id,
@@ -506,6 +530,11 @@ def _convert_unconditional_calculation(
     return (
         _ConvertedCandidate(
             key=key,
+            # legacy_key=key (nunca diverge): esta funcion nunca pasa por
+            # el branch_condition del Ciclo 4 (CALCULATION incondicional
+            # no tiene Decision/condition en absoluto), asi que no existe
+            # una version "anterior" distinta que reconstruir.
+            legacy_key=key,
             paragraph_id=paragraph_node.id,
             paragraph_name=v2_candidate.paragraph,
             decision_id=None,
@@ -649,6 +678,54 @@ def _merge_into_v1(
     return merged, warning
 
 
+def _finalize_collision_safe_keys(
+    converted: list[_ConvertedCandidate],
+) -> list[_ConvertedCandidate]:
+    """Gate de compatibilidad de candidate_id (Ciclo 4, v1.18.2): decide,
+    por candidato, si `key` puede revertirse a `legacy_key` (identico al
+    que v1.18.1 habria calculado, byte a byte) o si debe conservar el
+    `key` branch-specific ya calculado en `_convert_v2_candidate`.
+
+    Agrupa por `legacy_key` (paragraph_id/decision_id/CONDITION
+    BARE/effect/rule_family -- la formula exacta de v1.18.1). Dentro de
+    cada grupo:
+
+    - Un unico miembro: ningun otro candidato de este run comparte su
+      identidad legacy, asi que no hay riesgo de colision -- revierte a
+      `legacy_key`. Este es el caso de CADA rama real observada en el
+      corpus obligatorio (SQLCODE WHEN 0/WHEN +100/WHEN OTHER: `effect`
+      ya difiere por rama -- A/N/E -- asi que `legacy_key` YA los
+      distingue sin necesitar el `condition` corregido).
+    - Varios miembros con el MISMO `condition` (corregido): es
+      corroboracion legitima -- el MISMO hecho funcional, detectado mas
+      de una vez (p.ej. mismo literal, misma rama, distintos detectores).
+      v1.18.1 tambien los habria fusionado bajo `legacy_key`: se
+      preserva ese comportamiento.
+    - Varios miembros con `condition` (corregido) DISTINTO: son ramas
+      WHEN genuinamente diferentes que v1.18.1 solo distinguia por
+      `effect` -- si ademas comparten el mismo `effect` (nunca
+      demostrado en el corpus real, pero si en la matriz adversarial de
+      regresion, ver test_two_when_branches_with_same_assigned_literal_
+      stay_two_distinct_candidates), `legacy_key` los fusionaria
+      incorrectamente en un unico candidato. La seguridad ante colision
+      es obligatoria (Ciclo 4, seccion 6): estos miembros CONSERVAN su
+      `key` branch-specific ya calculado, divergiendo deliberadamente de
+      v1.18.1 solo para este subconjunto ambiguo -- nunca para el resto
+      del run."""
+    by_legacy_key: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
+    for item in converted:
+        by_legacy_key[item.legacy_key].append(item)
+
+    finalized: list[_ConvertedCandidate] = []
+    for legacy_key in sorted(by_legacy_key):
+        members = by_legacy_key[legacy_key]
+        if len(members) == 1 or len({member.condition for member in members}) <= 1:
+            finalized.extend(replace(member, key=legacy_key) for member in members)
+        else:
+            finalized.extend(members)
+    return finalized
+
+
 def _merge_candidates(
     converted: list[_ConvertedCandidate],
     v1_candidates: CandidateArtifact,
@@ -665,8 +742,13 @@ def _merge_candidates(
     `_corroborate_level88_return_code_pairs` omite un `RETURN_CODE`
     redundante cuando un `LEVEL_88_RETURN_CODE` ya demuestra el MISMO
     hecho con `evidence_ids` identicos -- excepcion estrecha, nunca
-    aplicable a otra pareja de familias."""
+    aplicable a otra pareja de familias. `_finalize_collision_safe_keys`
+    corre DESPUES de la corroboracion (sobre los candidatos que
+    realmente sobreviven a agruparse/emitirse) y decide, candidato por
+    candidato, si `key` puede revertirse a la identidad de v1.18.1 -- ver
+    su docstring."""
     converted, corroboration_warnings = _corroborate_level88_return_code_pairs(converted)
+    converted = _finalize_collision_safe_keys(converted)
 
     groups: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
     for item in converted:

@@ -561,6 +561,7 @@ def _converted(
     paragraph_id: str = "program::AR::op::PROG1::1::abc123::paragraph::A",
     decision_id: str = "dec-1",
     condition: str = "CONDICION",
+    legacy_condition: str | None = None,
     outcome_code: str | None = "0005",
     rule_family: UnifiedRuleFamily = UnifiedRuleFamily.RETURN_CODE,
     detector_id: str = "V2_RETURN_CODE_PROPAGATION",
@@ -571,6 +572,13 @@ def _converted(
     evidence_ids: tuple[str, ...] = (),
     source_v2_candidate_id: str = "v2::x::1",
 ) -> _ConvertedCandidate:
+    """`legacy_condition` (Ciclo 4, gate de compatibilidad de
+    candidate_id): por defecto igual a `condition` (ningun test
+    preexistente ejerce una correccion branch_condition, asi que
+    `key`==`legacy_key` reproduce exactamente el comportamiento anterior
+    a `_finalize_collision_safe_keys`). Los tests de ese gate especifico
+    pasan un `legacy_condition` distinto para simular una rama
+    corregida."""
     key = functional_identity_key(
         paragraph_id=paragraph_id,
         decision_id=decision_id,
@@ -578,8 +586,16 @@ def _converted(
         effect=outcome_code or "",
         rule_family=rule_family,
     )
+    legacy_key = functional_identity_key(
+        paragraph_id=paragraph_id,
+        decision_id=decision_id,
+        condition=legacy_condition if legacy_condition is not None else condition,
+        effect=outcome_code or "",
+        rule_family=rule_family,
+    )
     return _ConvertedCandidate(
         key=key,
+        legacy_key=legacy_key,
         paragraph_id=paragraph_id,
         paragraph_name="A",
         decision_id=decision_id,
@@ -1693,6 +1709,157 @@ def test_two_when_branches_with_same_assigned_literal_stay_two_distinct_candidat
     assert conditions == {"WS-COD = 1", "WS-COD = 2"}
     candidate_ids = {c.candidate_id for c in new_candidates}
     assert len(candidate_ids) == 2, "cada rama debe producir un candidate_id distinto"
+
+
+# --- Gate de compatibilidad de candidate_id (Ciclo 4, "FINAL CANDIDATE ID
+# COMPATIBILITY GATE"): cuando `effect` ya distingue las ramas (caso real,
+# medido en todo el corpus obligatorio -- SQLCODE WHEN 0/WHEN +100/WHEN
+# OTHER nunca comparten outcome_code), el candidate_id final debe coincidir
+# BYTE A BYTE con el que v1.18.1 ya calculaba (formula legacy, `condition`
+# bare-subject) -- nunca cambiar solo porque el campo `condition` ahora es
+# mas preciso. Solo cuando `effect` NO alcanza a distinguir las ramas
+# (adversarial, arriba) el candidate_id diverge deliberadamente. -----------
+
+
+def test_evaluate_branches_with_distinct_effects_preserve_legacy_candidate_id() -> None:
+    """Reproduce la forma real medida en GROUND_TRUTH_FASE_15D (GTSQLCD1):
+    EVALUATE SQLCODE WHEN 0/WHEN +100/WHEN OTHER, cada rama con su propio
+    outcome_code (A/N/E). `effect` YA distinguia estas tres ramas bajo la
+    formula de v1.18.1 (bare-subject "SQLCODE" + effect distinto) -- por
+    lo tanto sus candidate_id deben permanecer EXACTAMENTE iguales a los
+    que v1.18.1 habria calculado, incluso con el condition corregido
+    ("SQLCODE = 0"/"SQLCODE = 100") visible en el campo."""
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="SQLCODE",
+    )
+    when0_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="A",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="SQLCODE = 0",
+    )
+    when100_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="N",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="SQLCODE = 100",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, when0_move, when100_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "SQLCODE")], tags={"WS-ESTADO": "status"}
+    )
+    assert warnings == []
+    assert len(new_candidates) == 2
+    by_outcome = {c.outcome_code: c for c in new_candidates}
+
+    paragraph_node_id_ = paragraph_node_id("PROG1", "A")
+    decision_id = decision_node_id_for("PROG1", "A", 10, 1)
+    legacy_key_a = functional_identity_key(
+        paragraph_id=paragraph_node_id_,
+        decision_id=decision_id,
+        condition="SQLCODE",
+        effect="A",
+        rule_family=UnifiedRuleFamily.STATE_TRANSITION,
+    )
+    legacy_key_n = functional_identity_key(
+        paragraph_id=paragraph_node_id_,
+        decision_id=decision_id,
+        condition="SQLCODE",
+        effect="N",
+        rule_family=UnifiedRuleFamily.STATE_TRANSITION,
+    )
+    assert by_outcome["A"].condition == "SQLCODE = 0"
+    assert by_outcome["A"].candidate_id == f"candidate::enhanced::{HASH}::{legacy_key_a}", (
+        "el condition corregido no debe cambiar el candidate_id cuando effect ya "
+        "distinguia la rama bajo la formula de v1.18.1"
+    )
+    assert by_outcome["N"].condition == "SQLCODE = 100"
+    assert by_outcome["N"].candidate_id == f"candidate::enhanced::{HASH}::{legacy_key_n}"
+
+
+def test_two_when_branches_with_same_assigned_literal_diverge_from_legacy_id() -> None:
+    """Complemento del caso adversarial de arriba: prueba explicitamente
+    que el candidate_id de cada rama en colision NO coincide con el que
+    la formula legacy (bare-subject) habria producido -- la divergencia
+    es deliberada y exclusiva de este subconjunto ambiguo, nunca del
+    resto de candidatos de la misma EVALUATE."""
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="WS-COD",
+    )
+    when1_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="X",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="WS-COD = 1",
+    )
+    when2_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="X",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="WS-COD = 2",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, when1_move, when2_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-COD")], tags={"WS-ESTADO": "status"}
+    )
+    assert warnings == []
+    assert len(new_candidates) == 2
+
+    paragraph_node_id_ = paragraph_node_id("PROG1", "A")
+    decision_id = decision_node_id_for("PROG1", "A", 10, 1)
+    legacy_key_collision = functional_identity_key(
+        paragraph_id=paragraph_node_id_,
+        decision_id=decision_id,
+        condition="WS-COD",
+        effect="X",
+        rule_family=UnifiedRuleFamily.STATE_TRANSITION,
+    )
+    legacy_candidate_id = f"candidate::enhanced::{HASH}::{legacy_key_collision}"
+    for candidate in new_candidates:
+        assert candidate.candidate_id != legacy_candidate_id, (
+            "cuando dos ramas distintas colisionarian bajo la formula legacy, ninguna "
+            "puede quedarse con ese id compartido: la divergencia debe ser total, nunca "
+            "arbitraria para un solo miembro"
+        )
+    assert len({c.candidate_id for c in new_candidates}) == 2
 
 
 # --- Caso F: condicion compuesta -----------------------------------------
