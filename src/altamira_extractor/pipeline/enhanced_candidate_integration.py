@@ -328,6 +328,24 @@ def _convert_v2_candidate(
             f"candidato V2 {v2_candidate.candidate_id!r} descartado: el nodo Decision "
             f"{v2_candidate.decision_id!r} no expone 'expression' no vacia"
         )
+    # Ciclo 4 (v1.18.2, EVALUATE/WHEN): Decision.expression es SIEMPRE el
+    # sujeto crudo del EVALUATE completo (ej. "SQLCODE"), nunca el predicado
+    # de la rama WHEN especifica de ESTE candidato (StatementExtractor.
+    # convertEvaluate construye un Decision por EVALUATE, no por rama --
+    # ver semantic_graph_builder.py::_build_decisions_and_leads_to). El
+    # anchor_statement_id de este candidato SI apunta al primer statement de
+    # su propia rama, que desde la correccion de StatementExtractor.
+    # buildBranchCondition lleva un branch_condition limpio
+    # ("SQLCODE = 100") cuando la rama es una comparacion directa contra un
+    # literal puro. Cuando no lo es (condition-name, EVALUATE ALSO, THRU),
+    # el fallback de Java es el MISMO sujeto crudo que ya tenemos aqui
+    # (nunca el dump ANTLR de la WhenPhrase completa) -- por eso preferir
+    # branch_condition sin verificacion de forma es seguro: en el peor caso
+    # coincide exactamente con el valor que ya se iba a usar.
+    anchor_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
+    branch_condition = anchor_statement.branch_condition if anchor_statement else None
+    if isinstance(branch_condition, str) and branch_condition.strip():
+        condition = branch_condition
 
     line_start = paragraph_node.properties.get("line_start")
     if not isinstance(line_start, int):

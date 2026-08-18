@@ -1532,6 +1532,169 @@ def test_when_other_branch_produces_a_distinguishable_state_transition() -> None
     assert new_candidates[0].outcome_code == "D"
 
 
+# --- Ciclo 4 (v1.18.2, EVALUATE/WHEN decision semantics): branch_condition
+# limpio (StatementExtractor.buildBranchCondition) ahora sobreescribe el
+# condition/normalized_condition bare-subject del nodo Decision compartido
+# (regresion real: EVALUATE SQLCODE WHEN +100 perdia el literal de
+# comparacion antes de llegar a ContextPackage). -----------------------------
+
+
+def test_evaluate_branches_with_clean_branch_condition_keep_own_condition_never_conflated() -> (
+    None
+):
+    """Reproduce la forma real post-correccion del parser (branch_condition
+    limpio por rama, ver EvaluateBranchConditionTest.java) -- a diferencia
+    de `test_evaluate_when_produces_state_transition_per_branch`, que no
+    fija `branch_condition` (fixture pre-correccion) y por eso las dos
+    ramas comparten el mismo condition bare-subject del grafo. Aqui cada
+    candidato debe llevar SU PROPIO predicado ("SQLCODE = 0"/"SQLCODE =
+    100"), nunca el sujeto bare compartido ni el predicado de la otra
+    rama."""
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="SQLCODE",
+    )
+    when1_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="A",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="SQLCODE = 0",
+    )
+    when2_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="N",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="SQLCODE = 100",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, when1_move, when2_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "SQLCODE")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2
+    by_outcome = {c.outcome_code: c for c in new_candidates}
+    assert by_outcome.keys() == {"A", "N"}
+    assert by_outcome["A"].condition == "SQLCODE = 0"
+    assert by_outcome["N"].condition == "SQLCODE = 100"
+    assert by_outcome["A"].condition != by_outcome["N"].condition
+
+
+def test_evaluate_branches_without_clean_branch_condition_keep_bare_subject_no_op() -> None:
+    """Cuando el parser no pudo aislar un literal puro (branch_condition
+    None, ej. EVALUATE TRUE con condition-name), el candidato conserva el
+    condition bare-subject que el grafo ya exponia -- ningun cambio de
+    comportamiento respecto a antes de esta correccion."""
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="TRUE",
+    )
+    when_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="A",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, when_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "TRUE")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 1
+    assert new_candidates[0].condition == "TRUE"
+
+
+def test_two_when_branches_with_same_assigned_literal_stay_two_distinct_candidates() -> None:
+    """Caso adversarial exigido por el Ciclo 4: dos ramas WHEN distintas
+    del MISMO EVALUATE que asignan el MISMO literal de salida (mismo
+    `effect`) NUNCA deben fusionarse en un unico candidato solo porque,
+    antes de esta correccion, ambas compartian el mismo condition
+    bare-subject (lo que las hacia indistinguibles para
+    `functional_identity_key`). Con branch_condition limpio, cada rama
+    tiene su propio condition y por lo tanto su propia identidad."""
+    evaluate_stmt = make_stmt(
+        statement_id="P1::A::0::EVALUATE",
+        kind=StatementKind.EVALUATE,
+        line_start=10,
+        expression="WS-COD",
+    )
+    when1_move = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="X",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="WS-COD = 1",
+    )
+    when2_move = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-ESTADO"],
+        variables_written=["WS-ESTADO"],
+        assigned_literal="X",
+        parent_statement_id="P1::A::0::EVALUATE",
+        branch_kind="WHEN",
+        branch_condition="WS-COD = 2",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[evaluate_stmt, when1_move, when2_move],
+        variables_written=["WS-ESTADO"],
+    )
+    program = _program(
+        program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+    )
+
+    new_candidates, warnings = _run_detection(
+        program, [("A", 10, "WS-COD")], tags={"WS-ESTADO": "status"}
+    )
+
+    assert warnings == []
+    assert len(new_candidates) == 2, (
+        "dos ramas WHEN con el mismo effect pero distinto branch_condition nunca deben "
+        f"deduplicarse en un unico candidato: {[c.condition for c in new_candidates]}"
+    )
+    conditions = {c.condition for c in new_candidates}
+    assert conditions == {"WS-COD = 1", "WS-COD = 2"}
+    candidate_ids = {c.candidate_id for c in new_candidates}
+    assert len(candidate_ids) == 2, "cada rama debe producir un candidate_id distinto"
+
+
 # --- Caso F: condicion compuesta -----------------------------------------
 
 

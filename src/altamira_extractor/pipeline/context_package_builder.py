@@ -1038,14 +1038,39 @@ def _build_decision(
     # perderia silenciosamente ese hecho determinista en D4/D5. Para
     # candidatos V1/Q0 esto es un no-op: su propio outcome_code ya proviene
     # de esa misma propiedad del grafo (ver queries/v1/q0_candidates.cypher).
+    #
+    # condition/normalized_condition: mismo principio (Ciclo 4, v1.18.2,
+    # EVALUATE/WHEN), aplicado ahora tambien a expression/normalized_
+    # expression. dec.expression/dec.normalized_expression son SIEMPRE el
+    # sujeto crudo del EVALUATE completo (ej. "SQLCODE"): un solo nodo
+    # Decision representa TODO el EVALUATE, nunca una rama WHEN especifica
+    # (ver semantic_graph_builder.py::_build_decisions_and_leads_to). Para
+    # una Decision de tipo IF esto es un no-op (candidate.condition ya
+    # coincide exactamente con la fila, ambos derivados de la misma
+    # CanonicalStatement.expression sin division sujeto/rama). Para una
+    # Decision de tipo EVALUATE, candidate.condition ya resuelve el
+    # predicado especifico de la rama de ESTE candidato (branch_condition
+    # limpio via StatementExtractor.buildBranchCondition cuando la rama es
+    # una comparacion directa contra un literal puro; en caso contrario,
+    # el mismo sujeto crudo que la fila ya expone -- ver comentario en
+    # enhanced_candidate_integration.py::_convert_v2_candidate). Usar la
+    # fila aqui perderia silenciosamente ese hecho determinista en D4/D5,
+    # exactamente el mismo riesgo que outcome_code arriba.
+    # candidate.condition es no-None aqui por construccion: _build_decision
+    # solo se invoca cuando decision_id no es None, y _check_decision_anchor_
+    # by_family (contracts/candidate.py) exige condition no-None siempre que
+    # decision_id no sea None (unica excepcion, CALCULATION incondicional,
+    # tiene decision_id=None y por lo tanto nunca llega a Q4).
+    assert candidate.condition is not None  # noqa: S101
+    condition_text = candidate.condition
     evidence_id = _evidence_id(
         logical_query="Q4",
         candidate_id=candidate.candidate_id,
         origin_entity_id=row["decision_id"],
         evidence_kind="decision",
         content={
-            "condition": row["condition"],
-            "normalized_condition": row["normalized_condition"],
+            "condition": condition_text,
+            "normalized_condition": condition_text,
             "operands_json": operands_raw,
             "outcome_code": candidate.outcome_code,
         },
@@ -1063,8 +1088,8 @@ def _build_decision(
 
     try:
         decision = ContextPackageDecision(
-            expression=row["condition"],
-            normalized_expression=row["normalized_condition"],
+            expression=condition_text,
+            normalized_expression=condition_text,
             operands=operands,
             rule_type=row["rule_type"],
             outcome_code=candidate.outcome_code,

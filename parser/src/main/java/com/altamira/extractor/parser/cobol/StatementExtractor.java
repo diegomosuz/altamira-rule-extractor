@@ -182,13 +182,78 @@ final class StatementExtractor {
                 List.of(), null, null, List.of()));
 
         for (WhenPhrase whenPhrase : evaluateStmt.getWhenPhrases()) {
-            String condition = whenPhrase.getCtx() != null ? whenPhrase.getCtx().getText() : null;
+            String cleanCondition = buildBranchCondition(expression, whenPhrase);
+            // Fallback cuando la rama no es una comparacion directa contra un
+            // literal puro (condition-name, EVALUATE ALSO, THRU, referencia a
+            // otra variable): el sujeto crudo del EVALUATE (`expression`,
+            // idem al que ya expone hoy el nodo Decision del grafo para esta
+            // misma rama antes de esta correccion) -- nunca el dump ANTLR
+            // crudo de toda la WhenPhrase (incluye el statement anidado
+            // completo sin espacios, ej. "WHEN+100MOVE'N'TOWS-ESTADO...":
+            // un consumidor downstream no puede distinguirlo de un predicado
+            // limpio por forma). `expression` deja de ser no-null solo si
+            // Select.getCtx() ya era null (ver arriba); en ese caso extremo
+            // se recurre al dump crudo unicamente para preservar
+            // branch_condition no-null (invariante de deteccion de limites
+            // de rama en semantic_propagation_analyzer.py).
+            String condition = cleanCondition != null
+                    ? cleanCondition
+                    : expression != null
+                            ? expression
+                            : (whenPhrase.getCtx() != null ? whenPhrase.getCtx().getText() : null);
             List<String> referencedConditionNames = evaluateWhenPhraseConditionNames(whenPhrase);
             walkBranchWithCondition(whenPhrase.getStatements(), id, BranchKind.WHEN, condition, referencedConditionNames);
         }
         if (evaluateStmt.getWhenOther() != null) {
             walk(evaluateStmt.getWhenOther().getStatements(), id, BranchKind.WHEN_OTHER);
         }
+    }
+
+    /**
+     * Predicado limpio de rama WHEN ({@code subject = literal}, o varias
+     * alternativas unidas con {@code OR} para {@code WHEN a WHEN b ...})
+     * cuando TODAS las alternativas de la WhenPhrase son comparaciones
+     * directas contra un literal puro -- nunca una referencia a
+     * condition-name/condicion booleana compuesta
+     * ({@code Condition#getConditionValueStmt()} no nulo, ej.
+     * {@code EVALUATE TRUE WHEN cond-name}), nunca un rango THRU
+     * ({@code Condition#getThrough()} no nulo), nunca EVALUATE ALSO
+     * ({@code When#getAlsoConditions()} no vacio), nunca una comparacion
+     * contra otra variable ({@link ValueReferences#literalTextIfPure}
+     * devuelve null si el arbol de valor referencia algun dato). En
+     * cualquiera de esos casos se devuelve null y el llamador conserva el
+     * texto crudo existente (walkBranchWithCondition) -- nunca se inventa
+     * un operador para una forma no verificada. Nunca hardcodea el sujeto
+     * ni el valor de comparacion: ambos provienen de la propia AST
+     * (subjectExpression ya extraido de evaluateStmt.getSelect(); el
+     * literal, de Condition#getValue() via ValueReferences, la misma
+     * utilidad ya usada para assigned_literal en MOVE).
+     */
+    private static String buildBranchCondition(String subjectExpression, WhenPhrase whenPhrase) {
+        if (subjectExpression == null) {
+            return null;
+        }
+        List<String> comparisons = new ArrayList<>();
+        for (When when : whenPhrase.getWhens()) {
+            var condition = when.getCondition();
+            if (condition == null
+                    || !when.getAlsoConditions().isEmpty()
+                    || condition.getConditionValueStmt() != null
+                    || condition.getThrough() != null
+                    || condition.getValue() == null) {
+                return null;
+            }
+            String literal = ValueReferences.literalTextIfPure(condition.getValue().getValueStmt());
+            if (literal == null) {
+                return null;
+            }
+            String operator = condition.isNot() ? "<>" : "=";
+            comparisons.add(subjectExpression + " " + operator + " " + literal);
+        }
+        if (comparisons.isEmpty()) {
+            return null;
+        }
+        return String.join(" OR ", comparisons);
     }
 
     /**
