@@ -549,6 +549,172 @@ def reconstruct_traceability_deterministically(
     return rule_draft.model_copy(update={"traceability": [CANONICAL_TRACEABILITY_SENTENCE]})
 
 
+def _authoritative_anchor_for_token(
+    token: str, package: ContextPackage
+) -> tuple[str, list[str]] | None:
+    """Busca `token` (mismo tokenizador EXACTO que `_check_numbers_and_
+    dates`/`_text_contains_token`) UNICAMENTE en las anclas semanticas
+    autoritativas que FIERN ya conoce con certeza para este candidato:
+
+    - `$.decision` (expression/normalized_expression/outcome_code):
+      define la IDENTIDAD del candidato -- cuando esta presente
+      (`ContextPackage.decision` puede ser `None` para familias sin
+      decision asociada), `expression`/`normalized_expression` son
+      campos obligatorios del contrato (`min_length=1`), nunca vacios.
+      Aplica a TODAS las familias de candidatos con decision, no solo
+      Q0 RETURN_CODE.
+    - `$.effects.return_codes[i]` con `approved_for_rule_text=True`
+      (CLAUDE.md: "Solo efectos con approved_for_rule_text=true pueden
+      redactarse como efecto de la regla" -- esta funcion nunca ancla
+      contra un efecto no aprobado).
+
+    Nunca busca en evidencia mas debil (code_slice, domain_glossary,
+    declared_value_context): esas describen o contextualizan un hecho,
+    nunca son su fuente semantica autoritativa -- una coincidencia
+    numerica ahi podria ser casualidad, no un hecho verificado.
+
+    `$.effects.table_effects[i]` deliberadamente EXCLUIDO: `TableEffect`
+    (contracts/context_package.py) solo tiene `table`/`operation`/
+    `attribution_scope`, ningun campo numerico/fecha que pudiera anclar
+    un token de negocio -- no hay nada que buscar ahi.
+
+    Devuelve `None` si ninguna ancla respalda el token -- en ese caso el
+    llamador NUNCA debe inventar una ancla ni relajar la exigencia: el
+    candidato sigue su ciclo de reparacion LLM existente sin cambios
+    (posible afirmacion de negocio genuinamente no soportada, o una
+    familia de candidatos -- p. ej. V2_STATE_CHANGE/V2_CALCULATION --
+    cuyo hecho relevante vive en un campo que esta funcion
+    deliberadamente no audita todavia; ver docstring de
+    `augment_claims_with_authoritative_anchors`)."""
+    decision = package.decision
+    if decision is not None:
+        decision_text = " ".join(
+            text
+            for text in (decision.expression, decision.normalized_expression, decision.outcome_code)
+            if text is not None
+        )
+        if _text_contains_token(decision_text, token):
+            return "$.decision", list(decision.evidence_ids)
+
+    for index, return_code in enumerate(package.effects.return_codes):
+        if not return_code.approved_for_rule_text:
+            continue
+        if _text_contains_token(return_code.code, token):
+            return f"$.effects.return_codes[{index}]", list(return_code.evidence_ids)
+
+    return None
+
+
+def augment_claims_with_authoritative_anchors(
+    rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
+) -> RuleDraft | None:
+    """Correccion deterministica ACOTADA (checkpoint correctivo v1.18.2,
+    cierre de fiabilidad de CAMPOS DE NEGOCIO: candidatos reales
+    VALIDAR-MORA-PARA de PAQUETE_SINTETICO_CLIENTES_EMPRESAS_
+    MULTIPROGRAMA_15_REGLAS.zip -- "30" en `effect` sin soporte -- y
+    MAIN-PARA de PAQUETE_SINTETICO_GROUND_TRUTH_FASE_15D.zip -- "1000"
+    en `condition` sin soporte). Confirmado comparando la ejecucion real
+    fallida contra la ejecucion real exitosa INMEDIATAMENTE posterior
+    del MISMO candidato: en ambos casos el numero escrito por el modelo
+    es un HECHO AUTORITATIVO REAL (WS-DIAS-MORA>30 / WS-MONTO>1000, la
+    propia `decision.expression`) -- el modelo simplemente no cito la
+    evidencia que lo respalda (`$.decision`), citando en su lugar
+    evidencia mas debil (`$.effects.return_codes[0]` sola,
+    `$.domain_glossary[0]`) o ningun claim en absoluto para ese campo.
+    Clasificacion (ver auditoria de ownership): "D. LLM esta siendo
+    forzado a regenerar un hecho deterministico que FIERN ya posee" --
+    nunca "G. afirmacion de negocio genuinamente no soportada".
+
+    A diferencia de `sanitize_traceability_number_date_violations`/
+    `reconstruct_traceability_deterministically` (que ELIMINAN o
+    REEMPLAZAN texto), esta funcion NUNCA toca el VALOR de ningun campo
+    de negocio -- ni siquiera un caracter. Unicamente AMPLIA
+    `claims[].evidence_paths`/`evidence_ids` para que citen la ancla
+    autoritativa real que YA respalda, verificado por coincidencia
+    EXACTA de token (mismo tokenizador que la violacion), el numero/
+    fecha que el modelo ya escribio correctamente. Nunca inventa un
+    hecho, nunca fabrica un evidence_id, nunca fabrica un evidence_path
+    -- ambos provienen directamente de campos ya poblados del
+    `ContextPackage` real (`decision.evidence_ids`/`return_codes[i].
+    evidence_ids`).
+
+    Nunca se aplica a `traceability` (tiene su propio mecanismo
+    dedicado, sin cambios) ni a ningun campo cuyo token ofensivo no
+    resuelva contra una ancla autoritativa (`_authoritative_anchor_
+    for_token` devuelve `None`): TODO-O-NADA sobre el conjunto de
+    violaciones que esta funcion es responsable de resolver -- si
+    CUALQUIERA de ellas no tiene ancla, NINGUNA se amplia, y el
+    candidato completo sigue su ciclo de reparacion LLM existente sin
+    cambios (nunca amplia unos claims mientras deja otros con una
+    afirmacion potencialmente no soportada sin resolver en el mismo
+    paso). Esto NUNCA relaja `_check_numbers_and_dates`: el token debe
+    seguir apareciendo LITERALMENTE en la evidencia (ahora ampliada,
+    nunca inventada) para que la revalidacion posterior del llamador
+    pase."""
+    error_violations = [
+        v
+        for v in violations
+        if v.severity == Severity.ERROR
+        and v.rule in ("unsupported_explicit_number", "unsupported_explicit_date")
+        and v.field != ClaimField.TRACEABILITY.value
+    ]
+    if not error_violations:
+        return None
+
+    claims_by_id = {claim.claim_id: claim for claim in rule_draft.claims}
+    # Por claim_id: TODAS las anclas distintas necesarias para resolver
+    # CADA token ofensivo de ese claim (un mismo claim puede necesitar
+    # mas de un ancla, p. ej. "$.decision" para un umbral Y
+    # "$.effects.return_codes[1]" para el codigo de retorno, ambos en
+    # el mismo campo `effect`) -- nunca se sobreescribe una ancla ya
+    # encontrada con la siguiente, se acumulan todas.
+    anchor_paths_by_claim_id: dict[str, list[str]] = {}
+    anchor_ids_by_claim_id: dict[str, list[str]] = {}
+    for violation in error_violations:
+        parts = violation.violation_id.split("::")
+        if len(parts) != 3:
+            return None
+        _rule, claim_id, token = parts
+        claim = claims_by_id.get(claim_id)
+        if claim is None:
+            return None
+        anchor = _authoritative_anchor_for_token(token, package)
+        if anchor is None:
+            return None
+        anchor_path, anchor_evidence_ids = anchor
+        paths = anchor_paths_by_claim_id.setdefault(claim_id, [])
+        if anchor_path not in paths:
+            paths.append(anchor_path)
+        ids = anchor_ids_by_claim_id.setdefault(claim_id, list(claim.evidence_ids))
+        for eid in anchor_evidence_ids:
+            if eid not in ids:
+                ids.append(eid)
+
+    updated_claims: list[Claim] = []
+    any_change = False
+    for claim in rule_draft.claims:
+        anchor_paths = anchor_paths_by_claim_id.get(claim.claim_id)
+        if anchor_paths is None:
+            updated_claims.append(claim)
+            continue
+        new_paths = list(claim.evidence_paths)
+        for anchor_path in anchor_paths:
+            if anchor_path not in new_paths:
+                new_paths.append(anchor_path)
+        new_ids = anchor_ids_by_claim_id[claim.claim_id]
+        if new_paths == claim.evidence_paths and new_ids == claim.evidence_ids:
+            updated_claims.append(claim)
+            continue
+        any_change = True
+        updated_claims.append(
+            claim.model_copy(update={"evidence_paths": new_paths, "evidence_ids": new_ids})
+        )
+
+    if not any_change:
+        return None
+    return rule_draft.model_copy(update={"claims": updated_claims})
+
+
 def evaluate_guardrail(rule_draft: RuleDraft, package: ContextPackage) -> list[GuardrailViolation]:
     """Ejecuta todos los checks deterministicos y devuelve la lista de
     violaciones (posiblemente vacia). No construye `GuardrailReport`: el

@@ -35,6 +35,7 @@ from altamira_extractor.contracts.enums import EvidenceValidationStatus, Inclusi
 from altamira_extractor.contracts.rule_draft import Claim, ClaimField, RuleDraft
 from altamira_extractor.pipeline.deterministic_guardrail import (
     CANONICAL_TRACEABILITY_SENTENCE,
+    augment_claims_with_authoritative_anchors,
     evaluate_guardrail,
     reconstruct_traceability_deterministically,
     resolve_json_path,
@@ -332,6 +333,216 @@ def test_unsupported_explicit_number_passes_when_traceability_cites_paragraph_ev
     )
     violations = evaluate_guardrail(draft, package)
     assert not any(v.rule == "unsupported_explicit_number" for v in violations)
+
+
+# --- augment_claims_with_authoritative_anchors ---
+
+
+def _package_with_numeric_decision_and_return_code() -> ContextPackage:
+    """Variante de `_package()` con un umbral numerico AISLADO en la
+    decision (`WS-DIAS-MORA>30`, mismo patron real que
+    VALIDAR-MORA-PARA/CLECRE01) y un codigo de retorno numerico
+    aprobado para redaccion (`9999`, checkpoint de integridad v1.17 --
+    nunca debe alterarse ni perder soporte)."""
+    package = _package()
+    return package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-DIAS-MORA>30",
+                    "normalized_expression": "WS-DIAS-MORA>30",
+                }
+            ),
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        *package.effects.return_codes,
+                        ReturnCodeEffect(
+                            code="9999", approved_for_rule_text=True, evidence_ids=["ev-decision"]
+                        ),
+                        ReturnCodeEffect(
+                            code="4242",
+                            approved_for_rule_text=False,
+                            evidence_ids=["ev-decision"],
+                        ),
+                    ]
+                }
+            ),
+        }
+    )
+
+
+def test_augment_adds_decision_anchor_for_unsupported_number_in_effect() -> None:
+    """Regresion real (VALIDAR-MORA-PARA de PAQUETE_SINTETICO_CLIENTES_
+    EMPRESAS_MULTIPROGRAMA_15_REGLAS.zip): "30" en effect es un hecho
+    autoritativo real (decision.expression), el claim solo citaba
+    return_codes[0] -- se amplia con $.decision, effect NUNCA se toca."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo 9999 si el cliente tiene mas de 30 dias de mora.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert {v.violation_id.rsplit("::", 1)[-1] for v in violations} == {"30", "9999"}
+
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is not None
+    assert augmented.effect == draft.effect
+    assert augmented.condition == draft.condition
+    assert evaluate_guardrail(augmented, package) == []
+    claim = next(c for c in augmented.claims if c.field == ClaimField.EFFECT)
+    assert "$.decision" in claim.evidence_paths
+    assert "$.effects.return_codes[0]" in claim.evidence_paths
+
+
+def test_augment_adds_return_code_anchor_for_unsupported_number_in_condition() -> None:
+    """Simetrico: un numero de retorno mencionado en `condition` (poco
+    usual pero posible) se ancla contra `$.effects.return_codes[i]`
+    cuando `decision` no lo respalda."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        condition="Se evalua unicamente si el resultado previo fue codigo 9999 exactamente.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert len(violations) == 1
+    assert violations[0].violation_id.endswith("::9999")
+
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is not None
+    assert augmented.condition == draft.condition
+    assert evaluate_guardrail(augmented, package) == []
+    claim = next(c for c in augmented.claims if c.field == ClaimField.CONDITION)
+    assert "$.effects.return_codes[1]" in claim.evidence_paths
+
+
+def test_augment_never_anchors_against_unapproved_return_code() -> None:
+    """CLAUDE.md: "Solo efectos con approved_for_rule_text=true pueden
+    redactarse" -- un codigo de retorno NO aprobado (aqui "4242") nunca
+    sirve como ancla, aunque el numero coincida literalmente."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo 4242 al resultado.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert len(violations) == 1
+    assert augment_claims_with_authoritative_anchors(draft, package, violations) is None
+
+
+def test_augment_returns_none_for_genuinely_unsupported_number() -> None:
+    """G. Afirmacion de negocio genuinamente no soportada: un numero que
+    no aparece en NINGUNA ancla autoritativa (ni decision, ni un
+    return_code aprobado) nunca se amplia -- debe seguir fallando
+    cerrado via el ciclo de reparacion LLM existente, sin cambios."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        effect="Se rechaza la operacion por superar el limite de 88888 pesos.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert len(violations) == 1
+    assert augment_claims_with_authoritative_anchors(draft, package, violations) is None
+
+
+def test_augment_is_all_or_nothing_across_mixed_supported_and_unsupported_numbers() -> None:
+    """Si UN candidato tiene dos violaciones -- una con ancla real, otra
+    genuinamente no soportada -- ninguna se amplia: nunca se resuelve
+    parcialmente dejando la afirmacion no soportada sin abordar en el
+    mismo paso deterministico."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo 9999 tras superar el limite de 77777 pesos.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert {v.violation_id.rsplit("::", 1)[-1] for v in violations} == {"9999", "77777"}
+    assert augment_claims_with_authoritative_anchors(draft, package, violations) is None
+
+
+def test_augment_never_applies_to_traceability() -> None:
+    """traceability tiene su propio mecanismo dedicado (saneamiento
+    parcial + reconstruccion canonica) -- esta funcion nunca la toca,
+    incluso si el numero SI resuelve contra una ancla autoritativa."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        traceability=["Basado en la decision con umbral de 30 dias."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert len(violations) == 1
+    assert violations[0].field == "traceability"
+    assert augment_claims_with_authoritative_anchors(draft, package, violations) is None
+
+
+def test_augment_returns_none_when_no_error_violations() -> None:
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft()
+    assert augment_claims_with_authoritative_anchors(draft, package, []) is None
+
+
+def test_augment_is_idempotent_and_deterministic() -> None:
+    """Misma entrada -> mismo resultado, sin importar cuantas veces se
+    invoque (sin aleatoriedad, sin dependencia de estado externo)."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo 9999 si el cliente tiene mas de 30 dias de mora.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    first = augment_claims_with_authoritative_anchors(draft, package, violations)
+    second = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert first is not None and second is not None
+    assert first.to_stable_json() == second.to_stable_json()
 
 
 # --- resolve_json_path ---

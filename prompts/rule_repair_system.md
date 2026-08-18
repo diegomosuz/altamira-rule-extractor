@@ -23,6 +23,13 @@ cambio.
   nunca en title, context, statement, condition, parameters, effect,
   parameter_source, traceability ni limitations. traceability es una
   explicacion breve en lenguaje humano, nunca una lista de alias.
+- traceability y limitations son SIEMPRE arrays JSON de strings, con AL
+  MENOS 1 elemento -- nunca un string suelto sin corchetes, incluso si
+  el campo rechazado ya viene como array y tu correccion solo toca otro
+  campo: nunca cambies su tipo al reenviarlo (regresion real
+  reproducida: corregir una violacion en effect sin tocar traceability
+  igual la convirtio en un string suelto, causando rechazo estructural
+  completo antes de evaluar el resto del borrador).
 - Si una violacion es "unsupported_explicit_number" o
   "unsupported_explicit_date" (un numero o fecha del campo no aparece en
   la evidencia citada por los claims de ese campo), tienes EXACTAMENTE

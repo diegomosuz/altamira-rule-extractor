@@ -63,6 +63,7 @@ from .atomic_directory_swap import (
 )
 from .deterministic_guardrail import (
     GUARDRAIL_VERSION,
+    augment_claims_with_authoritative_anchors,
     evaluate_guardrail,
     reconstruct_traceability_deterministically,
     sanitize_traceability_number_date_violations,
@@ -387,35 +388,44 @@ def _build_failure_diagnostics(
     }
 
 
-def _apply_deterministic_traceability_sanitization(
+def _apply_deterministic_guardrail_corrections(
     rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
 ) -> tuple[RuleDraft, list[GuardrailViolation]]:
     """Checkpoint correctivo v1.18.2 (extendido en el cierre de
-    fiabilidad multi-corpus): intenta, en cascada, DOS correcciones
-    deterministicas ANTES de que el llamador decida si consumir un
-    intento de reparacion LLM. Nunca llama al modelo, nunca se aplica a
-    ningun campo salvo traceability (ver docstrings de ambas funciones).
+    fiabilidad de campos de negocio): intenta, en cascada, TRES
+    correcciones deterministicas ANTES de que el llamador decida si
+    consumir un intento de reparacion LLM. Nunca llama al modelo.
+    (Anteriormente `_apply_deterministic_traceability_sanitization`,
+    renombrada porque ya no se limita a traceability.)
 
-    Paso 1 -- `sanitize_traceability_number_date_violations`: elimina
-    UNICAMENTE el/los elemento(s) ofensivos, preservando el resto del
-    contenido (preferido: mantiene toda la especificidad que el modelo
-    SI logro sustentar). Si esto ya deja el candidato sin violaciones
-    ERROR, el paso 2 nunca se ejecuta.
+    Pasos 1-2 (SOLO traceability, ver docstrings de ambas funciones) --
+    sin cambios respecto al checkpoint anterior:
+    1. `sanitize_traceability_number_date_violations`: elimina
+       UNICAMENTE el/los elemento(s) ofensivos, preservando el resto.
+    2. `reconstruct_traceability_deterministically`: fallback final si
+       el paso 1 no puede aplicarse (dejaria el campo vacio) -- caso
+       real: candidato 4000-VALIDAR-PRODUCTO de PAQUETE_SINTETICO_
+       CATHERINE_CORREGIDO_APP_ACTUAL.zip.
 
-    Paso 2 -- `reconstruct_traceability_deterministically`: fallback
-    final SOLO si, tras el paso 1 (que puede haberse rehusado o haber
-    dejado violaciones pendientes), siguen quedando violaciones ERROR
-    puramente `unsupported_explicit_number`/`unsupported_explicit_date`
-    sobre traceability (p. ej. un unico elemento totalmente ofensivo,
-    donde eliminar dejaria el campo vacio -- caso real reproducido:
-    candidato 4000-VALIDAR-PRODUCTO de
-    PAQUETE_SINTETICO_CATHERINE_CORREGIDO_APP_ACTUAL.zip, ~1/3 de
-    ejecuciones reales consecutivas atascadas en un loop de reparacion
-    LLM de respuesta identica). Reemplaza el campo COMPLETO por la
-    oracion canonica fija -- nunca puede fallar por construccion (nunca
-    contiene digito ni fecha).
+    Paso 3 (NUEVO, campos de NEGOCIO -- condition/effect/etc., NUNCA
+    traceability) -- `augment_claims_with_authoritative_anchors`: casos
+    reales VALIDAR-MORA-PARA (effect) de PAQUETE_SINTETICO_CLIENTES_
+    EMPRESAS_MULTIPROGRAMA_15_REGLAS.zip y MAIN-PARA (condition) de
+    PAQUETE_SINTETICO_GROUND_TRUTH_FASE_15D.zip: el numero que el
+    modelo escribio es un hecho autoritativo REAL (`decision.
+    expression`), solo le faltaba citar `$.decision` en evidence_refs.
+    Esta funcion NUNCA toca el VALOR de ningun campo -- unicamente
+    amplia claims[].evidence_paths/evidence_ids con la ancla
+    autoritativa real ya verificada por coincidencia exacta de token
+    (ver su propio docstring para el TODO-O-NADA y las anclas exactas
+    permitidas). Si el token no resuelve contra ninguna ancla
+    autoritativa, esta funcion devuelve `None` y el candidato sigue su
+    ciclo de reparacion LLM existente sin cambios -- posible afirmacion
+    de negocio genuinamente no soportada, que DEBE seguir fallando
+    cerrado.
 
-    Si ninguno de los dos pasos aplica, devuelve `rule_draft`/
+    Cada paso solo se intenta si el anterior no dejo el candidato sin
+    violaciones ERROR. Si ninguno aplica, devuelve `rule_draft`/
     `violations` sin cambios (misma identidad de objeto -- el llamador
     la usa para detectar si hubo cambio) y el llamador continua
     exactamente como antes (ciclo de reparacion LLM existente, sin
@@ -429,13 +439,13 @@ def _apply_deterministic_traceability_sanitization(
     contenido debe quedar trazado en repair_history) sin exigir
     ninguna modificacion de schema: `response_hash` ya era opcional, y
     `None` distingue de forma legible "correccion deterministica, cero
-    llamadas al modelo" de un intento LLM real -- sin distinguir
-    remocion parcial de reconstruccion canonica (ambas son
-    "deterministica, cero llamadas al modelo", la unica distincion que
-    el contrato de auditoria existente necesita). Cuando esto cambia el
-    borrador DESPUES de un intento LLM real (dentro del bucle), el
-    resultado se pliega en el MISMO `RepairAttemptRecord` que ese
-    intento ya iba a registrar -- no se crea una entrada separada."""
+    llamadas al modelo" de un intento LLM real -- sin distinguir entre
+    los tres mecanismos (todos son "deterministica, cero llamadas al
+    modelo", la unica distincion que el contrato de auditoria existente
+    necesita). Cuando esto cambia el borrador DESPUES de un intento LLM
+    real (dentro del bucle), el resultado se pliega en el MISMO
+    `RepairAttemptRecord` que ese intento ya iba a registrar -- no se
+    crea una entrada separada."""
     current_draft = rule_draft
     current_violations = violations
 
@@ -450,6 +460,14 @@ def _apply_deterministic_traceability_sanitization(
         )
         if reconstructed is not None:
             current_draft = reconstructed
+            current_violations = evaluate_guardrail(current_draft, package)
+
+    if any(v.severity == Severity.ERROR for v in current_violations):
+        augmented = augment_claims_with_authoritative_anchors(
+            current_draft, package, current_violations
+        )
+        if augmented is not None:
+            current_draft = augmented
             current_violations = evaluate_guardrail(current_draft, package)
 
     return current_draft, current_violations
@@ -481,14 +499,14 @@ async def _resolve_one_candidate(
     violations = evaluate_guardrail(current_draft, package)
     repair_history: list[RepairAttemptRecord] = []
 
-    sanitized_draft, sanitized_violations = _apply_deterministic_traceability_sanitization(
+    sanitized_draft, sanitized_violations = _apply_deterministic_guardrail_corrections(
         current_draft, package, violations
     )
     if sanitized_draft is not current_draft:
         # Provenance sintetica: el borrador cambio antes de cualquier
         # intento LLM. response_hash=None marca explicitamente que
         # NINGUNA llamada al modelo produjo este cambio (ver docstring
-        # de _apply_deterministic_traceability_sanitization) y evita que
+        # de _apply_deterministic_guardrail_corrections) y evita que
         # GuardrailCandidateArtifact rechace un final_rule_draft que ya
         # no coincide con initial_rule_draft_hash sin ningun intento
         # structurally_valid registrado.
@@ -611,7 +629,7 @@ async def _resolve_one_candidate(
             continue
 
         new_violations = evaluate_guardrail(repaired_draft, package)
-        repaired_draft, new_violations = _apply_deterministic_traceability_sanitization(
+        repaired_draft, new_violations = _apply_deterministic_guardrail_corrections(
             repaired_draft, package, new_violations
         )
         new_error_count = sum(1 for v in new_violations if v.severity == Severity.ERROR)

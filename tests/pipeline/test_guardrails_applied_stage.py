@@ -33,8 +33,10 @@ from altamira_extractor.contracts.context_package import (
     ContextPackageOperation,
     ContextPackageScope,
     DataContext,
+    DomainGlossaryEntry,
     Effects,
     EvidenceEntry,
+    ReturnCodeEffect,
 )
 from altamira_extractor.contracts.enums import (
     BatchContextStatus,
@@ -210,6 +212,116 @@ def _package_with_numeric_decision(candidate_id: str) -> ContextPackage:
         batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
         domain_glossary=[],
         evidence=[evidence],
+        completeness=Completeness(
+            D1=CompletenessStatus.COMPLETE,
+            D2=CompletenessStatus.COMPLETE,
+            D3=CompletenessStatus.NOT_AVAILABLE,
+            D4=CompletenessStatus.COMPLETE,
+            D5=CompletenessStatus.NOT_AVAILABLE,
+            D6=CompletenessStatus.NOT_AVAILABLE,
+            D7=CompletenessStatus.NOT_AVAILABLE,
+        ),
+    )
+
+
+def _package_with_business_field_anchors(candidate_id: str) -> ContextPackage:
+    """Variante real (VALIDAR-MORA-PARA de PAQUETE_SINTETICO_CLIENTES_
+    EMPRESAS_MULTIPROGRAMA_15_REGLAS.zip / MAIN-PARA de PAQUETE_
+    SINTETICO_GROUND_TRUTH_FASE_15D.zip): decision con umbral numerico
+    aislado ("30"), un return_code aprobado ("9999", checkpoint de
+    integridad v1.17) y evidencia mas debil (domain_glossary) que NUNCA
+    debe usarse como ancla autoritativa."""
+    decision_evidence = EvidenceEntry(
+        evidence_id="ev-decision",
+        kind="decision",
+        source_file="cobol/PROG1.cbl",
+        line_start=10,
+        line_end=10,
+        source_package_hash=_HASH_A,
+    )
+    return_code_evidence = EvidenceEntry(
+        evidence_id="ev-return-code",
+        kind="return_code_effect",
+        source_file="cobol/PROG1.cbl",
+        line_start=16,
+        line_end=16,
+        source_package_hash=_HASH_A,
+    )
+    glossary_evidence = EvidenceEntry(
+        evidence_id="ev-glossary",
+        kind="domain_glossary",
+        source_file="cobol/PROG1.cbl",
+        line_start=5,
+        line_end=5,
+        source_package_hash=_HASH_A,
+    )
+    return ContextPackage(
+        schema_version="2.0",
+        candidate=ContextPackageCandidate(
+            candidate_id=candidate_id,
+            decision_id="dec-1",
+            detector_id="det",
+            detector_version="1.0",
+            detector_score=1.0,
+        ),
+        scope=ContextPackageScope(
+            country="AR",
+            application="Transferencias",
+            operation=ContextPackageOperation(logical_name="OP1", description=None),
+            program="PROG1",
+            program_version="1",
+            paragraph="MAIN",
+            source_file="cobol/PROG1.cbl",
+            line_start=10,
+            line_end=10,
+            source_package_hash=_HASH_A,
+        ),
+        code_slice=[
+            CodeSliceEntry(
+                paragraph_id="p1",
+                paragraph="MAIN",
+                source_file="cobol/PROG1.cbl",
+                source_text="IF WS-DIAS-MORA > 30",
+                line_start=10,
+                line_end=10,
+                inclusion_reason=InclusionReason.CANDIDATE,
+                evidence_ids=["ev-decision"],
+            )
+        ],
+        data_context=DataContext(parameter_tables=[], transactional_tables_read=[]),
+        decision=ContextPackageDecision(
+            expression="WS-DIAS-MORA > 30",
+            normalized_expression="WS-DIAS-MORA > 30",
+            operands=[],
+            rule_type=None,
+            outcome_code="CE13",
+            evidence_ids=["ev-decision"],
+        ),
+        effects=Effects(
+            return_codes=[
+                ReturnCodeEffect(
+                    code="9999", approved_for_rule_text=True, evidence_ids=["ev-return-code"]
+                )
+            ],
+            table_effects=[],
+        ),
+        batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
+        domain_glossary=[
+            DomainGlossaryEntry(
+                data_item_id="prog::data::WS-DIAS-MORA",
+                technical_name="WS-DIAS-MORA",
+                semantic_tag="duration",
+                domain_term_id="term::1.0::days_overdue",
+                functional_name="dias de mora",
+                definition="Cantidad de dias en mora",
+                entity_type="duration",
+                source_kind="CURATED_CONFIG",
+                authoritative_source="V1",
+                confidence=1.0,
+                evidence_ids=["ev-glossary"],
+            )
+        ],
+        evidence=[decision_evidence, return_code_evidence, glossary_evidence],
         completeness=Completeness(
             D1=CompletenessStatus.COMPLETE,
             D2=CompletenessStatus.COMPLETE,
@@ -1605,3 +1717,199 @@ def test_canonical_reconstruction_provenance_is_recorded_correctly(
     # intentos LLM reales -- la reconstruccion canonica nunca cuenta.
     assert record.repair_attempts_used == 0
     assert record.repair_response_hashes == []
+
+
+def test_regression_real_run_clientes_effect_anchor_augmentation_without_llm_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regresion exacta del incidente real VALIDAR-MORA-PARA
+    (PAQUETE_SINTETICO_CLIENTES_EMPRESAS_MULTIPROGRAMA_15_REGLAS.zip):
+    `effect` menciona "30" (umbral real de la decision), el claim solo
+    cita `$.effects.return_codes[0]` -- se resuelve ampliando el claim
+    con `$.decision` (ancla autoritativa real), CERO llamadas al
+    modelo, `effect`/`condition` NUNCA se tocan."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _valid_draft().model_copy(
+        update={
+            "effect": (
+                "Se asigna el codigo de retorno CE13 si el cliente tiene mas de "
+                "30 dias de mora."
+            ),
+            "claims": [
+                Claim(
+                    claim_id="c1",
+                    field=ClaimField.CONDITION,
+                    evidence_paths=["$.decision"],
+                    evidence_ids=["ev-decision"],
+                ),
+                Claim(
+                    claim_id="c2",
+                    field=ClaimField.EFFECT,
+                    evidence_paths=["$.effects.return_codes[0]"],
+                    evidence_ids=["ev-return-code"],
+                ),
+            ],
+        }
+    )
+    kwargs = _base_kwargs(
+        tmp_path,
+        packages=[_package_with_business_field_anchors("cand-1")],
+        drafts={"cand-1": draft},
+    )
+
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 0
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.effect == draft.effect
+    assert final.condition == draft.condition
+    effect_claim = next(c for c in final.claims if c.field == ClaimField.EFFECT)
+    assert "$.decision" in effect_claim.evidence_paths
+    assert "$.effects.return_codes[0]" in effect_claim.evidence_paths
+
+
+def test_regression_real_run_gt15d_condition_anchor_augmentation_without_llm_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regresion exacta del incidente real MAIN-PARA (PAQUETE_
+    SINTETICO_GROUND_TRUTH_FASE_15D.zip): `condition` menciona "30"
+    (el mismo umbral, presente en `$.decision`), el claim solo cita
+    `$.domain_glossary[0]` (evidencia debil, nunca autoritativa) --
+    se resuelve ampliando con `$.decision`, CERO llamadas al modelo."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _valid_draft().model_copy(
+        update={
+            "condition": "WS-DIAS-MORA > 30",
+            "claims": [
+                Claim(
+                    claim_id="c1",
+                    field=ClaimField.CONDITION,
+                    evidence_paths=["$.domain_glossary[0]"],
+                    evidence_ids=["ev-glossary"],
+                ),
+            ],
+        }
+    )
+    kwargs = _base_kwargs(
+        tmp_path,
+        packages=[_package_with_business_field_anchors("cand-1")],
+        drafts={"cand-1": draft},
+    )
+
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 0
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.condition == draft.condition
+    condition_claim = next(c for c in final.claims if c.field == ClaimField.CONDITION)
+    assert "$.decision" in condition_claim.evidence_paths
+    assert "$.domain_glossary[0]" in condition_claim.evidence_paths
+
+
+def test_genuinely_unsupported_number_in_effect_still_fails_closed_via_llm_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """G. Afirmacion de negocio genuinamente no soportada: un numero
+    que no aparece en NINGUNA ancla autoritativa (ni decision, ni un
+    return_code aprobado) nunca se amplia -- el guardrail nunca se
+    relaja, exige reparacion LLM real exactamente como antes."""
+    draft = _valid_draft().model_copy(
+        update={
+            "effect": "Se rechaza la operacion por superar el limite de 654321 pesos.",
+            "claims": [
+                Claim(
+                    claim_id="c1",
+                    field=ClaimField.CONDITION,
+                    evidence_paths=["$.decision"],
+                    evidence_ids=["ev-decision"],
+                ),
+                Claim(
+                    claim_id="c2",
+                    field=ClaimField.EFFECT,
+                    evidence_paths=["$.effects.return_codes[0]"],
+                    evidence_ids=["ev-return-code"],
+                ),
+            ],
+        }
+    )
+    calls = _install_fake_client(
+        monkeypatch, [_valid_repair_payload(effect="Se rechaza la operacion.")]
+    )
+    kwargs = _base_kwargs(
+        tmp_path,
+        packages=[_package_with_business_field_anchors("cand-1")],
+        drafts={"cand-1": draft},
+    )
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 1
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.effect == "Se rechaza la operacion."
+
+
+def test_unapproved_return_code_never_used_as_anchor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CLAUDE.md: solo efectos con `approved_for_rule_text=true` pueden
+    redactarse -- un numero que coincide con un return_code NO aprobado
+    nunca se usa como ancla, aunque el numero coincida literalmente."""
+    package = _package_with_business_field_anchors("cand-1")
+    package = package.model_copy(
+        update={
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        *package.effects.return_codes,
+                        ReturnCodeEffect(
+                            code="1234", approved_for_rule_text=False, evidence_ids=["ev-decision"]
+                        ),
+                    ]
+                }
+            )
+        }
+    )
+    draft = _valid_draft().model_copy(
+        update={
+            "effect": "Se asigna el codigo especial 1234 al resultado.",
+            "claims": [
+                Claim(
+                    claim_id="c1",
+                    field=ClaimField.CONDITION,
+                    evidence_paths=["$.decision"],
+                    evidence_ids=["ev-decision"],
+                ),
+                Claim(
+                    claim_id="c2",
+                    field=ClaimField.EFFECT,
+                    evidence_paths=["$.effects.return_codes[0]"],
+                    evidence_ids=["ev-return-code"],
+                ),
+            ],
+        }
+    )
+    calls = _install_fake_client(
+        monkeypatch, [_valid_repair_payload(effect="Se rechaza la operacion.")]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[package], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED

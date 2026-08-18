@@ -105,6 +105,24 @@ def test_repair_system_forbids_self_assigned_fields() -> None:
     assert "functional_review_status" in _REPAIR_SYSTEM
 
 
+def test_repair_system_declares_traceability_and_limitations_as_arrays() -> None:
+    # Regresion real (v1.18.2 cierre de fiabilidad de campos de
+    # negocio, candidato EVALUATE SQLCODE WHEN +100 de PAQUETE_
+    # SINTETICO_GROUND_TRUTH_FASE_15D.zip): al corregir una violacion
+    # en `effect` (numero "100" no soportado), el modelo devolvia
+    # `traceability` como un string suelto en vez de un array de un
+    # solo elemento -- rule_repair_system.md, a diferencia de
+    # rule_writer_user.md/rule_structure_repair_system.md, nunca
+    # exigia explicitamente el tipo array, y el borrador rechazado
+    # mostrado como referencia (REJECTED_RULE_DRAFT) no bastaba por si
+    # solo para evitar la regresion -- reproducido de forma
+    # identica (mismo response_hash) en AMBOS intentos de reparacion
+    # contra gpt-4o-mini real, agotando LLM_REPAIR_ATTEMPTS con un
+    # rechazo estructural que nunca llegaba a re-evaluar el guardrail.
+    assert "SIEMPRE arrays JSON de strings" in _REPAIR_SYSTEM
+    assert "nunca cambies su tipo al reenviarlo" in _REPAIR_SYSTEM
+
+
 def test_writer_user_never_teaches_bare_alias_placement_outside_evidence_refs() -> None:
     # Guardia de no-regresion (contrato preexistente, sin cambios): el
     # fix no debe reintroducir la posibilidad de escribir un alias fuera
