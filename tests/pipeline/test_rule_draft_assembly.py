@@ -748,3 +748,90 @@ def test_regression_real_run_traceability_leak_rejected_then_repaired_text_accep
     stable_json = rule_draft.to_stable_json()
     for leaked_alias in all_aliases:
         assert leaked_alias not in stable_json
+
+
+def test_regression_real_run_effect_alias_leak_rejected_then_repaired_text_accepted() -> None:
+    """Regresion exacta de los dos incidentes reales v1.18.2
+    multi-corpus (`PAQUETE_SINTETICO_CLIENTES_EMPRESAS_MULTIPROGRAMA_
+    15_REGLAS.zip` candidato VALIDAR-LINEA-PARA,
+    `PAQUETE_SINTETICO_PRESTAMOS_EMPRESAS_5_REGLAS.zip` candidato
+    VALIDAR-MORA-VIGENTE): ambos candidatos reales tenian una evidencia
+    `return_code_effect` que respaldaba el claim de `effect` en
+    evidence_refs, y el modelo (reproducido en vivo contra gpt-4o-mini
+    real) escribio litealmente ese mismo alias como VALOR de `effect`
+    en vez de una oracion de negocio -- agotando los 2 intentos de
+    reparacion estructural disponibles porque, a diferencia de
+    traceability, `rule_writer_user.md` nunca daba un ejemplo de que
+    `effect` debe ser siempre una oracion de negocio. Aqui se reproduce
+    con el alias real del catalogo de `_package()`: el primer intento
+    (effect=alias) debe rechazarse; una reparacion con oracion de
+    negocio real, preservando el evidence_refs del claim de effect sin
+    cambios, debe aceptarse."""
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+
+    poisoned_payload = _valid_payload(
+        effect=alias,
+        claims=[{"claim_id": "c1", "field": "effect", "evidence_refs": [alias]}],
+    )
+    with pytest.raises(RuleDraftAssemblyError) as excinfo:
+        assemble_rule_draft_with_evidence_catalog(
+            poisoned_payload, catalog=catalog, package=package, schema_validator=validator
+        )
+    issues = excinfo.value.validation_errors
+    assert any(
+        issue.type == "alias_leaked_into_free_text" and issue.loc == "effect" for issue in issues
+    )
+
+    repaired_payload = _valid_payload(
+        effect="Se rechaza la operacion con el codigo de retorno R001.",
+        claims=[{"claim_id": "c1", "field": "effect", "evidence_refs": [alias]}],
+    )
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        repaired_payload, catalog=catalog, package=package, schema_validator=validator
+    )
+    assert rule_draft.effect == "Se rechaza la operacion con el codigo de retorno R001."
+    assert rule_draft.claims[0].evidence_ids == ["ev-1"]
+    assert alias not in rule_draft.to_stable_json()
+
+
+@pytest.mark.parametrize(
+    "embedded_text",
+    [
+        "[E001]",
+        "(E001)",
+        "según E001",
+        "evidencia E001",
+        "rechazar operación [E001]",
+        "E001 implica rechazo",
+        "código E001",
+    ],
+)
+def test_alias_embedded_in_prose_is_never_flagged_or_rewritten(embedded_text: str) -> None:
+    """Matriz adversarial (checkpoint v1.18.2 multi-corpus, seccion 12):
+    `_check_no_bare_aliases_in_free_text` distingue de forma
+    CONSERVADORA un alias tecnico de texto de negocio legitimo -- solo
+    coincidencia EXACTA del VALOR COMPLETO de un campo dispara el
+    rechazo. Un alias EMBEBIDO dentro de una oracion mas larga (con
+    corchetes, parentesis, precedido de "segun"/"evidencia", o un texto
+    de negocio ambiguo como "codigo E001") nunca se marca ni se reescribe
+    en silencio -- ninguna heuristica de substring/patron generico existe
+    ni debe agregarse: ante la ambiguedad, el texto se preserva
+    exactamente tal cual lo escribio el modelo (nunca se asume que es un
+    alias filtrado)."""
+    validator = _real_schema_validator()
+    package = _package()
+    catalog = build_evidence_catalog(package)
+    alias = _decision_alias(catalog)
+    text = embedded_text.replace("E001", alias)
+
+    payload = _valid_payload(
+        effect=text,
+        claims=[{"claim_id": "c1", "field": "effect", "evidence_refs": [alias]}],
+    )
+    rule_draft = assemble_rule_draft_with_evidence_catalog(
+        payload, catalog=catalog, package=package, schema_validator=validator
+    )
+    assert rule_draft.effect == text

@@ -24,7 +24,13 @@ Incluye:
 - condición: string;
 - parámetros únicamente aprobados: ARRAY JSON de strings (puede ser
   vacío: []);
-- efecto únicamente aprobado: string;
+- efecto únicamente aprobado: string, SIEMPRE una oración de negocio en
+  español, nunca un código ni un alias del catálogo aislado (por
+  ejemplo: "Se rechaza la solicitud por superar la línea de crédito
+  disponible." en vez de simplemente "CE07"). Si existe un código de
+  retorno asociado, puede mencionarse DENTRO de la oración (por ejemplo:
+  "Se rechaza la operación con el código de retorno CE07."), pero el
+  campo nunca puede ser UNICAMENTE ese código ni UNICAMENTE un alias;
 - fuente paramétrica: string o null;
 - trazabilidad: ARRAY JSON de strings, con AL MENOS 1 elemento (nunca
   un string suelto sin corchetes, incluso si solo tiene una frase);
@@ -56,6 +62,13 @@ una explicación breve en lenguaje humano de en qué evidencia se basa la
 regla, SIEMPRE como array JSON de un solo elemento como mínimo (por
 ejemplo: ["Basado en la decisión implementada en el programa Y."]),
 nunca una lista de alias.
+
+Que un alias del catálogo (por ejemplo, uno de tipo "return_codes")
+RESPALDE el campo effect en evidence_refs no significa que el VALOR de
+effect deba ser ese alias: evidence_refs identifica QUÉ evidencia
+sustenta la oración, nunca reemplaza la oración misma. effect siempre
+debe quedar como una oración de negocio completa, nunca como el alias
+que la respalda.
 
 Si mencionas en traceability (o en cualquier otro campo) un identificador
 específico que incluya un número (por ejemplo, el nombre de un párrafo

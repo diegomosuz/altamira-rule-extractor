@@ -40,6 +40,19 @@ evidence_paths directos en un claim: solo evidence_refs.
 REGLAS OBLIGATORIAS:
 
 - Corrige unicamente los errores de validacion informados.
+- Si un error es "alias_leaked_into_free_text": el campo indicado
+  contiene LITERALMENTE un alias del catalogo (p. ej. "E003") en vez de
+  contenido funcional real. Esto ocurre tipicamente cuando ese mismo
+  alias tambien respalda ese campo en evidence_refs -- que un alias
+  RESPALDE un campo en evidence_refs nunca significa que el VALOR del
+  campo deba ser ese alias. Reescribe el campo con una oracion de
+  negocio real en espanol basada en el resto del payload rechazado
+  (title/context/statement/condition ya presentes) y en la descripcion
+  funcional de ese alias en el EVIDENCE_CATALOG (nunca inventes hechos
+  no sugeridos por el payload rechazado); conserva el evidence_refs del
+  claim de ese campo exactamente igual (el alias sigue siendo evidencia
+  valida, solo no puede ser el valor literal del campo). Nunca dejes el
+  campo vacio ni repitas el alias.
 - Usa UNICAMENTE alias presentes en el EVIDENCE_CATALOG provisto.
 - Nunca inventes un alias que no este en el catalogo.
 - Nunca modifiques ni abrevies un alias existente.
