@@ -479,6 +479,76 @@ def sanitize_traceability_number_date_violations(
     return rule_draft.model_copy(update={"traceability": kept})
 
 
+CANONICAL_TRACEABILITY_SENTENCE = (
+    "Basado en la evidencia tecnica asociada a la decision y al efecto de este candidato."
+)
+"""Reconstruccion canonica de `traceability` (checkpoint correctivo
+v1.18.2, cierre de fiabilidad multi-corpus): unica oracion fija,
+deliberadamente generica, NUNCA contiene un digito ni una fecha
+-- ni `_NUMBER_TOKEN_RE` ni `_ISO_DATE_TOKEN_RE`/`_AMBIGUOUS_DATE_TOKEN_RE`
+pueden encontrar nada en este texto, por lo que
+`unsupported_explicit_number`/`unsupported_explicit_date` sobre
+traceability es ESTRUCTURALMENTE imposible contra esta oracion,
+independientemente de que claims la respalden. Nunca contiene un alias
+del catalogo, un evidence_id, un evidence_path real, ni un identificador
+generado por el modelo -- es texto Python fijo, no generado ni
+interpolado desde ningun dato variable del candidato (evitar
+interpolar el nombre del programa u otro campo variable es deliberado:
+cualquier valor variable reintroduciria la necesidad de re-verificar
+que ese valor especifico nunca contenga un digito/fecha, lo que esta
+funcion existe precisamente para volver innecesario)."""
+
+
+def reconstruct_traceability_deterministically(
+    rule_draft: RuleDraft, violations: list[GuardrailViolation]
+) -> RuleDraft | None:
+    """Reconstruccion canonica ACOTADA (checkpoint correctivo v1.18.2,
+    cierre de fiabilidad: candidato real 4000-VALIDAR-PRODUCTO de
+    PAQUETE_SINTETICO_CATHERINE_CORREGIDO_APP_ACTUAL.zip, reproducido
+    con gpt-4o-mini real -- traceability de UN SOLO elemento, ese unico
+    elemento cita el nombre del parrafo de origen sin que la evidencia
+    citada lo respalde; `sanitize_traceability_number_date_violations`
+    rehusa correctamente, porque eliminar el unico elemento dejaria el
+    campo vacio -- y el ciclo de reparacion LLM entra en un loop de
+    respuesta identica el ~1/3 de las veces observado en ejecuciones
+    reales consecutivas).
+
+    Decision arquitectonica (Prompt 12/CLAUDE.md: "No usar LLM para...
+    validar evidencia"; traceability es EXCLUSIVAMENTE una explicacion
+    humana de que evidencia respalda la regla, nunca un hecho de
+    negocio -- ver docstring de `sanitize_traceability_number_date_
+    violations`): cuando el saneamiento parcial no puede resolver
+    deterministicamente una violacion `unsupported_explicit_number`/
+    `unsupported_explicit_date` puramente sobre `traceability` (deja el
+    campo vacio, o no elimina nada), FIERN reemplaza el campo COMPLETO
+    por `CANONICAL_TRACEABILITY_SENTENCE` en vez de depender de un
+    reintento LLM no determinista para una violacion que, por
+    definicion, nunca puede portar informacion de negocio.
+
+    Nunca toca `claims`: los claims de traceability (si existen) quedan
+    EXACTAMENTE igual -- evidence_ids/evidence_paths reales, ya
+    validados, nunca se fabrican ni se alteran. La oracion canonica en
+    si misma nunca necesita evidencia adicional porque nunca afirma un
+    hecho verificable especifico (ver docstring de la constante).
+
+    Mismas garantias que `sanitize_traceability_number_date_violations`
+    (violaciones mixtas nunca se tocan; nunca se invoca para ningun
+    campo salvo traceability) mas una garantia ADICIONAL: nunca se
+    invoca si el saneamiento parcial YA resolvio el campo -- este es
+    unicamente el fallback final cuando la remocion selectiva no es
+    viable."""
+    error_violations = [v for v in violations if v.severity == Severity.ERROR]
+    if not error_violations:
+        return None
+    if not all(
+        v.rule in ("unsupported_explicit_number", "unsupported_explicit_date")
+        and v.field == ClaimField.TRACEABILITY.value
+        for v in error_violations
+    ):
+        return None
+    return rule_draft.model_copy(update={"traceability": [CANONICAL_TRACEABILITY_SENTENCE]})
+
+
 def evaluate_guardrail(rule_draft: RuleDraft, package: ContextPackage) -> list[GuardrailViolation]:
     """Ejecuta todos los checks deterministicos y devuelve la lista de
     violaciones (posiblemente vacia). No construye `GuardrailReport`: el

@@ -53,6 +53,7 @@ from altamira_extractor.contracts.rule_draft_manifest import (
 )
 from altamira_extractor.contracts.run_state import StageExecution
 from altamira_extractor.pipeline import guardrails_applied_stage as stage_module
+from altamira_extractor.pipeline.deterministic_guardrail import CANONICAL_TRACEABILITY_SENTENCE
 from altamira_extractor.pipeline.errors import GuardrailError, LlmTimeoutError
 from altamira_extractor.pipeline.evidence_catalog import build_evidence_catalog
 from altamira_extractor.pipeline.guardrails_applied_stage import run_guardrails_applied_stage
@@ -1389,20 +1390,41 @@ def test_unsupported_number_in_condition_is_never_sanitized_fails_closed_via_llm
     assert manifest.records[0].repair_attempts_used == 1
 
 
-def test_sanitization_never_empties_traceability_falls_back_to_llm_repair(
+def test_single_offending_traceability_element_uses_canonical_reconstruction(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Si traceability tiene un UNICO elemento y ese elemento es el
-    ofensivo, el saneamiento debe rehusarse (dejaria el campo vacio,
-    invalido contra el schema) y delegar al ciclo de reparacion LLM
-    existente, sin cambios."""
+    """Regresion real (checkpoint v1.18.2, cierre de fiabilidad
+    multi-corpus, candidato 4000-VALIDAR-PRODUCTO de
+    PAQUETE_SINTETICO_CATHERINE_CORREGIDO_APP_ACTUAL.zip): si
+    traceability tiene un UNICO elemento y ese elemento es el ofensivo,
+    la remocion parcial se rehusa (dejaria el campo vacio, invalido
+    contra el schema) -- pero ya NO delega al ciclo de reparacion LLM:
+    la reconstruccion canonica deterministica resuelve el candidato con
+    CERO llamadas al modelo (_PoisonClient prueba esto explicitamente),
+    reemplazando el campo completo por la oracion fija sin digitos ni
+    fechas. Anteriormente (test_sanitization_never_empties_
+    traceability_falls_back_to_llm_repair) este caso exigia un
+    intento LLM real -- observado en produccion como un loop de
+    respuesta identica ~1/3 de las ejecuciones reales consecutivas,
+    agotando LLM_REPAIR_ATTEMPTS con una violacion que, por definicion,
+    nunca puede portar un hecho de negocio."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
     draft = _draft_with_traceability_claim(["decision (cobol/PROG1.cbl:10-10)"])
-    calls = _install_fake_client(monkeypatch, [_valid_repair_payload()])
     kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
 
-    run_guardrails_applied_stage(**kwargs)
+    warnings = run_guardrails_applied_stage(**kwargs)
 
-    assert len(calls) == 1
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 0
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.traceability == [CANONICAL_TRACEABILITY_SENTENCE]
+    # nunca se toco ningun campo de negocio
+    assert final.condition == draft.condition
+    assert final.effect == draft.effect
 
 
 def test_mixed_traceability_and_business_field_violations_not_partially_sanitized(
@@ -1473,3 +1495,113 @@ def test_supported_number_in_condition_is_never_touched(
     final = _read_final_draft(kwargs)
     assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
     assert final.condition == "WS-MONTO > 500000"
+
+
+def test_unsupported_number_in_effect_is_never_sanitized_fails_closed_via_llm_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regresion (cierre de fiabilidad multi-corpus): un numero no
+    soportado en un campo de NEGOCIO (effect, no traceability) nunca
+    dispara ni el saneamiento parcial ni la reconstruccion canonica --
+    ambos mecanismos son EXCLUSIVOS de traceability. Debe seguir
+    exigiendo una reparacion LLM real, exactamente igual que
+    `test_unsupported_number_in_condition_is_never_sanitized_fails_
+    closed_via_llm_repair`."""
+    draft = _valid_draft().model_copy(
+        update={
+            "effect": "Se rechaza la operacion con limite de 750000 pesos.",
+            "claims": [
+                Claim(
+                    claim_id="c1",
+                    field=ClaimField.CONDITION,
+                    evidence_paths=["$.decision"],
+                    evidence_ids=["ev-1"],
+                ),
+                Claim(
+                    claim_id="c2",
+                    field=ClaimField.EFFECT,
+                    evidence_paths=["$.decision"],
+                    evidence_ids=["ev-1"],
+                ),
+            ],
+        }
+    )
+    calls = _install_fake_client(
+        monkeypatch, [_valid_repair_payload(effect="Se rechaza la operacion.")]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 1
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.effect == "Se rechaza la operacion."
+
+
+def test_unsupported_date_in_condition_is_never_sanitized_fails_closed_via_llm_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Misma garantia que el caso de numero: una fecha ISO no soportada
+    en un campo de NEGOCIO nunca activa ningun mecanismo determinista
+    -- debe fallar cerrado via reparacion LLM real."""
+    draft = _valid_draft().model_copy(update={"condition": "WS-FECHA > '2026-01-15'"})
+    calls = _install_fake_client(
+        monkeypatch, [_valid_repair_payload(condition="WS-FECHA > WS-FECHA-LIMITE")]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 1
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.condition == "WS-FECHA > WS-FECHA-LIMITE"
+
+
+def test_canonical_reconstruction_provenance_is_recorded_correctly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Auditoria explicita de provenance (seccion 7): cuando la
+    reconstruccion canonica resuelve el candidato antes de cualquier
+    intento LLM, el `RepairAttemptRecord` sintetico debe tener
+    `response_hash=None` (nunca un hash forjado), `structurally_valid=
+    True`, `produced_rule_draft_hash` coincidiendo con el hash real del
+    draft reconstruido, y `error_count_before`/`error_count_after`
+    correctos -- exactamente el mismo mecanismo de auditoria ya usado
+    por el saneamiento parcial, nunca uno nuevo ni uno menos preciso."""
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    draft = _draft_with_traceability_claim(
+        ["Basado en el parrafo 4000-VALIDAR-PRODUCTO del programa CONSALDO."]
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")], drafts={"cand-1": draft})
+
+    run_guardrails_applied_stage(**kwargs)
+
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    record = manifest.records[0]
+    artifact = GuardrailCandidateArtifact.model_validate_json(
+        (kwargs["guardrail_dir"] / record.relative_filename).read_text(encoding="utf-8")
+    )
+    assert len(artifact.repair_history) == 1
+    attempt = artifact.repair_history[0]
+    assert attempt.response_hash is None
+    assert attempt.structurally_valid is True
+    assert attempt.produced_rule_draft_hash is not None
+    assert attempt.error_count_before == 1
+    assert attempt.error_count_after == 0
+    assert attempt.warning_count_after == 0
+    # repair_attempts_used (contador orientado a UI/API) cuenta solo
+    # intentos LLM reales -- la reconstruccion canonica nunca cuenta.
+    assert record.repair_attempts_used == 0
+    assert record.repair_response_hashes == []

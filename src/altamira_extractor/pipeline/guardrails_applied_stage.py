@@ -64,6 +64,7 @@ from .atomic_directory_swap import (
 from .deterministic_guardrail import (
     GUARDRAIL_VERSION,
     evaluate_guardrail,
+    reconstruct_traceability_deterministically,
     sanitize_traceability_number_date_violations,
 )
 from .errors import GuardrailError, LlmClientError, PromptTemplateError
@@ -389,16 +390,36 @@ def _build_failure_diagnostics(
 def _apply_deterministic_traceability_sanitization(
     rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
 ) -> tuple[RuleDraft, list[GuardrailViolation]]:
-    """Checkpoint correctivo v1.18.2: intenta
-    `sanitize_traceability_number_date_violations` ANTES de que el
-    llamador decida si consumir un intento de reparacion LLM. Nunca
-    llama al modelo, nunca reintroduce el elemento eliminado, nunca se
-    aplica a ningun campo salvo traceability (ver docstring de esa
-    funcion). Si no aplica (violaciones mixtas, o dejaria traceability
-    vacio), devuelve `rule_draft`/`violations` sin cambios (misma
-    identidad de objeto -- el llamador la usa para detectar si hubo
-    cambio) y el llamador continua exactamente como antes (ciclo de
-    reparacion LLM existente, sin modificar).
+    """Checkpoint correctivo v1.18.2 (extendido en el cierre de
+    fiabilidad multi-corpus): intenta, en cascada, DOS correcciones
+    deterministicas ANTES de que el llamador decida si consumir un
+    intento de reparacion LLM. Nunca llama al modelo, nunca se aplica a
+    ningun campo salvo traceability (ver docstrings de ambas funciones).
+
+    Paso 1 -- `sanitize_traceability_number_date_violations`: elimina
+    UNICAMENTE el/los elemento(s) ofensivos, preservando el resto del
+    contenido (preferido: mantiene toda la especificidad que el modelo
+    SI logro sustentar). Si esto ya deja el candidato sin violaciones
+    ERROR, el paso 2 nunca se ejecuta.
+
+    Paso 2 -- `reconstruct_traceability_deterministically`: fallback
+    final SOLO si, tras el paso 1 (que puede haberse rehusado o haber
+    dejado violaciones pendientes), siguen quedando violaciones ERROR
+    puramente `unsupported_explicit_number`/`unsupported_explicit_date`
+    sobre traceability (p. ej. un unico elemento totalmente ofensivo,
+    donde eliminar dejaria el campo vacio -- caso real reproducido:
+    candidato 4000-VALIDAR-PRODUCTO de
+    PAQUETE_SINTETICO_CATHERINE_CORREGIDO_APP_ACTUAL.zip, ~1/3 de
+    ejecuciones reales consecutivas atascadas en un loop de reparacion
+    LLM de respuesta identica). Reemplaza el campo COMPLETO por la
+    oracion canonica fija -- nunca puede fallar por construccion (nunca
+    contiene digito ni fecha).
+
+    Si ninguno de los dos pasos aplica, devuelve `rule_draft`/
+    `violations` sin cambios (misma identidad de objeto -- el llamador
+    la usa para detectar si hubo cambio) y el llamador continua
+    exactamente como antes (ciclo de reparacion LLM existente, sin
+    modificar).
 
     Provenance: cuando esto cambia el borrador ANTES de cualquier
     intento LLM (repair_history aun vacio), el llamador registra un
@@ -408,14 +429,30 @@ def _apply_deterministic_traceability_sanitization(
     contenido debe quedar trazado en repair_history) sin exigir
     ninguna modificacion de schema: `response_hash` ya era opcional, y
     `None` distingue de forma legible "correccion deterministica, cero
-    llamadas al modelo" de un intento LLM real. Cuando esto cambia el
+    llamadas al modelo" de un intento LLM real -- sin distinguir
+    remocion parcial de reconstruccion canonica (ambas son
+    "deterministica, cero llamadas al modelo", la unica distincion que
+    el contrato de auditoria existente necesita). Cuando esto cambia el
     borrador DESPUES de un intento LLM real (dentro del bucle), el
-    resultado sanitizado se pliega en el MISMO `RepairAttemptRecord` que
-    ese intento ya iba a registrar -- no se crea una entrada separada."""
-    sanitized = sanitize_traceability_number_date_violations(rule_draft, violations)
-    if sanitized is None:
-        return rule_draft, violations
-    return sanitized, evaluate_guardrail(sanitized, package)
+    resultado se pliega en el MISMO `RepairAttemptRecord` que ese
+    intento ya iba a registrar -- no se crea una entrada separada."""
+    current_draft = rule_draft
+    current_violations = violations
+
+    sanitized = sanitize_traceability_number_date_violations(current_draft, current_violations)
+    if sanitized is not None:
+        current_draft = sanitized
+        current_violations = evaluate_guardrail(current_draft, package)
+
+    if any(v.severity == Severity.ERROR for v in current_violations):
+        reconstructed = reconstruct_traceability_deterministically(
+            current_draft, current_violations
+        )
+        if reconstructed is not None:
+            current_draft = reconstructed
+            current_violations = evaluate_guardrail(current_draft, package)
+
+    return current_draft, current_violations
 
 
 async def _resolve_one_candidate(

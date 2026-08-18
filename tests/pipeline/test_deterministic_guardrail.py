@@ -3,6 +3,7 @@ contra un ContextPackage real, sin LLM."""
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from altamira_extractor.contracts.context_package import (
@@ -33,7 +34,9 @@ from altamira_extractor.contracts.context_package import (
 from altamira_extractor.contracts.enums import EvidenceValidationStatus, InclusionReason, Severity
 from altamira_extractor.contracts.rule_draft import Claim, ClaimField, RuleDraft
 from altamira_extractor.pipeline.deterministic_guardrail import (
+    CANONICAL_TRACEABILITY_SENTENCE,
     evaluate_guardrail,
+    reconstruct_traceability_deterministically,
     resolve_json_path,
     sanitize_traceability_number_date_violations,
 )
@@ -1032,3 +1035,114 @@ def test_sanitize_returns_none_for_unrelated_violation_rule() -> None:
 def test_sanitize_returns_none_when_no_error_violations() -> None:
     draft = _draft()
     assert sanitize_traceability_number_date_violations(draft, []) is None
+
+
+def test_reconstruct_replaces_single_offending_element_with_canonical_sentence() -> None:
+    """Regresion real (cierre de fiabilidad multi-corpus, candidato
+    4000-VALIDAR-PRODUCTO): el caso que
+    `sanitize_traceability_number_date_violations` correctamente rehusa
+    (unico elemento, totalmente ofensivo -- eliminarlo dejaria el campo
+    vacio) se resuelve mediante reconstruccion canonica."""
+    draft = _draft(
+        traceability=["Basado en el parrafo 4000-VALIDAR-PRODUCTO del programa CONSALDO."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    assert sanitize_traceability_number_date_violations(draft, violations) is None
+
+    reconstructed = reconstruct_traceability_deterministically(draft, violations)
+    assert reconstructed is not None
+    assert reconstructed.traceability == [CANONICAL_TRACEABILITY_SENTENCE]
+    assert evaluate_guardrail(reconstructed, _package()) == []
+    # nunca toca claims, condition, effect, parameters
+    assert reconstructed.claims == draft.claims
+    assert reconstructed.condition == draft.condition
+    assert reconstructed.effect == draft.effect
+    assert reconstructed.parameters == draft.parameters
+
+
+def test_reconstruct_is_idempotent_byte_equivalent_on_repeated_invocation() -> None:
+    """Reconstruccion determinista repetida sobre el MISMO input
+    produce SIEMPRE el mismo resultado (texto Python fijo, sin
+    aleatoriedad ni dependencia de estado externo)."""
+    draft = _draft(
+        traceability=["Basado en el parrafo 4000-VALIDAR-PRODUCTO del programa CONSALDO."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    first = reconstruct_traceability_deterministically(draft, violations)
+    second = reconstruct_traceability_deterministically(draft, violations)
+    assert first is not None and second is not None
+    assert first.to_stable_json() == second.to_stable_json()
+
+
+def test_reconstruct_never_fabricates_evidence_or_touches_claims() -> None:
+    """La oracion canonica nunca contiene un digito ni una fecha (por
+    construccion, no puede disparar unsupported_explicit_number/date
+    contra NINGUNA evidencia), y los claims -- unica fuente real de
+    provenance -- permanecen exactamente iguales al draft de entrada."""
+    assert not re.search(r"\d", CANONICAL_TRACEABILITY_SENTENCE)
+    draft = _draft(
+        traceability=["decision (01-codigo/cobol/cobol1.cbl:346-360)"],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    reconstructed = reconstruct_traceability_deterministically(draft, violations)
+    assert reconstructed is not None
+    assert reconstructed.claims[0].evidence_ids == draft.claims[0].evidence_ids
+    assert reconstructed.claims[0].evidence_paths == draft.claims[0].evidence_paths
+
+
+def test_reconstruct_returns_none_for_mixed_field_violations() -> None:
+    """Mismas garantias que el saneamiento parcial: violaciones mixtas
+    (traceability + un campo de negocio) nunca disparan reconstruccion
+    canonica -- el campo de negocio debe seguir su ciclo de reparacion
+    LLM existente sin cambios."""
+    draft = _draft(
+        condition="WS-MONTO > 750000",
+        traceability=["Basado en el parrafo 4000-VALIDAR-PRODUCTO del programa CONSALDO."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.TRACEABILITY,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, _package())
+    issue_fields = {v.field for v in violations}
+    assert issue_fields == {"condition", "traceability"}
+    assert reconstruct_traceability_deterministically(draft, violations) is None
+
+
+def test_reconstruct_returns_none_when_no_error_violations() -> None:
+    draft = _draft()
+    assert reconstruct_traceability_deterministically(draft, []) is None
