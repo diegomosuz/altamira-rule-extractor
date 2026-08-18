@@ -1,5 +1,20 @@
 # Catálogo unificado de candidatos y evaluación de promoción (Fase 9 de la ampliación semántica)
 
+> **Distinción importante**: este documento describe el sistema
+> **"unified candidate promotion"** (Fase 9-14B) — una capa de
+> comparación/revisión humana de solo lectura que nunca decide nada por
+> sí misma (`docs/CONTROLLED_UNIFIED_ACTIVATION.md`: `effective_lane`
+> siempre `V1`). Es un sistema **distinto** de la detección de
+> candidatos "enhanced" que sí es productiva por defecto desde la Fase
+> 15B4-CANDIDATE-QUALITY-5E (`enhanced_candidates_enabled=true`,
+> `pipeline/enhanced_candidate_integration.py`) y alimenta
+> `06-candidates.json` directamente, sin pasar por ningún gate de
+> revisión de este documento — ver `docs/V2_DETECTORS_SHADOW_MODE.md`,
+> sección "Fase 15B3-B". Un candidato V2/interprocedural puede ser
+> plenamente productivo (parte de una regla real, con
+> `RuleDraft`/guardrail aplicados) sin haber pasado nunca por este
+> catálogo.
+
 ## Propósito
 
 Construir una capa **puramente diagnóstica** que catalogue, sin
@@ -28,6 +43,11 @@ Esta auditoría inicial (Fase 1 del runbook) es la base del diseño de
 `call_site_id`, `input_literal`, `target`) queda `None` exactamente
 cuando la fuente de origen nunca lo produce — **nunca se fabrica** un
 valor sintético para rellenar un hueco.
+
+`candidate_id` (columna "Identidad" arriba) es determinístico por
+implementación/entrada, no una garantía de estabilidad indefinida
+entre versiones de producto — ver `docs/CONTEXT_PACKAGE_CONTRACT.md`,
+"Identidad de `candidate_id`", para la explicación completa.
 
 ## Catálogo unificado, no fusión
 
@@ -61,8 +81,8 @@ está demostrada por el propio diseño de los contratos existentes —
   construcción de la consulta, describe una asignación de código de
   retorno.
 - **V2**: `RETURN_CODE_RULE → RETURN_CODE`, `LEVEL_88_RETURN_CODE_RULE
-  → LEVEL_88_RETURN_CODE`, `STATE_CHANGE_RULE → UNKNOWN` (ver más
-  abajo).
+  → LEVEL_88_RETURN_CODE`, `CALCULATION_RULE → CALCULATION`,
+  `STATE_CHANGE_RULE → UNKNOWN` (ver más abajo).
 - **INTERPROCEDURAL**: `RETURN_CODE_RULE → RETURN_CODE`,
   `BY_REFERENCE_RULE → BY_REFERENCE_OUTPUT`, `STATE_TRANSITION_RULE →
   STATE_TRANSITION`.

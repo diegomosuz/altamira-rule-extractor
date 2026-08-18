@@ -9,7 +9,7 @@ funcional obligatoria). Expone API JSON, UI HTML server-rendered
 diseno completo y `docs/CLAUDE_CODE_RUNBOOK.md` para la secuencia de
 implementacion por etapas.
 
-## Qué produce (familias de reglas productivas, 1.17)
+## Qué produce (familias de reglas productivas)
 
 Con `enhanced_candidates_enabled=true` (default del código desde Fase
 15B4-CANDIDATE-QUALITY-5E), un run nuevo sin configuración adicional
@@ -126,6 +126,15 @@ Ambos servicios deben quedar `healthy` en `docker compose ps`.
 - Liveness: <http://localhost:8000/health> (`{"status": "ok"}`)
 - Neo4j Browser (con el puerto publicado por `docker-compose.yml`):
   <http://localhost:7474>
+
+Desde `/ui/runs` un run individual se sube (subida de `.zip`), se
+inspecciona por etapa (candidatos, contexto, guardrail, descarga) y se
+reanuda (`Reanudar`, si quedo en una etapa intermedia). Para eliminar un
+run ya completado o fallido, use el boton **Limpiar** en la vista de
+detalle del run (`POST /ui/runs/{run_id}/clean`) -- nunca borre
+`data/runs/<run_id>` a mano: ese endpoint tambien libera el grafo Neo4j
+si ese run era su dueno activo, y elimina en cascada cualquier registro
+de referencia (duplicado) que apuntara a el.
 
 ### 5. Logs
 

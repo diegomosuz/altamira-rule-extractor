@@ -65,49 +65,52 @@ esto es precisamente por qué el catálogo puede seguir siendo
 paquetes reales de ingeniería contamine sus métricas: esos runs
 simplemente no aplican, en vez de fallar por definición.
 
-## Catálogo actual (edición `fase-15b2-a-2026.08.05`)
+## Catálogo actual (edición `fase-15b4-5d-safety-2026.08.13`)
 
-| case_id | kind | rule_family | fixtures |
+14 casos (2 `NEGATIVE`, 12 `POSITIVE`) en
+`config/ground_truth/synthetic_engineering.yaml`:
+
+| case_id | kind | rule_family | fixture |
 |---|---|---|---|
+| `gt-negative-state-transition-nonfunctional-indicator-name` | NEGATIVE | — | `gt_state_transition_negative_001.cbl` |
 | `gt-negative-untagged-counter-decision` | NEGATIVE | — | `gt_negative_001.cbl` |
-| `gt-positive-by-reference-output-unconditional-move` | POSITIVE | `BY_REFERENCE_OUTPUT` | `gt_by_reference_output_caller_001.cbl` + `gt_by_reference_output_callee_001.cbl` |
+| `gt-positive-calculation-if-compute-multiplication` | POSITIVE | `CALCULATION` | `gt_calculation_001.cbl` |
+| `gt-positive-calculation-if-subtract` | POSITIVE | `CALCULATION` | `gt_calculation_subtract_001.cbl` |
+| `gt-positive-calculation-unconditional-add` | POSITIVE | `CALCULATION` | `gt_calculation_add_001.cbl` |
+| `gt-positive-calculation-unconditional-compute-multiplication` | POSITIVE | `CALCULATION` | `gt_calculation_unconditional_001.cbl` |
+| `gt-positive-calculation-unconditional-divide-giving` | POSITIVE | `CALCULATION` | `gt_calculation_divide_001.cbl` |
+| `gt-positive-calculation-unconditional-multiply-giving` | POSITIVE | `CALCULATION` | `gt_calculation_unconditional_002.cbl` |
+| `gt-positive-declared-value-return-code` | POSITIVE | `RETURN_CODE` | `gt_declared_value_return_code_001.cbl` |
 | `gt-positive-level88-return-code-nested-set` | POSITIVE | `LEVEL_88_RETURN_CODE` | `gt_level88_return_code_001.cbl` |
 | `gt-positive-return-code-if-else` | POSITIVE | `RETURN_CODE` | `gt_return_code_001.cbl` |
+| `gt-positive-sql-select-into-state-transition` | POSITIVE | `STATE_TRANSITION` | `gt_sql_select_into_state_transition_001.cbl` |
+| `gt-positive-sqlcode-evaluate-state-transition` | POSITIVE | `STATE_TRANSITION` | `gt_sqlcode_evaluate_state_transition_001.cbl` |
+| `gt-positive-state-transition-if-status-target` | POSITIVE | `STATE_TRANSITION` | `gt_state_transition_001.cbl` |
 
 Cada `derivation_notes` cita las líneas/funciones exactas del detector
-real que justifican la expectativa (p. ej. `pipeline/v2_detectors.py::
-detect_level_88_return_code`, líneas 363-454; o
-`detect_by_reference_rule` -> `_exit_fact_for_binding` ->
-`_known_literal_at` para el caso interprocedural) y, cuando aplica, el
-resultado de la verificación contra el pipeline real (ver abajo).
+real que justifican la expectativa, y, cuando aplica, el resultado de
+la verificación contra el pipeline real (ver abajo).
 
-### `BY_REFERENCE_OUTPUT`: derivación resumida
+`gt-positive-sqlcode-evaluate-state-transition` cubre específicamente
+un `EVALUATE SQLCODE WHEN +100`/`WHEN 0`/`WHEN OTHER` — el mismo patrón
+detrás del defecto de semántica de rama corregido en v1.18.2 (ver
+`docs/release/RELEASE_NOTES_1.18.2.md`, "Semántica de rama
+EVALUATE/WHEN"); su expectativa versionada no cambió, ya que la
+corrección afecta el *texto* de `condition` expuesto en D4, nunca qué
+candidato/`rule_family` debe producirse.
 
-`GTBRCLR1` (caller) invoca `CALL 'GTBRCLE1' USING BY REFERENCE WS-STATUS`;
-`GTBRCLE1` (callee) ejecuta `MOVE 'OK00' TO LK-STATUS` de forma
-**incondicional** (único statement de `MAIN-PARA`, nunca anidado en un
-`IF`/`EVALUATE`) antes de `GOBACK`. `_known_literal_at` (Fase 7,
-`interprocedural_propagation_analyzer.py`) exige `parent_statement_id=
-None` para el hecho de propagación que resuelve: al ser la única
-escritura y ser incondicional, el `exit_fact` resulta `PROPAGATED` con
-`literal='OK00'`, sin barreras (`GOBACK` nunca es una barrera de salida).
-Confirmado end-to-end contra el pipeline real (`run_ingestion` hasta
-`PARSED` + `compute_candidate_promotion_assessment_artifact`, sin Neo4j:
-Fases 6/7/8/9 de interprocedural son puramente en memoria sobre
-`artifacts/02-canonical/`) — ver
-`tests/pipeline/test_ground_truth_by_reference_output_integration.py`.
+`BY_REFERENCE_OUTPUT` no tiene ningún caso en esta edición del
+catálogo (una edición anterior de este documento describía uno; ya no
+está presente en `config/ground_truth/synthetic_engineering.yaml`).
 
 ## Cobertura deliberadamente parcial
 
-`STATE_TRANSITION` **no** tiene ningún caso todavía: es
-**estructuralmente inalcanzable** con `config/semantic-tags.yml` tal
-como está versionado hoy — ninguna regla activa asigna `status`/
-`status_flag` (los tags existen en `allowed_tags` pero sin ninguna
-entrada en `rules:` que los produzca). Un caso `POSITIVE` para esta
-familia exige primero una regla de tagging real — fuera del alcance de
-este bloque. (`BY_REFERENCE_OUTPUT`, que compartía esta limitación en
-una edición anterior de este documento, ya tiene un caso real — ver
-arriba.)
+Ninguna familia productiva carece hoy de al menos un caso `POSITIVE`
+en el catálogo (`RETURN_CODE`, `LEVEL_88_RETURN_CODE`, `CALCULATION` y
+`STATE_TRANSITION` — ver tabla arriba). `BY_REFERENCE_OUTPUT`
+(interprocedural, diagnóstico/shadow — ver
+`docs/INTERPROCEDURAL_RULE_DETECTORS_SHADOW.md`) es la única familia
+sin un caso versionado en esta edición.
 
 ## Verificación (no fuente de la expectativa — ver decisión #2)
 

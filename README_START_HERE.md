@@ -1,5 +1,11 @@
 # Altamira Rule Extractor - diseño revisado según metamodelo semántico
 
+> **Documento histórico**: describe el diseño y arquitectura V1
+> originales (bootstrap del proyecto). El producto evolucionó
+> significativamente desde entonces (K3s, seguridad/RBAC, UI de
+> gobernanza, familias de candidatos V2/interprocedural, etc.) — para
+> el estado actual ver `docs/ARCHITECTURE.md` y `README.md`.
+
 Este paquete reemplaza la versión anterior del diseño.
 
 La arquitectura está alineada con:

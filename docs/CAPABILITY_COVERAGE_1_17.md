@@ -1,5 +1,18 @@
 # Capability Coverage Manifest — Altamira Rule Extractor 1.17
 
+> **Alcance de versión**: el nombre de archivo y el título son
+> deliberadamente históricos (fijan la edición en que este manifiesto se
+> cerró, Fase 15B4-CANDIDATE-QUALITY-5D/5D-SAFETY) — no se renombra en
+> cada release. La matriz permanece vigente sin cambios a través de
+> v1.18.0/v1.18.1/v1.18.2: ninguna de esas correcciones agregó, quitó ni
+> reclasificó una capacidad de esta lista (todas fueron correcciones de
+> confiabilidad del guardrail/LLM o de fidelidad de un campo ya
+> existente, nunca de qué candidato se detecta). La fila `STATE_TRANSITION`
+> (case `gt-positive-sqlcode-evaluate-state-transition`) tiene una nota
+> específica sobre la mejora de v1.18.2 — ver más abajo. Si una futura
+> capacidad realmente nueva lo justifica, evaluar un manifiesto v1.18.x
+> dedicado en vez de reescribir este archivo.
+
 Artefacto versionado, humano-legible, producido por la Fase
 15B4-CANDIDATE-QUALITY-5D (cierre de `P1-CORPUS-GAP-GT`), reconciliado en
 15B4-CANDIDATE-QUALITY-5D-SAFETY. Responde una
@@ -58,7 +71,7 @@ el despliegue K3s estándar.
 | CALCULATION — ROUNDED / ON SIZE ERROR | DEFERRED_UNSUPPORTED | — | — | `parser/src/test` (`ctx.unsupported()`) | N/A | N/A | CLOSED |
 | CALCULATION — DIVIDE...REMAINDER | DEFERRED_UNSUPPORTED (solo el remainder; el cociente sigue productivo) | — | — | `parser/src/test` (`ctx.unsupported()`, target_data_items excluye remainder) | N/A | N/A | CLOSED |
 | SQL SELECT/INSERT/UPDATE/DELETE | CONTEXT_EVIDENCE_ONLY | — (nunca RuleCandidate) | — | `tests/pipeline/test_semantic_graph_builder.py` (relaciones READS/WRITES/UPDATES/INSERTS), `gt-positive-sql-select-into-state-transition` (prueba no-interferencia) | N/A | N/A | CLOSED |
-| SQLCODE causal linkage | CONTEXT_EVIDENCE_ONLY | — | — | `gt-positive-sqlcode-evaluate-state-transition` (prueba no-interferencia), tests de `context_package_builder.py` | N/A | N/A | CLOSED |
+| SQLCODE causal linkage | CONTEXT_EVIDENCE_ONLY | — | — | `gt-positive-sqlcode-evaluate-state-transition` (prueba no-interferencia), tests de `context_package_builder.py` | N/A | N/A | CLOSED — v1.18.2 mejora la fidelidad de la rama `EVALUATE SQLCODE WHEN` (predicado estructurado por rama, p. ej. `SQLCODE = 100`, en vez del sujeto crudo compartido); no cambia esta clasificación ni el conteo de candidatos detectados, ver `docs/release/RELEASE_NOTES_1.18.2.md` |
 | Declared VALUE provenance | CONTEXT_EVIDENCE_ONLY | — | — | `tests/test_hermetic_declared_value_provenance_e2e.py`, `gt-positive-declared-value-return-code` | N/A | N/A | CLOSED |
 | GO TO | CONTEXT_EVIDENCE_ONLY | — | — | `docs/SEMANTIC_PROPAGATION.md` §5 + tests de `dependency_builder.py` (CONTROL_DEPENDS_ON) | N/A | N/A | CLOSED |
 | PERFORM | CONTEXT_EVIDENCE_ONLY | — | — | idem | N/A | N/A | CLOSED |
