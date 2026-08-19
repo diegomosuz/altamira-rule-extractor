@@ -143,23 +143,41 @@ def test_catherine_corrected_no_regression(
 
 
 @pytest.mark.integration
-def test_official_fake_client_limitation_is_preexisting_not_a_fase7_regression(
+def test_catherine_corrected_candidates_with_outcome_code_preserve_return_code_effect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Prueba focalizada (auditoria de cierre, Parte 4): confirma que al
-    menos un candidato real de Catherine corregido produce un
-    ContextPackage SIN evidencia de kind='return_code_effect' -- la
-    causa exacta por la que el fake oficial
-    (`install_dynamic_rule_draft_fake_client`) no logra completar
-    RULE_DRAFTS_GENERATED para ese paquete. Esto ocurre enteramente
-    DENTRO de CONTEXTS_BUILT/RULE_DRAFTS_GENERATED (etapas V1
-    preexistentes, nunca tocadas por Fase 7/7b) y ANTES de que
-    `semantic-interprocedural-propagation` se invoque siquiera -- prueba
-    directa de que la limitacion es del propio fixture/pipeline V1, no
-    una regresion introducida por esta fase."""
+    """Fase 5 v1.18.3 (cierre de la excepcion de baseline detectada en
+    Fase 4): este test reemplaza `test_official_fake_client_limitation_
+    is_preexisting_not_a_fase7_regression`, que documentaba una
+    limitacion PREEXISTENTE (un candidato real de Catherine corregido
+    sin evidencia kind='return_code_effect', causa exacta por la que el
+    fake oficial no completaba RULE_DRAFTS_GENERATED para ese paquete).
+
+    Esa limitacion ya NO reproduce: el commit `4d80bcd` ("fix: enforce
+    deterministic context integrity", 2026-08-16) agrego el invariante
+    RETURN_CODE_EFFECT_PRESERVATION en `_validate_deterministic_
+    integrity` (context_package_builder.py) -- garantiza de forma
+    INCONDICIONAL que, siempre que `RuleCandidate.outcome_code` este
+    definido, `ContextPackage.effects.return_codes == [outcome_code]`
+    (fail-closed: un ContextPackage que perdiera ese hecho ni siquiera
+    se construye, lanza `ContextBuildError`). Como consecuencia directa,
+    todo candidato real con outcome_code definido SIEMPRE tiene
+    evidencia kind='return_code_effect' disponible; el analisis de Fase
+    4 (git history sobre context_package_builder.py) confirmo que este
+    es el mecanismo exacto que cerro el hueco, no una casualidad del
+    fixture.
+
+    Este test prueba la invariante POSITIVA vigente: inspecciona los
+    ContextPackage reales de Catherine corregido (mismo mecanismo de
+    inspeccion que el test reemplazado) y confirma que NINGUNO con
+    outcome_code definido carece de evidencia return_code_effect --
+    la lista de excepciones debe quedar vacia. Nunca vuelve a asumir
+    que existe una limitacion: si algun candidato real perdiera esta
+    garantia, este test debe fallar de inmediato (regresion real, no
+    limitacion documentada)."""
     require_jar()
 
-    context_packages_without_return_code_effect: list[str] = []
+    context_packages_missing_return_code_effect: list[str] = []
     context_packages_seen: list[str] = []
 
     class _InspectingFakeClient:
@@ -179,11 +197,12 @@ def test_official_fake_client_limitation_is_preexisting_not_a_fase7_regression(
             context_package_dict = extract_context_package_json(user_message.content)  # type: ignore[attr-defined]
             candidate_id = context_package_dict["candidate"]["candidate_id"]
             context_packages_seen.append(candidate_id)
+            outcome_code = (context_package_dict.get("decision") or {}).get("outcome_code")
             kinds = {entry["kind"] for entry in context_package_dict["evidence"]}
-            if "return_code_effect" not in kinds:
-                context_packages_without_return_code_effect.append(candidate_id)
+            if outcome_code is not None and "return_code_effect" not in kinds:
+                context_packages_missing_return_code_effect.append(candidate_id)
             # Payload deliberadamente MINIMO (no intenta ensamblar
-            # evidence_refs reales): esta prueba nunca intenta llegar a
+            # evidence_refs reales): este test nunca intenta llegar a
             # RULE_DRAFTS_GENERATED con exito, solo inspeccionar
             # ContextPackage reales antes de que el guardrail/repair
             # entre en juego.
@@ -203,13 +222,14 @@ def test_official_fake_client_limitation_is_preexisting_not_a_fase7_regression(
         pass
 
     assert context_packages_seen, "ningun ContextPackage llego a RULE_DRAFTS_GENERATED"
-    assert context_packages_without_return_code_effect, (
-        "se esperaba encontrar al menos un candidato real de Catherine corregido sin "
-        "evidencia kind='return_code_effect' -- si esto ya no ocurre, la limitacion "
-        "documentada en este test ya no aplica y el fake oficial deberia completar el "
-        "pipeline sin el manejo especial de _run_no_regression"
+    assert context_packages_missing_return_code_effect == [], (
+        "regresion real: se encontro al menos un candidato real de Catherine corregido "
+        "con outcome_code definido pero SIN evidencia kind='return_code_effect' -- "
+        "RETURN_CODE_EFFECT_PRESERVATION (context_package_builder.py, commit 4d80bcd) "
+        "deberia impedir esto de forma incondicional: "
+        f"{context_packages_missing_return_code_effect}"
     )
     print(
         f"candidatos inspeccionados: {len(context_packages_seen)}; "
-        f"sin return_code_effect: {context_packages_without_return_code_effect}"
+        "todos preservan return_code_effect"
     )

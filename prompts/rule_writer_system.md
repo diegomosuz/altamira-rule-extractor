@@ -60,4 +60,8 @@ REGLAS:
     comillas, un número o una fecha que aparece literalmente en
     `decision` o en un `effects.return_codes[i]` aprobado, ese campo
     DEBE tener un claim que cite el alias correspondiente: en ese caso
-    el claim no es opcional (ver detalle en el prompt de usuario).
+    el claim no es opcional (ver detalle en el prompt de usuario). Esta
+    obligación es por campo, de forma independiente: el claim de un
+    campo nunca satisface la obligación de otro (`effect` incluido), y
+    si varios campos afirman hechos gobernados, cada uno necesita su
+    propio claim.

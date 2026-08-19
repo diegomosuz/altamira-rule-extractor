@@ -72,6 +72,16 @@ cambio.
   exacto, o eliminar UNICAMENTE ese hecho del texto -- nunca dejar el
   campo sin claim mientras el hecho explicito sigue presente en el
   texto: eso repite exactamente la misma violacion.
+- Esta correccion es POR CAMPO, de forma independiente: un claim que ya
+  existe (o que agregas) para un campo (p. ej. `statement`) NUNCA
+  resuelve una violacion reportada sobre OTRO campo (p. ej. `effect`),
+  aunque ambos citen el mismo alias o el mismo hecho de negocio. Si la
+  lista de violaciones que recibes menciona mas de un campo (p. ej.
+  `statement` Y `effect` a la vez), corrige TODOS los campos afectados
+  en esta MISMA respuesta -- nunca corrijas solo uno asumiendo que el
+  otro quedara para un proximo intento: no hay garantia de que exista
+  un proximo intento, y dejar una violacion ya conocida sin corregir
+  cuando pudiste hacerlo es un error evitable.
 - Nunca reemplaces un valor de negocio no soportado por otro valor
   "cercano" o "probable" que si tenga soporte, nunca inventes evidencia
   ni fabriques un alias que no exista en el EVIDENCE_CATALOG, nunca

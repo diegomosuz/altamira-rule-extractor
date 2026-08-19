@@ -2982,3 +2982,271 @@ def test_14_12_two_distinct_anchors_never_cross_contaminate() -> None:
     # Un tercer literal genuinamente ausente de ambas anclas nunca debe
     # "tomar prestada" ninguna de las dos por cercania/adivinanza.
     assert _authoritative_anchor_for_literal("ZZZ", package) is None
+
+
+# ---------------------------------------------------------------------------
+# Fase 5 v1.18.3 (endurecimiento de fiabilidad de claims multi-campo):
+# regresion real de los 3 candidatos mas fuertes de la muestra de 5
+# corridas reales de Fase 4 (PAGBCH01::1200-CIERRE, PAGBCH01::
+# 1300-CONCILIACION, PAGAUX01::1500-PROPAGAR-06) -- todos afirman un
+# hecho gobernado en MAS DE UN campo de texto libre a la vez (p. ej.
+# `statement` Y `effect` por separado), y el guardrail determinista
+# (`_check_explicit_facts`) ya evaluaba cada campo de forma
+# independiente ANTES de esta fase (field-first, ver docstring de esa
+# funcion) -- estos tests LOCKEAN esa independencia por campo de forma
+# explicita (nunca la relajan), usando `_package_with_literal_decision_
+# and_return_code` (decision contiene 'S', return_codes[0] aprobado es
+# 'R103') para simular dos hechos gobernados distintos respaldados por
+# anclas autoritativas distintas repartidos en dos campos distintos --
+# nunca hardcodea A106/N (los literales reales del candidato PAGAUX01).
+# ---------------------------------------------------------------------------
+
+
+def test_15_2_effect_with_unsupported_governed_literal_fails_closed() -> None:
+    """Caso 2: `effect` afirma un literal gobernado ('Z999') sin ninguna
+    evidencia autoritativa que lo respalde -- falla cerrado, exactamente
+    igual que cualquier otro campo."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        effect="Se rechaza la operacion con el codigo 'Z999'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    effect_violations = [v for v in violations if v.field == "effect"]
+    assert len(effect_violations) == 1
+    assert effect_violations[0].rule == "unsupported_explicit_literal"
+
+
+def test_15_4_condition_and_effect_each_with_own_claim_both_pass() -> None:
+    """Caso 4: `condition` afirma 'S' (respaldado por $.decision) y
+    `effect` afirma 'R103' (respaldado por $.effects.return_codes[0]) --
+    cada campo tiene su PROPIO claim citando su propia ancla -- cero
+    violaciones."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        condition="Se cumple cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    assert evaluate_guardrail(draft, package) == []
+
+
+def test_15_5_three_fields_each_with_own_claim_all_pass() -> None:
+    """Caso 5: `statement`, `condition` y `effect` afirman hechos
+    gobernados a la vez, cada uno con su propio claim -- cero
+    violaciones en los tres."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        statement="El resultado se determina cuando la firma es 'S'.",
+        condition="Se cumple cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.STATEMENT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c3",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    assert evaluate_guardrail(draft, package) == []
+
+
+def test_15_6_one_field_correct_second_missing_only_missing_field_flagged() -> None:
+    """Caso 6: `condition` tiene claim correcto, `effect` no tiene
+    ningun claim -- la violacion resultante identifica UNICAMENTE
+    `effect`, `condition` queda limpio."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        condition="Se cumple cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    fields_with_violations = {v.field for v in violations}
+    assert fields_with_violations == {"effect"}
+
+
+def test_15_7_two_fields_missing_both_surfaced_in_same_evaluation() -> None:
+    """Caso 7: `condition` y `effect` afirman hechos gobernados sin
+    ningun claim -- UNA sola llamada a `evaluate_guardrail` ya devuelve
+    ambas violaciones simultaneamente (nunca una a la vez): el payload
+    de reparacion recibe el conjunto completo desde el primer intento."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        condition="Se cumple cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONTEXT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    fields_with_violations = {v.field for v in violations}
+    assert fields_with_violations == {"condition", "effect"}
+
+
+def test_15_10_statement_claim_never_satisfies_effect_violation() -> None:
+    """Caso 10: `statement` tiene un claim propio y correcto para 'S',
+    pero `effect` afirma por separado 'R103' sin ningun claim -- el
+    claim de `statement` NUNCA se toma como respaldo de `effect`."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        statement="El resultado se determina cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.STATEMENT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert {v.field for v in violations} == {"effect"}
+    assert violations[0].rule == "unsupported_explicit_literal"
+
+
+def test_15_11_effect_claim_never_satisfies_condition_violation() -> None:
+    """Caso 11 (simetrico al 10): `effect` tiene un claim propio y
+    correcto para 'R103', pero `condition` afirma por separado 'S' sin
+    ningun claim -- el claim de `effect` NUNCA se toma como respaldo de
+    `condition`."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        condition="Se cumple cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert {v.field for v in violations} == {"condition"}
+    assert violations[0].rule == "unsupported_explicit_literal"
+
+
+def test_15_12_effect_claim_citing_non_authoritative_path_still_rejected() -> None:
+    """Caso 12: `effect` tiene un claim, pero cita UNICAMENTE
+    `$.code_slice[0]` (RAW_ONLY, nunca autoritativo para literales) --
+    sigue rechazado, el alias/ruta incorrecta no cuenta como ancla
+    valida."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert len(violations) == 1
+    assert violations[0].field == "effect"
+    assert violations[0].rule == "unsupported_explicit_literal"
+
+
+def test_15_14_augment_never_creates_effect_claim_from_nothing() -> None:
+    """Caso 14: `effect` sin ningun claim -- `augment_claims_with_
+    authoritative_anchors` (Fase 2, sin cambios) NUNCA fabrica un claim
+    nuevo aunque exista una ancla autoritativa real ($.effects.
+    return_codes[0]): solo puede AMPLIAR un claim ya existente."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is None
+
+
+def test_15_15_deterministic_mechanisms_never_alter_multi_field_business_prose() -> None:
+    """Caso 15: en un borrador con hechos gobernados en dos campos,
+    ningun mecanismo deterministico (evaluate_guardrail,
+    augment_claims_with_authoritative_anchors) altera jamas el texto de
+    negocio de `statement`/`condition`/`effect` -- unicamente pueden
+    ampliar `evidence_paths`/`evidence_ids` de un claim ya existente."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        statement="El resultado se determina cuando la firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.STATEMENT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is not None
+    assert augmented.statement == draft.statement
+    assert augmented.effect == draft.effect
+    assert augmented.condition == draft.condition

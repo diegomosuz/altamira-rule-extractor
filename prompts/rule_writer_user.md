@@ -64,6 +64,31 @@ Incluye:
   respalde") sigue aplicando sin cambios para el resto del contenido no
   gobernado por un valor explícito.
 
+  ESTA OBLIGACIÓN ES POR CAMPO, DE FORMA INDEPENDIENTE: evalúa CADA
+  campo de texto libre por separado. Un claim creado para `statement`
+  NUNCA satisface esta obligación para `condition`, `effect` ni ningún
+  otro campo; el claim de `condition` tampoco satisface `effect`; y así
+  sucesivamente. Si el MISMO hecho gobernado aparece textualmente en
+  más de un campo (por ejemplo, el mismo código o literal mencionado
+  tanto en `statement` como en `effect`), cada campo que lo menciona
+  necesita su PROPIO claim que lo cite -- nunca asumas que un claim ya
+  creado en otro campo cubre esta obligación aquí. En particular,
+  `effect` no es una excepción: si `effect` afirma un literal, número o
+  código gobernado (por ejemplo, el código de retorno o el nuevo valor
+  de estado que produce la regla), `effect` DEBE tener su propio claim
+  citando la evidencia autoritativa correspondiente, exactamente igual
+  que cualquier otro campo de esta lista.
+
+  Si detectas hechos gobernados en VARIOS campos a la vez, crea un
+  claim válido para CADA UNO antes de terminar tu respuesta -- no te
+  detengas después de crear el primero. Por ejemplo, si `statement`
+  afirma un código gobernado Y `effect` afirma por separado un valor de
+  estado gobernado, ambos respaldados por evidencia autoritativa
+  distinta o compartida, la respuesta debe incluir un claim para
+  `statement` Y un claim para `effect`: omitir cualquiera de los dos
+  hace que el borrador sea rechazado por completo, aunque el otro claim
+  sí esté presente y sea correcto.
+
 No agregues claves fuera del schema. No incluyas evidence_ids ni
 evidence_paths en ningún claim.
 

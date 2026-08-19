@@ -2239,3 +2239,233 @@ def test_14_1b_violation_message_reaches_repair_prompt_with_anchor_hint(
     assert "Evidencia autoritativa real disponible en $.decision" in user_message
     assert "API" in user_message
     assert "WEB" in user_message
+
+
+# ---------------------------------------------------------------------------
+# Fase 5 v1.18.3 (endurecimiento de fiabilidad de claims multi-campo):
+# regresion real del candidato PAGAUX01::1500-PROPAGAR-06 (RETURN_CODE,
+# consumia sistematicamente los 2 intentos de reparacion en las 5
+# corridas reales de Fase 4) -- afirma un hecho gobernado distinto en
+# `statement` Y en `effect` a la vez, cada uno respaldado por una ancla
+# autoritativa distinta. Nunca hardcodea los literales reales del
+# candidato (A106/N): usa 'S'/decision y 'R103'/return_codes[0] como
+# sustitutos genericos, mismo patron que _package_with_literal_
+# decision_and_return_code en test_deterministic_guardrail.py.
+# ---------------------------------------------------------------------------
+
+
+def _package_with_two_distinct_governed_facts(candidate_id: str) -> ContextPackage:
+    """Decision contiene 'S' (autoritativa via $.decision) y hay un
+    return_code aprobado 'R103' (autoritativo via $.effects.
+    return_codes[0]) -- dos anclas DISTINTAS para dos hechos gobernados
+    distintos, pensadas para repartirse en dos campos diferentes."""
+    decision_evidence = EvidenceEntry(
+        evidence_id="ev-decision",
+        kind="decision",
+        source_file="cobol/PROG1.cbl",
+        line_start=10,
+        line_end=10,
+        source_package_hash=_HASH_A,
+    )
+    return ContextPackage(
+        schema_version="2.0",
+        candidate=ContextPackageCandidate(
+            candidate_id=candidate_id,
+            decision_id="dec-1",
+            detector_id="det",
+            detector_version="1.0",
+            detector_score=1.0,
+        ),
+        scope=ContextPackageScope(
+            country="AR",
+            application="Pagos",
+            operation=ContextPackageOperation(logical_name="OP1", description=None),
+            program="PROG1",
+            program_version="1",
+            paragraph="MAIN",
+            source_file="cobol/PROG1.cbl",
+            line_start=10,
+            line_end=10,
+            source_package_hash=_HASH_A,
+        ),
+        code_slice=[
+            CodeSliceEntry(
+                paragraph_id="p1",
+                paragraph="MAIN",
+                source_file="cobol/PROG1.cbl",
+                source_text="IF WS-FIRMA-VALIDA = 'S'",
+                line_start=10,
+                line_end=10,
+                inclusion_reason=InclusionReason.CANDIDATE,
+                evidence_ids=["ev-decision"],
+            )
+        ],
+        data_context=DataContext(parameter_tables=[], transactional_tables_read=[]),
+        decision=ContextPackageDecision(
+            expression="WS-FIRMA-VALIDA = 'S'",
+            normalized_expression="WS-FIRMA-VALIDA = 'S'",
+            operands=["WS-FIRMA-VALIDA"],
+            rule_type=None,
+            outcome_code="R103",
+            evidence_ids=["ev-decision"],
+        ),
+        effects=Effects(
+            return_codes=[
+                ReturnCodeEffect(
+                    code="R103", approved_for_rule_text=True, evidence_ids=["ev-decision"]
+                ),
+            ],
+            table_effects=[],
+        ),
+        batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
+        domain_glossary=[],
+        evidence=[decision_evidence],
+        completeness=Completeness(
+            D1=CompletenessStatus.COMPLETE,
+            D2=CompletenessStatus.COMPLETE,
+            D3=CompletenessStatus.NOT_AVAILABLE,
+            D4=CompletenessStatus.COMPLETE,
+            D5=CompletenessStatus.NOT_AVAILABLE,
+            D6=CompletenessStatus.NOT_AVAILABLE,
+            D7=CompletenessStatus.NOT_AVAILABLE,
+        ),
+    )
+
+
+def test_15_8_multi_field_repair_creates_both_claims_in_one_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Caso 8: `statement` afirma 'S' (sin claim) Y `effect` afirma
+    'R103' (sin claim) a la vez -- un unico intento de reparacion (fake)
+    agrega los DOS claims correctos, cada uno citando su propia ancla,
+    y el candidato converge a EVIDENCE_VALIDATED en un solo intento."""
+    package = _package_with_two_distinct_governed_facts("cand-1")
+    catalog = build_evidence_catalog(package)
+    decision_alias = catalog.find_alias("ev-decision", "$.decision")
+    return_code_alias = catalog.find_alias("ev-decision", "$.effects.return_codes[0]")
+    assert decision_alias is not None
+    assert return_code_alias is not None
+
+    draft = RuleDraft(
+        schema_version="2.0",
+        title="Validacion de firma",
+        context="Operacion de autorizacion de pagos para empresas.",
+        statement="El resultado se determina cuando la firma es 'S'.",
+        condition="La firma es 'S'.",
+        parameters=[],
+        effect="Se asigna el codigo de retorno 'R103'.",
+        parameter_source=None,
+        traceability=["Basado en la decision implementada en el parrafo de validacion de firma."],
+        limitations=["Requiere revision funcional."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+        evidence_validation_status=EvidenceValidationStatus.PENDING,
+    )
+
+    repaired_payload = _valid_repair_payload(
+        statement="El resultado se determina cuando la firma es 'S'.",
+        condition="La firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            {"claim_id": "c1", "field": "condition", "evidence_refs": [decision_alias]},
+            {"claim_id": "c2", "field": "statement", "evidence_refs": [decision_alias]},
+            {"claim_id": "c3", "field": "effect", "evidence_refs": [return_code_alias]},
+        ],
+    )
+    _install_fake_client(monkeypatch, [repaired_payload])
+
+    kwargs = _base_kwargs(tmp_path, packages=[package], drafts={"cand-1": draft})
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 1
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.statement == draft.statement
+    assert final.effect == draft.effect
+    statement_claim = next(c for c in final.claims if c.field == ClaimField.STATEMENT)
+    effect_claim = next(c for c in final.claims if c.field == ClaimField.EFFECT)
+    assert "$.decision" in statement_claim.evidence_paths
+    assert "$.effects.return_codes[0]" in effect_claim.evidence_paths
+
+
+def test_15_9_multi_field_repair_partial_fix_needs_second_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Caso 9: mismo escenario de dos campos sin claim, pero el primer
+    intento de reparacion (fake) solo agrega el claim de `statement` y
+    deja `effect` sin corregir -- el candidato NO converge en el primer
+    intento (sigue habiendo una violacion ERROR en `effect`); el segundo
+    intento (fake) si agrega el claim de `effect` y el candidato
+    converge a EVIDENCE_VALIDATED consumiendo los 2 intentos."""
+    package = _package_with_two_distinct_governed_facts("cand-1")
+    catalog = build_evidence_catalog(package)
+    decision_alias = catalog.find_alias("ev-decision", "$.decision")
+    return_code_alias = catalog.find_alias("ev-decision", "$.effects.return_codes[0]")
+    assert decision_alias is not None
+    assert return_code_alias is not None
+
+    draft = RuleDraft(
+        schema_version="2.0",
+        title="Validacion de firma",
+        context="Operacion de autorizacion de pagos para empresas.",
+        statement="El resultado se determina cuando la firma es 'S'.",
+        condition="La firma es 'S'.",
+        parameters=[],
+        effect="Se asigna el codigo de retorno 'R103'.",
+        parameter_source=None,
+        traceability=["Basado en la decision implementada en el parrafo de validacion de firma."],
+        limitations=["Requiere revision funcional."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+        evidence_validation_status=EvidenceValidationStatus.PENDING,
+    )
+
+    partial_payload = _valid_repair_payload(
+        statement="El resultado se determina cuando la firma es 'S'.",
+        condition="La firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            {"claim_id": "c1", "field": "condition", "evidence_refs": [decision_alias]},
+            {"claim_id": "c2", "field": "statement", "evidence_refs": [decision_alias]},
+        ],
+    )
+    complete_payload = _valid_repair_payload(
+        statement="El resultado se determina cuando la firma es 'S'.",
+        condition="La firma es 'S'.",
+        effect="Se asigna el codigo de retorno 'R103'.",
+        claims=[
+            {"claim_id": "c1", "field": "condition", "evidence_refs": [decision_alias]},
+            {"claim_id": "c2", "field": "statement", "evidence_refs": [decision_alias]},
+            {"claim_id": "c3", "field": "effect", "evidence_refs": [return_code_alias]},
+        ],
+    )
+    _install_fake_client(monkeypatch, [partial_payload, complete_payload])
+
+    kwargs = _base_kwargs(tmp_path, packages=[package], drafts={"cand-1": draft})
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 2
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    effect_claim = next(c for c in final.claims if c.field == ClaimField.EFFECT)
+    assert "$.effects.return_codes[0]" in effect_claim.evidence_paths

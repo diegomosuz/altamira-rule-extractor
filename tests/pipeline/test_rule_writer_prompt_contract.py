@@ -195,3 +195,67 @@ def test_writer_user_general_optional_claim_rule_still_present_unchanged() -> No
         "crea un claim UNICAMENTE\n  cuando exista al menos un alias real del "
         "catálogo que respalde ese\n  campo" in _WRITER_USER
     )
+
+
+# ---------------------------------------------------------------------------
+# Fase 5 v1.18.3 (endurecimiento de fiabilidad de claims multi-campo):
+# regresion real de los 3 candidatos mas fuertes de la muestra de 5
+# corridas reales de Fase 4 (PAGBCH01::1200-CIERRE, PAGBCH01::
+# 1300-CONCILIACION -- 1 reparacion en 5/5 corridas; PAGAUX01::
+# 1500-PROPAGAR-06 -- 2 reparaciones en 5/5 corridas, agotando el
+# presupuesto de reparacion cada vez): todos afirman un hecho gobernado
+# en MAS DE UN campo de texto libre a la vez (incluido `effect`). El
+# guardrail determinista ya evaluaba cada campo de forma independiente
+# (ver tests test_15_* en test_deterministic_guardrail.py/test_
+# guardrails_applied_stage.py, que confirman esto SIN cambios de
+# codigo) -- el hueco real estaba en que el prompt del writer nunca
+# enseñaba explicitamente la independencia por campo ni la obligacion
+# multi-campo, dejando la convergencia completa en manos de la
+# reparacion LLM en vez del intento inicial.
+# ---------------------------------------------------------------------------
+
+
+def test_writer_user_claim_obligation_is_explicitly_per_field() -> None:
+    assert "POR CAMPO, DE FORMA INDEPENDIENTE" in _WRITER_USER
+    assert "NUNCA satisface esta obligación para" in _WRITER_USER
+
+
+def test_writer_user_explicitly_covers_effect_field_claim_obligation() -> None:
+    assert "`effect` no es una excepción" in _WRITER_USER
+    assert "`effect` DEBE tener su propio claim" in _WRITER_USER
+
+
+def test_writer_user_teaches_multi_field_claim_completeness() -> None:
+    assert "crea un\n  claim válido para CADA UNO antes de terminar" in _WRITER_USER
+    assert "no te\n  detengas después de crear el primero" in _WRITER_USER
+
+
+def test_writer_user_multi_field_example_never_hardcodes_real_candidate_literals() -> None:
+    # Guardia de no-regresion: el ejemplo conceptual multi-campo nunca
+    # debe hardcodear los literales reales del candidato PAGAUX01
+    # (A106/N) -- el prompt debe generalizar, nunca memorizar un caso.
+    assert "A106" not in _WRITER_USER
+    assert "'N'" not in _WRITER_USER
+
+
+def test_writer_system_rule_16_mentions_per_field_and_effect() -> None:
+    assert "el claim de un\n    campo nunca satisface la obligación de otro" in _WRITER_SYSTEM
+    assert "`effect` incluido" in _WRITER_SYSTEM
+
+
+def test_repair_system_never_lets_one_field_claim_satisfy_another() -> None:
+    assert "POR CAMPO, de forma independiente" in _REPAIR_SYSTEM
+    assert "NUNCA\n  resuelve una violacion reportada sobre OTRO campo" in _REPAIR_SYSTEM
+
+
+def test_repair_system_requires_fixing_all_known_field_violations_in_one_attempt() -> None:
+    assert "corrige TODOS los campos afectados\n  en esta MISMA respuesta" in _REPAIR_SYSTEM
+    assert "nunca corrijas solo uno asumiendo que el\n  otro quedara" in _REPAIR_SYSTEM
+
+
+def test_repair_system_never_replaces_unsupported_value_with_a_supported_one() -> None:
+    # Guardia de no-regresion (contrato preexistente, sin cambios): un
+    # literal no soportado se elimina, nunca se sustituye por otro valor
+    # "parecido" que si tenga soporte.
+    assert 'nunca cambies \'D204\' a\n      \'D203\'' in _REPAIR_SYSTEM
+    assert "nunca lo sustituyas por otro" in _REPAIR_SYSTEM
