@@ -39,6 +39,7 @@ from altamira_extractor.pipeline.deterministic_guardrail import (
     evaluate_guardrail,
     reconstruct_traceability_deterministically,
     resolve_json_path,
+    retarget_unapproved_table_effect_citations,
     sanitize_traceability_number_date_violations,
 )
 
@@ -541,6 +542,379 @@ def test_augment_is_idempotent_and_deterministic() -> None:
     violations = evaluate_guardrail(draft, package)
     first = augment_claims_with_authoritative_anchors(draft, package, violations)
     second = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert first is not None and second is not None
+    assert first.to_stable_json() == second.to_stable_json()
+
+
+# --- retarget_unapproved_table_effect_citations (v1.18.3 Fase 1) ---
+#
+# `_package()` ya trae dos table_effects: [0] CUENTAS (DIRECT, aprobado),
+# [1] LOG_AUDITORIA (PROGRAM_CONTEXT, no aprobado) -- se reutiliza tal
+# cual para la mayoria de estos casos. Solo "Signal A" (correspondencia
+# textual EXACTA) esta implementada; la version anterior del diseno
+# ("Signal B", corregir por mera unicidad de un unico efecto aprobado
+# sin correspondencia textual) fue explicitamente rechazada en el
+# cierre de preflight de v1.18.3 -- el test 3 prueba directamente que
+# esta ausente.
+
+
+def _package_with_two_approved_table_effects() -> ContextPackage:
+    """Variante con DOS efectos aprobados (CUENTAS, SALDOS) mas el
+    mismo LOG_AUDITORIA no aprobado -- para probar correspondencia
+    exacta contra un candidato especifico entre varios aprobados."""
+    package = _package()
+    saldos_evidence = EvidenceEntry(
+        evidence_id="ev-effect-saldos",
+        kind="table_effect",
+        source_file="cobol/PROG1.cbl",
+        line_start=15,
+        line_end=15,
+        source_package_hash=_HASH,
+    )
+    return package.model_copy(
+        update={
+            "effects": package.effects.model_copy(
+                update={
+                    "table_effects": [
+                        package.effects.table_effects[0],
+                        TableEffect(
+                            table="SALDOS",
+                            operation=TableEffectOperation.UPDATES,
+                            attribution_scope=AttributionScope.DIRECT,
+                            approved_for_rule_text=True,
+                            evidence_ids=["ev-effect-saldos"],
+                        ),
+                        package.effects.table_effects[1],
+                    ]
+                }
+            ),
+            "evidence": [*package.evidence, saldos_evidence],
+        }
+    )
+
+
+def _package_with_duplicate_table_identifier() -> ContextPackage:
+    """Variante con DOS efectos aprobados que comparten el MISMO
+    identificador de tabla (`CUENTAS`, una UPDATES y otra INSERTS) mas
+    LOG_AUDITORIA no aprobado -- el texto puede nombrar "CUENTAS" una
+    sola vez, pero eso corresponde a DOS entradas estructurales
+    distintas: debe ser ambiguo, nunca se elige una arbitrariamente."""
+    package = _package()
+    cuentas_inserts_evidence = EvidenceEntry(
+        evidence_id="ev-effect-cuentas-inserts",
+        kind="table_effect",
+        source_file="cobol/PROG1.cbl",
+        line_start=16,
+        line_end=16,
+        source_package_hash=_HASH,
+    )
+    return package.model_copy(
+        update={
+            "effects": package.effects.model_copy(
+                update={
+                    "table_effects": [
+                        package.effects.table_effects[0],
+                        TableEffect(
+                            table="CUENTAS",
+                            operation=TableEffectOperation.INSERTS,
+                            attribution_scope=AttributionScope.DIRECT,
+                            approved_for_rule_text=True,
+                            evidence_ids=["ev-effect-cuentas-inserts"],
+                        ),
+                        package.effects.table_effects[1],
+                    ]
+                }
+            ),
+            "evidence": [*package.evidence, cuentas_inserts_evidence],
+        }
+    )
+
+
+def _package_with_substring_collision_tables() -> ContextPackage:
+    """Variante donde la tabla NO aprobada (`PAG_OPER`) es, como string,
+    un PREFIJO literal de la tabla aprobada (`PAG_OPERACION`) -- prueba
+    que la coincidencia por limite de palabra nunca confunde una con la
+    otra en ninguna direccion."""
+    package = _package()
+    return package.model_copy(
+        update={
+            "effects": package.effects.model_copy(
+                update={
+                    "table_effects": [
+                        TableEffect(
+                            table="PAG_OPERACION",
+                            operation=TableEffectOperation.UPDATES,
+                            attribution_scope=AttributionScope.DIRECT,
+                            approved_for_rule_text=True,
+                            evidence_ids=["ev-effect-direct"],
+                        ),
+                        TableEffect(
+                            table="PAG_OPER",
+                            operation=TableEffectOperation.INSERTS,
+                            attribution_scope=AttributionScope.PROGRAM_CONTEXT,
+                            approved_for_rule_text=False,
+                            evidence_ids=["ev-effect-program-context"],
+                        ),
+                    ]
+                }
+            )
+        }
+    )
+
+
+def _draft_with_wrong_table_effect_citation(
+    *, effect_text: str, wrong_index: int = 1
+) -> RuleDraft:
+    wrong_evidence_id = {
+        0: "ev-effect-direct",
+        1: "ev-effect-program-context",
+    }.get(wrong_index, "ev-effect-program-context")
+    return _draft(
+        effect=effect_text,
+        claims=[
+            Claim(
+                claim_id="c-condition",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c-effect",
+                field=ClaimField.EFFECT,
+                evidence_paths=[f"$.effects.table_effects[{wrong_index}]"],
+                evidence_ids=[wrong_evidence_id],
+            ),
+        ],
+    )
+
+
+def test_retarget_case1_exact_approved_table_name_in_text_retargets() -> None:
+    """Caso 1 (cierre de preflight v1.18.3): el texto nombra
+    explicitamente la tabla aprobada correcta (CUENTAS) mientras la cita
+    apunta a la no aprobada (LOG_AUDITORIA, indice 1) -- unico caso que
+    debe corregirse deterministicamente."""
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla CUENTAS con el nuevo saldo.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+
+    retargeted = retarget_unapproved_table_effect_citations(draft, package, violations)
+    assert retargeted is not None
+    claim = next(c for c in retargeted.claims if c.claim_id == "c-effect")
+    assert claim.evidence_paths == ["$.effects.table_effects[0]"]
+    assert claim.evidence_ids == ["ev-effect-direct"]
+    assert evaluate_guardrail(retargeted, package) == []
+
+
+def test_retarget_case2_text_names_wrong_unapproved_table_fails_closed() -> None:
+    """Caso 2 (contraejemplo explicito del cierre de preflight): el
+    texto nombra la tabla NO aprobada citada (LOG_AUDITORIA) -- veto
+    duro, nunca se sobreescribe con evidencia de CUENTAS."""
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se inserta un registro en LOG_AUDITORIA por motivos de auditoria.",
+        wrong_index=1,
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_retarget_case3_no_table_named_never_retargets_signal_b_removed() -> None:
+    """Caso 3: prueba EXPLICITAMENTE que "Signal B" (unicidad de un
+    unico efecto aprobado SIN correspondencia textual) esta ausente --
+    el texto no nombra ninguna tabla, y aunque solo existe un efecto
+    aprobado (CUENTAS), NUNCA se corrige por mera cardinalidad."""
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza el registro correspondiente.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_retarget_case4_two_approved_effects_exact_name_retargets_to_that_one() -> None:
+    """Caso 4: con DOS efectos aprobados (CUENTAS, SALDOS), el texto
+    nombra exactamente uno (SALDOS) -- se corrige a ese, sin importar
+    cuantos efectos aprobados existan en total."""
+    package = _package_with_two_approved_table_effects()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla SALDOS con el nuevo importe.", wrong_index=2
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+
+    retargeted = retarget_unapproved_table_effect_citations(draft, package, violations)
+    assert retargeted is not None
+    claim = next(c for c in retargeted.claims if c.claim_id == "c-effect")
+    assert claim.evidence_paths == ["$.effects.table_effects[1]"]
+    assert claim.evidence_ids == ["ev-effect-saldos"]
+    assert evaluate_guardrail(retargeted, package) == []
+
+
+def test_retarget_case5_two_approved_effects_text_names_neither_never_retargets() -> None:
+    """Caso 5: DOS efectos aprobados, el texto no nombra ninguno -- sin
+    prueba textual, nunca se corrige (ambiguo por definicion, aunque
+    "Signal B" ya estuviera disponible tampoco resolveria esto: hay mas
+    de un efecto aprobado)."""
+    package = _package_with_two_approved_table_effects()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza el registro correspondiente.", wrong_index=2
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_retarget_case6_duplicate_approved_table_identifier_is_ambiguous() -> None:
+    """Caso 6: DOS efectos aprobados comparten el mismo identificador de
+    tabla (CUENTAS UPDATES y CUENTAS INSERTS) -- el texto nombra
+    "CUENTAS" una sola vez, pero eso corresponde estructuralmente a DOS
+    entradas distintas: ambiguo, nunca se elige una arbitrariamente."""
+    package = _package_with_duplicate_table_identifier()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla CUENTAS con el nuevo saldo.", wrong_index=2
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_retarget_case7_substring_collision_uses_exact_token_match_only() -> None:
+    """Caso 7: la tabla NO aprobada (`PAG_OPER`) es un prefijo literal
+    de la tabla aprobada (`PAG_OPERACION`). El texto solo contiene
+    "PAG_OPERACION" completo -- nunca "PAG_OPER" como token aislado
+    (`\\b` no encuentra limite de palabra entre "PAG_OPER" y "ACION").
+    Debe corregirse limpiamente a la aprobada, SIN que el veto de la
+    condicion C dispare por una coincidencia de substring inexistente."""
+    package = _package_with_substring_collision_tables()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla PAG_OPERACION con el nuevo estado.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+
+    retargeted = retarget_unapproved_table_effect_citations(draft, package, violations)
+    assert retargeted is not None
+    claim = next(c for c in retargeted.claims if c.claim_id == "c-effect")
+    assert claim.evidence_paths == ["$.effects.table_effects[0]"]
+    assert evaluate_guardrail(retargeted, package) == []
+
+
+def test_retarget_case8_case_sensitive_match_is_deterministic() -> None:
+    """Caso 8: el identificador de tabla se compara EXACTO por
+    mayusculas/minusculas (nunca normalizado) -- `TableEffect.table` ya
+    esta persistido por el parser en una unica forma canonica, sin
+    contrato de normalizacion de case en este codebase. El texto solo
+    contiene la forma en minusculas ("cuentas"): nunca coincide con
+    "CUENTAS", y por lo tanto nunca se corrige (decision documentada,
+    no una adivinanza)."""
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla cuentas con el nuevo saldo.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" for v in violations)
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_retarget_case9_business_fields_unchanged_byte_for_byte() -> None:
+    """Caso 9: una correccion exitosa (caso 1) nunca toca title, context,
+    statement, condition, parameters, parameter_source, traceability,
+    limitations, functional_review_status ni evidence_validation_status
+    -- unicamente evidence_paths/evidence_ids del claim afectado."""
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla CUENTAS con el nuevo saldo.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    retargeted = retarget_unapproved_table_effect_citations(draft, package, violations)
+    assert retargeted is not None
+    assert retargeted.title == draft.title
+    assert retargeted.context == draft.context
+    assert retargeted.statement == draft.statement
+    assert retargeted.condition == draft.condition
+    assert retargeted.parameters == draft.parameters
+    assert retargeted.effect == draft.effect
+    assert retargeted.parameter_source == draft.parameter_source
+    assert retargeted.traceability == draft.traceability
+    assert retargeted.limitations == draft.limitations
+    assert retargeted.functional_review_status == draft.functional_review_status
+    assert retargeted.evidence_validation_status == draft.evidence_validation_status
+    condition_claim = next(c for c in retargeted.claims if c.claim_id == "c-condition")
+    assert condition_claim.field == ClaimField.CONDITION
+    assert condition_claim.evidence_paths == ["$.decision"]
+    assert condition_claim.evidence_ids == ["ev-decision"]
+
+
+def test_retarget_case10_claim_never_deleted_success_and_failure_paths() -> None:
+    """Caso 10: ni en la correccion exitosa (caso 1) ni cuando la
+    correccion se rechaza (caso 3) el claim con la cita invalida se
+    elimina, ni sus evidence_paths/evidence_ids quedan vacios -- nunca
+    se crea el hueco de validacion claim-driven documentado en el
+    cierre de preflight de v1.18.3."""
+    package = _package()
+
+    success_draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla CUENTAS con el nuevo saldo.", wrong_index=1
+    )
+    success_violations = evaluate_guardrail(success_draft, package)
+    retargeted = retarget_unapproved_table_effect_citations(
+        success_draft, package, success_violations
+    )
+    assert retargeted is not None
+    assert len(retargeted.claims) == len(success_draft.claims)
+    retargeted_claim = next(c for c in retargeted.claims if c.claim_id == "c-effect")
+    assert retargeted_claim.evidence_paths
+    assert retargeted_claim.evidence_ids
+
+    failure_draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza el registro correspondiente.", wrong_index=1
+    )
+    failure_violations = evaluate_guardrail(failure_draft, package)
+    result = retarget_unapproved_table_effect_citations(failure_draft, package, failure_violations)
+    assert result is None
+    # `None` significa "el llamador conserva el borrador original sin cambios"
+    # (ver `_apply_deterministic_guardrail_corrections`): el claim invalido
+    # con la cita erronea sigue presente, con evidence_paths/evidence_ids no
+    # vacios -- nunca se elimino ni se vacio como efecto colateral.
+    original_claim = next(c for c in failure_draft.claims if c.claim_id == "c-effect")
+    assert original_claim.evidence_paths == ["$.effects.table_effects[1]"]
+    assert original_claim.evidence_ids == ["ev-effect-program-context"]
+
+
+def test_retarget_returns_none_when_no_table_effect_violations() -> None:
+    package = _package()
+    draft = _draft()
+    assert retarget_unapproved_table_effect_citations(draft, package, []) is None
+
+
+def test_retarget_returns_none_when_wrong_claim_has_other_error_too() -> None:
+    """TODO-O-NADA: si el conjunto de violaciones ERROR incluye algo mas
+    que `unapproved_table_effect` (aqui se agrega ademas una violacion
+    generica no relacionada), la funcion solo filtra por su propio
+    `rule` -- las demas violaciones no le impiden actuar sobre las que
+    si le corresponden, pero si ninguna violacion unapproved_table_effect
+    aplica, sigue devolviendo None."""
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza el registro correspondiente.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_retarget_is_idempotent_and_deterministic() -> None:
+    package = _package()
+    draft = _draft_with_wrong_table_effect_citation(
+        effect_text="Se actualiza la tabla CUENTAS con el nuevo saldo.", wrong_index=1
+    )
+    violations = evaluate_guardrail(draft, package)
+    first = retarget_unapproved_table_effect_citations(draft, package, violations)
+    second = retarget_unapproved_table_effect_citations(draft, package, violations)
     assert first is not None and second is not None
     assert first.to_stable_json() == second.to_stable_json()
 
@@ -1357,3 +1731,307 @@ def test_reconstruct_returns_none_for_mixed_field_violations() -> None:
 def test_reconstruct_returns_none_when_no_error_violations() -> None:
     draft = _draft()
     assert reconstruct_traceability_deterministically(draft, []) is None
+
+
+# --- regresion forense v1.18.3 (forensic run
+# 20260818T213051395444-c1fa002a, candidato
+# PAGDB201::3000-UPDATE-OPERACION, familia RETURN_CODE/Q0): reproduce la
+# forma EXACTA (sanitizada, sin secretos ni rutas absolutas) del
+# ContextPackage/RuleDraft reales que causaron el fallo original --
+# GUARDRAILS_APPLIED agotando LLM_REPAIR_ATTEMPTS(2) sin alcanzar
+# EVIDENCE_VALIDATED.
+
+
+def _package_pagdb201_3000_update_operacion() -> ContextPackage:
+    """Misma estructura D4/D5 que el ContextPackage real: decision
+    `SQLCODE NOT = 0` (normalizada sin espacios por el defecto Defecto C
+    de expression normalization, AUN NO corregido en Fase 1 -- se
+    reproduce tal cual llego realmente), outcome D203 aprobado, y los
+    TRES table_effects reales en el MISMO orden: [0] PAG_AUDITORIA
+    (INSERTS, PROGRAM_CONTEXT, no aprobado), [1] PAG_OPERACION (UPDATES,
+    DIRECT, aprobado -- el efecto correcto), [2] PAG_TEMPORAL (WRITES,
+    PROGRAM_CONTEXT, no aprobado)."""
+    return ContextPackage(
+        schema_version="2.0",
+        candidate=ContextPackageCandidate(
+            candidate_id=(
+                "candidate::q0-return-code-decision::1.0::"
+                + _HASH
+                + "::program::AR::OP-AUTORIZACION-PAGO-EMPRESA::PAGDB201::"
+                "1.18.2-test-fixture-v2-e2e::442d3a503c98::"
+                "paragraph::3000-UPDATE-OPERACION::decision::68::1"
+            ),
+            decision_id=(
+                "program::AR::OP-AUTORIZACION-PAGO-EMPRESA::PAGDB201::"
+                "1.18.2-test-fixture-v2-e2e::442d3a503c98::"
+                "paragraph::3000-UPDATE-OPERACION::decision::68::1"
+            ),
+            detector_id="q0-return-code-decision",
+            detector_version="1.0",
+            detector_score=1.0,
+        ),
+        scope=ContextPackageScope(
+            country="AR",
+            application="Pagos Empresas Integral",
+            operation=ContextPackageOperation(
+                logical_name="OP-AUTORIZACION-PAGO-EMPRESA",
+                description="Autorizacion, limites, riesgo, calculo, persistencia y liquidacion "
+                "de pagos empresariales",
+            ),
+            program="PAGDB201",
+            program_version="1.18.2-test-fixture-v2-e2e",
+            paragraph="3000-UPDATE-OPERACION",
+            source_file="01-codigo/cobol/PAGDB201.cbl",
+            line_start=62,
+            line_end=70,
+            source_package_hash=_HASH,
+        ),
+        code_slice=[
+            CodeSliceEntry(
+                paragraph_id="paragraph::3000-UPDATE-OPERACION",
+                paragraph="3000-UPDATE-OPERACION",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                source_text=(
+                    "       3000-UPDATE-OPERACION.\n"
+                    "      *>EXECSQL EXEC SQL\n"
+                    "      *>EXECSQL UPDATE PAG_OPERACION\n"
+                    "      *>EXECSQL SET ESTADO = 'A'\n"
+                    "      *>EXECSQL WHERE OPERACION_ID = :WS-OPERACION-ID\n"
+                    "      *>EXECSQL END-EXEC }\n"
+                    "           IF SQLCODE NOT = 0\n"
+                    "              MOVE 'D203' TO WS-COD-RETORNO\n"
+                    "           END-IF."
+                ),
+                line_start=62,
+                line_end=70,
+                inclusion_reason=InclusionReason.CANDIDATE,
+                evidence_ids=["ev-code-slice"],
+            )
+        ],
+        data_context=DataContext(parameter_tables=[], transactional_tables_read=[]),
+        decision=ContextPackageDecision(
+            expression="SQLCODENOT=0",
+            normalized_expression="SQLCODENOT=0",
+            operands=["SQLCODE"],
+            rule_type=None,
+            outcome_code="D203",
+            evidence_ids=["ev-decision"],
+        ),
+        effects=Effects(
+            return_codes=[
+                ReturnCodeEffect(
+                    code="D203", approved_for_rule_text=True, evidence_ids=["ev-return-code"]
+                )
+            ],
+            table_effects=[
+                TableEffect(
+                    table="PAG_AUDITORIA",
+                    operation=TableEffectOperation.INSERTS,
+                    attribution_scope=AttributionScope.PROGRAM_CONTEXT,
+                    approved_for_rule_text=False,
+                    evidence_ids=["ev-effect-pag-auditoria"],
+                ),
+                TableEffect(
+                    table="PAG_OPERACION",
+                    operation=TableEffectOperation.UPDATES,
+                    attribution_scope=AttributionScope.DIRECT,
+                    approved_for_rule_text=True,
+                    evidence_ids=["ev-effect-pag-operacion"],
+                ),
+                TableEffect(
+                    table="PAG_TEMPORAL",
+                    operation=TableEffectOperation.WRITES,
+                    attribution_scope=AttributionScope.PROGRAM_CONTEXT,
+                    approved_for_rule_text=False,
+                    evidence_ids=["ev-effect-pag-temporal"],
+                ),
+            ],
+        ),
+        batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
+        domain_glossary=[
+            DomainGlossaryEntry(
+                data_item_id="prog::data::WS-COD-RETORNO",
+                technical_name="WS-COD-RETORNO",
+                semantic_tag="return_code",
+                domain_term_id="term::1.0::RESULT_CODE",
+                functional_name="codigo de resultado",
+                definition="Codigo tecnico que representa el resultado de la validacion.",
+                entity_type="result_code",
+                source_kind="CURATED_CONFIG",
+                authoritative_source="V1 controlled glossary",
+                confidence=0.75,
+                evidence_ids=["ev-domain-glossary"],
+            )
+        ],
+        evidence=[
+            EvidenceEntry(
+                evidence_id="ev-decision",
+                kind="decision",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                line_start=68,
+                line_end=70,
+                source_package_hash=_HASH,
+            ),
+            EvidenceEntry(
+                evidence_id="ev-return-code",
+                kind="return_code_effect",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                line_start=62,
+                line_end=None,
+                source_package_hash=_HASH,
+            ),
+            EvidenceEntry(
+                evidence_id="ev-effect-pag-auditoria",
+                kind="table_effect",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                line_start=53,
+                line_end=58,
+                source_package_hash=_HASH,
+            ),
+            EvidenceEntry(
+                evidence_id="ev-effect-pag-operacion",
+                kind="table_effect",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                line_start=63,
+                line_end=67,
+                source_package_hash=_HASH,
+            ),
+            EvidenceEntry(
+                evidence_id="ev-effect-pag-temporal",
+                kind="table_effect",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                line_start=72,
+                line_end=75,
+                source_package_hash=_HASH,
+            ),
+            EvidenceEntry(
+                evidence_id="ev-code-slice",
+                kind="code_slice",
+                source_file="01-codigo/cobol/PAGDB201.cbl",
+                line_start=62,
+                line_end=70,
+                source_package_hash=_HASH,
+            ),
+            EvidenceEntry(
+                evidence_id="ev-domain-glossary",
+                kind="domain_glossary",
+                source_file=None,
+                line_start=None,
+                line_end=None,
+                source_package_hash=_HASH,
+            ),
+        ],
+        completeness=Completeness(
+            D1=CompletenessStatus.COMPLETE,
+            D2=CompletenessStatus.COMPLETE,
+            D3=CompletenessStatus.NOT_AVAILABLE,
+            D4=CompletenessStatus.COMPLETE,
+            D5=CompletenessStatus.COMPLETE,
+            D6=CompletenessStatus.NOT_AVAILABLE,
+            D7=CompletenessStatus.COMPLETE,
+        ),
+    )
+
+
+def test_regression_pagdb201_3000_update_operacion_generic_title_never_retargeted() -> None:
+    """Regresion forense exacta (forensic run
+    `20260818T213051395444-c1fa002a`): el `RuleDraft` INICIAL real citaba
+    `table_effects[0]` (PAG_AUDITORIA, no aprobado) en el claim `title`,
+    cuyo texto real ("Actualizacion de operacion en el sistema de
+    pagos") NUNCA nombra ninguna tabla. Dos intentos reales de
+    reparacion LLM no lo corrigieron.
+
+    Prueba EXPLICITAMENTE (ver Fase 1, seccion 15 del cierre de
+    preflight) que el backstop deterministico NUNCA habria corregido
+    esta cita exacta por si solo -- el texto no prueba correspondencia
+    con ninguna tabla especifica (ni con la aprobada PAG_OPERACION, ni
+    con ninguna otra): la mejora de fiabilidad para este caso especifico
+    depende de la guia de escritor/catalogo (rule_writer_system.md regla
+    14-15, EvidenceCatalog enriquecido), NUNCA de que este mecanismo
+    adivine una correspondencia que el texto no prueba."""
+    package = _package_pagdb201_3000_update_operacion()
+    draft = _draft(
+        title="Actualizacion de operacion en el sistema de pagos",
+        context="Este proceso se lleva a cabo en el contexto de la autorizacion de pagos "
+        "empresariales en Argentina.",
+        statement="La operacion se actualiza en la base de datos de operaciones.",
+        condition="El codigo SQL ejecutado no debe devolver un error.",
+        parameters=[],
+        effect="Se actualiza el estado de la operacion a 'A' en la base de datos, y se "
+        "establece el codigo de retorno como D203 en caso de error.",
+        parameter_source=None,
+        traceability=["Basado en el codigo de actualizacion de operacion y la decision "
+        "asociada en el programa."],
+        limitations=["Requiere revision funcional."],
+        claims=[
+            Claim(
+                claim_id="claim_1",
+                field=ClaimField.TITLE,
+                evidence_paths=["$.effects.table_effects[0]"],
+                evidence_ids=["ev-effect-pag-auditoria"],
+            ),
+            Claim(
+                claim_id="claim_4",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="claim_5",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-return-code"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(
+        v.rule == "unapproved_table_effect" and v.field == "title" and v.severity == Severity.ERROR
+        for v in violations
+    )
+    assert retarget_unapproved_table_effect_citations(draft, package, violations) is None
+
+
+def test_regression_pagdb201_3000_update_operacion_table_grounded_field_retargets() -> None:
+    """Mismo ContextPackage forense exacto, pero con un `title` HIPOTETICO
+    que si describe explicitamente la mutacion de tabla (como enseña la
+    nueva regla 14-15 de rule_writer_system.md para un campo que
+    realmente afirma una mutacion) -- confirma que el mecanismo
+    deterministico SI generaliza correctamente al identificador de tabla
+    real (`PAG_OPERACION`) del candidato forense cuando el texto prueba
+    la correspondencia, sin necesidad de la fixture sintetica CUENTAS/
+    LOG_AUDITORIA usada en los casos 1-10."""
+    package = _package_pagdb201_3000_update_operacion()
+    draft = _draft(
+        title="Actualizacion de la tabla PAG_OPERACION en el sistema de pagos",
+        claims=[
+            Claim(
+                claim_id="claim_1",
+                field=ClaimField.TITLE,
+                evidence_paths=["$.effects.table_effects[0]"],
+                evidence_ids=["ev-effect-pag-auditoria"],
+            ),
+            Claim(
+                claim_id="claim_4",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="claim_5",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-return-code"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unapproved_table_effect" and v.field == "title" for v in violations)
+
+    retargeted = retarget_unapproved_table_effect_citations(draft, package, violations)
+    assert retargeted is not None
+    title_claim = next(c for c in retargeted.claims if c.claim_id == "claim_1")
+    assert title_claim.evidence_paths == ["$.effects.table_effects[1]"]
+    assert title_claim.evidence_ids == ["ev-effect-pag-operacion"]
+    assert retargeted.title == draft.title
+    assert evaluate_guardrail(retargeted, package) == []

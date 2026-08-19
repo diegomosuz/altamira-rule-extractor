@@ -66,6 +66,7 @@ from .deterministic_guardrail import (
     augment_claims_with_authoritative_anchors,
     evaluate_guardrail,
     reconstruct_traceability_deterministically,
+    retarget_unapproved_table_effect_citations,
     sanitize_traceability_number_date_violations,
 )
 from .errors import GuardrailError, LlmClientError, PromptTemplateError
@@ -392,11 +393,12 @@ def _apply_deterministic_guardrail_corrections(
     rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
 ) -> tuple[RuleDraft, list[GuardrailViolation]]:
     """Checkpoint correctivo v1.18.2 (extendido en el cierre de
-    fiabilidad de campos de negocio): intenta, en cascada, TRES
-    correcciones deterministicas ANTES de que el llamador decida si
-    consumir un intento de reparacion LLM. Nunca llama al modelo.
-    (Anteriormente `_apply_deterministic_traceability_sanitization`,
-    renombrada porque ya no se limita a traceability.)
+    fiabilidad de campos de negocio, y de nuevo en v1.18.3 Fase 1):
+    intenta, en cascada, CUATRO correcciones deterministicas ANTES de
+    que el llamador decida si consumir un intento de reparacion LLM.
+    Nunca llama al modelo. (Anteriormente
+    `_apply_deterministic_traceability_sanitization`, renombrada porque
+    ya no se limita a traceability.)
 
     Pasos 1-2 (SOLO traceability, ver docstrings de ambas funciones) --
     sin cambios respecto al checkpoint anterior:
@@ -407,7 +409,7 @@ def _apply_deterministic_guardrail_corrections(
        real: candidato 4000-VALIDAR-PRODUCTO de PAQUETE_SINTETICO_
        CATHERINE_CORREGIDO_APP_ACTUAL.zip.
 
-    Paso 3 (NUEVO, campos de NEGOCIO -- condition/effect/etc., NUNCA
+    Paso 3 (campos de NEGOCIO -- condition/effect/etc., NUNCA
     traceability) -- `augment_claims_with_authoritative_anchors`: casos
     reales VALIDAR-MORA-PARA (effect) de PAQUETE_SINTETICO_CLIENTES_
     EMPRESAS_MULTIPROGRAMA_15_REGLAS.zip y MAIN-PARA (condition) de
@@ -423,6 +425,22 @@ def _apply_deterministic_guardrail_corrections(
     ciclo de reparacion LLM existente sin cambios -- posible afirmacion
     de negocio genuinamente no soportada, que DEBE seguir fallando
     cerrado.
+
+    Paso 4 (NUEVO v1.18.3 Fase 1, violaciones `unapproved_table_effect`
+    UNICAMENTE) -- `retarget_unapproved_table_effect_citations`: caso
+    real PAGDB201::3000-UPDATE-OPERACION de PAQUETE_SINTETICO_ALTAMIRA_
+    PAGOS_EMPRESAS_EXHAUSTIVO_48_REGLAS_v1.18.2_v2_E2E.zip (forensic run
+    `20260818T213051395444-c1fa002a`): el claim `title` cito
+    `table_effects[0]` (no aprobado) cuando `table_effects[1]` (DIRECT,
+    aprobado) ya era el efecto correcto en el mismo ContextPackage. A
+    diferencia del paso 3, esta funcion REEMPLAZA (nunca amplia) la cita
+    de table_effects, y UNICAMENTE cuando el texto del propio campo de
+    negocio nombra EXACTAMENTE el identificador de tabla del efecto
+    aprobado correcto (nunca por mera unicidad de un unico efecto
+    aprobado -- ver su propio docstring para el veto duro y las tres
+    condiciones exactas). Si la correspondencia textual no puede
+    probarse, devuelve `None` y el candidato sigue su ciclo de
+    reparacion LLM existente sin cambios.
 
     Cada paso solo se intenta si el anterior no dejo el candidato sin
     violaciones ERROR. Si ninguno aplica, devuelve `rule_draft`/
@@ -468,6 +486,14 @@ def _apply_deterministic_guardrail_corrections(
         )
         if augmented is not None:
             current_draft = augmented
+            current_violations = evaluate_guardrail(current_draft, package)
+
+    if any(v.severity == Severity.ERROR for v in current_violations):
+        retargeted = retarget_unapproved_table_effect_citations(
+            current_draft, package, current_violations
+        )
+        if retargeted is not None:
+            current_draft = retargeted
             current_violations = evaluate_guardrail(current_draft, package)
 
     return current_draft, current_violations

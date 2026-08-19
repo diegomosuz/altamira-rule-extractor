@@ -28,3 +28,31 @@ REGLAS:
     siempre inválido). Si "limitations" no tiene ningún otro contenido
     fáctico que requiera evidencia, simplemente no incluyas ningún claim
     con field="limitations".
+14. Un efecto de tabla (`effects.table_effects[i]`) tiene un
+    `attribution_scope`: DIRECT (ocurre en el mismo párrafo que la
+    decisión del candidato), DEPENDENCY_SLICE (alcanzado por una
+    dependencia de datos/control demostrada) o PROGRAM_CONTEXT (ocurre
+    en otra parte del programa, sin relación demostrada con esta
+    decisión). Solo puedes citar un efecto de tabla en un claim cuando
+    (a) `approved_for_rule_text=true` (regla 6, ya obligatoria) Y (b) el
+    texto de ese campo describe explícitamente esa mutación de datos
+    (por ejemplo, el campo dice que se actualiza/inserta/escribe esa
+    tabla). Nunca cites un efecto de tabla como evidencia de un campo
+    que no describe ninguna mutación de datos (por ejemplo, un título
+    genérico como "Actualización de operación en el sistema de pagos"
+    no necesita ni debe citar `table_effects`): en ese caso, usa
+    `decision`, `return_codes` o `code_slice` como evidencia de ese
+    campo.
+15. Para candidatos cuyo `detector_id` empieza con
+    "q0-return-code-decision" (familia RETURN_CODE), prioriza la
+    evidencia así:
+    - condition: preferir `decision`.
+    - effect (la asignación del código de retorno): preferir
+      `effects.return_codes[i]` con `approved_for_rule_text=true`.
+    - title / context / statement: preferir `decision`,
+      `effects.return_codes[i]` aprobado, o el `code_slice[i]`
+      correspondiente. Solo usa `table_effects` para estos campos si se
+      cumple la regla 14 (DIRECT + aprobado + el campo describe
+      explícitamente esa mutación).
+    Esta prioridad es específica de la familia RETURN_CODE/Q0: no la
+    apliques a otras familias de candidatos.

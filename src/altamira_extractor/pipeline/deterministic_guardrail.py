@@ -28,7 +28,7 @@ from ..contracts.enums import BatchContextStatus, ClaimField, Severity
 from ..contracts.guardrail import GuardrailViolation
 from ..contracts.rule_draft import Claim, RuleDraft
 
-GUARDRAIL_VERSION = "1.2"
+GUARDRAIL_VERSION = "1.3"
 
 _PATH_TOKEN_RE = re.compile(r"\.(?P<field>[A-Za-z_][A-Za-z0-9_]*)|\[(?P<index>\d+)\]")
 
@@ -702,6 +702,184 @@ def augment_claims_with_authoritative_anchors(
             if anchor_path not in new_paths:
                 new_paths.append(anchor_path)
         new_ids = anchor_ids_by_claim_id[claim.claim_id]
+        if new_paths == claim.evidence_paths and new_ids == claim.evidence_ids:
+            updated_claims.append(claim)
+            continue
+        any_change = True
+        updated_claims.append(
+            claim.model_copy(update={"evidence_paths": new_paths, "evidence_ids": new_ids})
+        )
+
+    if not any_change:
+        return None
+    return rule_draft.model_copy(update={"claims": updated_claims})
+
+
+def _table_identifier_present(text: str, table: str) -> bool:
+    """Coincidencia EXACTA por limite de palabra de un identificador de
+    tabla (`TableEffect.table`) dentro de texto libre -- NUNCA substring:
+    `_` es un caracter `\\w` en Python, asi que `\\b` ya rechaza una
+    coincidencia en medio de un identificador mas largo sin logica
+    adicional (`PAG_OPER` nunca coincide dentro de `PAG_OPERACION`, porque
+    no hay transicion \\w/no-\\w entre `R` y `A`). Case-sensitive de forma
+    deliberada: `TableEffect.table` ya esta persistido por el parser en
+    una unica forma canonica (sin contrato de normalizacion de
+    mayusculas/minusculas en este codebase) -- el guardrail nunca debe
+    adivinar una normalizacion de case que no existe."""
+    return re.search(r"\b" + re.escape(table) + r"\b", text) is not None
+
+
+def retarget_unapproved_table_effect_citations(
+    rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
+) -> RuleDraft | None:
+    """Correccion deterministica ACOTADA (checkpoint correctivo v1.18.3,
+    cierre de fiabilidad de citacion table_effect -- candidato real
+    PAGDB201::3000-UPDATE-OPERACION de PAQUETE_SINTETICO_ALTAMIRA_
+    PAGOS_EMPRESAS_EXHAUSTIVO_48_REGLAS_v1.18.2_v2_E2E.zip, familia
+    RETURN_CODE/Q0: el modelo cito `table_effects[0]` (PAG_AUDITORIA,
+    PROGRAM_CONTEXT, no aprobado) en el claim `title`, cuando el efecto
+    DIRECT+aprobado real (PAG_OPERACION, `table_effects[1]`) ya existia
+    en el mismo ContextPackage. Dos intentos reales de reparacion LLM no
+    lo corrigieron -- ver forensic run
+    `20260818T213051395444-c1fa002a`, `guardrails-failure-diagnostics.json`.
+
+    A diferencia de `augment_claims_with_authoritative_anchors` (que
+    SOLO AMPLIA evidence_paths/evidence_ids para numeros/fechas ya
+    respaldados por `$.decision`/`$.effects.return_codes[i]`), esta
+    funcion corrige violaciones `unapproved_table_effect`: REEMPLAZA
+    (nunca amplia) la cita `table_effects[k]` no aprobada por
+    `table_effects[j]` aprobada, y UNICAMENTE cuando la correspondencia
+    semantica esta probada de forma exacta y no ambigua contra el TEXTO
+    del propio campo de negocio del claim.
+
+    Diseno v1.18.3 Fase 1 (decision explicita, ver cierre de preflight):
+    la version anterior de este diseno proponia una "Signal B" -- corregir
+    por mera UNICIDAD de un unico efecto aprobado cuando el texto no
+    nombra ninguna tabla -- FUE RECHAZADA: la ausencia de un identificador
+    de tabla en la prosa NUNCA prueba que un unico efecto aprobado
+    respalda semanticamente esa prosa. Esta funcion implementa
+    UNICAMENTE la senal "Signal A": correspondencia textual EXACTA.
+
+    Invariante de seguridad (TODAS deben cumplirse para cada violacion
+    `unapproved_table_effect` sobre `table_effects[k]` de un claim):
+      A. el texto de negocio del campo del claim (`_draft_text_for_claim_
+         field`, la MISMA funcion que usa el resto del modulo) contiene,
+         por coincidencia EXACTA de limite de palabra
+         (`_table_identifier_present`, nunca substring/fuzzy/embedding/
+         LLM), el identificador `table_effects[j].table` de un efecto
+         `j != k` con `approved_for_rule_text=True`;
+      B. exactamente UN `j` cumple (A) -- cero coincidencias (sin prueba
+         textual) o dos o mas (ambiguedad: el texto nombra mas de una
+         tabla aprobada) NUNCA se corrigen, sin importar cuantos efectos
+         aprobados existan en total en el ContextPackage;
+      C. el identificador de la tabla NO aprobada citada erroneamente
+         (`table_effects[k].table`) NO aparece tambien en el texto --
+         veto duro: si aparece, el modelo probablemente SI queria hablar
+         de esa tabla, y NUNCA se sobreescribe una afirmacion de negocio
+         explicita con evidencia de una tabla distinta (contraejemplo
+         explicito del cierre de preflight: claim que nombra
+         'PAG_AUDITORIA' con cita erronea a PAG_AUDITORIA no aprobada y
+         un unico PAG_OPERACION aprobado -- DEBE fallar cerrado, nunca
+         retargetear a PAG_OPERACION).
+
+    Si CUALQUIER violacion `unapproved_table_effect` del conjunto actual
+    no cumple las tres condiciones, esta funcion devuelve `None` sin
+    aplicar NINGUN cambio (ni siquiera a las violaciones que si las
+    cumplirian) -- mismo TODO-O-NADA que `augment_claims_with_
+    authoritative_anchors`, y el candidato completo sigue su ciclo de
+    reparacion LLM existente sin cambios.
+
+    Nunca toca title/context/statement/condition/effect/parameters/
+    parameter_source/outcome_code/traceability/limitations/claim.field/
+    claim.claim_id -- unicamente `claim.evidence_paths`/`claim.
+    evidence_ids` de los claims afectados. Nunca elimina un claim ni lo
+    deja con `evidence_paths`/`evidence_ids` vacios (violaria
+    `min_length=1` del contrato `Claim`, y reabriria el hueco de
+    validacion claim-driven documentado en el cierre de preflight de
+    v1.18.3: un campo sin ningun claim queda invisible para
+    `_check_numbers_and_dates`/`_check_approved_for_rule_text`)."""
+    table_effect_violations = [
+        v
+        for v in violations
+        if v.severity == Severity.ERROR and v.rule == "unapproved_table_effect"
+    ]
+    if not table_effect_violations:
+        return None
+
+    claims_by_id = {claim.claim_id: claim for claim in rule_draft.claims}
+    approved_effects = [
+        (index, effect)
+        for index, effect in enumerate(package.effects.table_effects)
+        if effect.approved_for_rule_text
+    ]
+
+    path_replacements_by_claim_id: dict[str, dict[str, str]] = {}
+    ids_to_remove_by_claim_id: dict[str, set[str]] = {}
+    ids_to_add_by_claim_id: dict[str, list[str]] = {}
+
+    for violation in table_effect_violations:
+        parts = violation.violation_id.split("::")
+        if len(parts) != 3:
+            return None
+        _rule, claim_id, index_text = parts
+        claim = claims_by_id.get(claim_id)
+        if claim is None:
+            return None
+        if not index_text.isdigit():
+            return None
+        wrong_index = int(index_text)
+        if not (0 <= wrong_index < len(package.effects.table_effects)):
+            return None
+        wrong_effect = package.effects.table_effects[wrong_index]
+        wrong_path = f"$.effects.table_effects[{wrong_index}]"
+        if wrong_path not in claim.evidence_paths:
+            return None
+
+        field_text = _draft_text_for_claim_field(rule_draft, claim.field)
+
+        if _table_identifier_present(field_text, wrong_effect.table):
+            return None  # veto duro (condicion C)
+
+        matches = [
+            (index, effect)
+            for index, effect in approved_effects
+            if _table_identifier_present(field_text, effect.table)
+        ]
+        if len(matches) != 1:
+            return None  # sin prueba textual, o ambiguo (condiciones A/B)
+
+        match_index, match_effect = matches[0]
+        target_path = f"$.effects.table_effects[{match_index}]"
+
+        claim_replacements = path_replacements_by_claim_id.setdefault(claim_id, {})
+        claim_replacements[wrong_path] = target_path
+        ids_to_remove_by_claim_id.setdefault(claim_id, set()).update(wrong_effect.evidence_ids)
+        claim_ids_to_add = ids_to_add_by_claim_id.setdefault(claim_id, [])
+        for evidence_id in match_effect.evidence_ids:
+            if evidence_id not in claim_ids_to_add:
+                claim_ids_to_add.append(evidence_id)
+
+    if not path_replacements_by_claim_id:
+        return None
+
+    updated_claims: list[Claim] = []
+    any_change = False
+    for claim in rule_draft.claims:
+        replacements = path_replacements_by_claim_id.get(claim.claim_id)
+        if replacements is None:
+            updated_claims.append(claim)
+            continue
+        new_paths = [replacements.get(path, path) for path in claim.evidence_paths]
+        ids_to_remove = ids_to_remove_by_claim_id.get(claim.claim_id, set())
+        new_ids = [eid for eid in claim.evidence_ids if eid not in ids_to_remove]
+        for evidence_id in ids_to_add_by_claim_id.get(claim.claim_id, []):
+            if evidence_id not in new_ids:
+                new_ids.append(evidence_id)
+        if not new_paths or not new_ids:
+            # nunca dejar un claim sin evidencia (min_length=1): si esto
+            # ocurriera, la correspondencia asumida no era segura -- se
+            # descarta la correccion completa para este candidato.
+            return None
         if new_paths == claim.evidence_paths and new_ids == claim.evidence_ids:
             updated_claims.append(claim)
             continue

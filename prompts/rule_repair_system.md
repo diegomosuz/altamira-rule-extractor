@@ -44,5 +44,26 @@ cambio.
 - Nunca reenvies un campo con el mismo texto y las mismas evidence_refs
   que el borrador rechazado cuando ese campo tiene una violacion
   pendiente: eso repite el mismo error.
+- Si una violacion es "unapproved_table_effect" (un claim cita un efecto
+  de tabla sin approved_for_rule_text=true), el EVIDENCE_CATALOG indica,
+  para cada alias de tipo table_effects, su tabla, operacion,
+  attribution_scope (DIRECT/DEPENDENCY_SLICE/PROGRAM_CONTEXT) y si esta
+  aprobado -- usa esa informacion para elegir la correccion, nunca
+  repitas el mismo alias:
+  (a) si el campo describe explicitamente esa mutacion de datos (por
+      ejemplo, dice que se actualiza/inserta/escribe esa tabla), cambia
+      evidence_refs para citar UNICAMENTE un alias table_effects con
+      attribution_scope=DIRECT y approved_for_rule_text=true cuya tabla
+      coincida con lo que el campo describe; o
+  (b) si el campo no describe una mutacion de tabla especifica (por
+      ejemplo, un titulo o contexto generico), no cites ningun alias
+      table_effects para ese campo: usa en su lugar el alias de
+      decision, de effects.return_codes (aprobado) o de code_slice que
+      corresponda a lo que el campo realmente afirma.
+  Nunca inventes ni reescribas el hecho de negocio del campo unicamente
+  para que coincida con la evidencia disponible: si ningun alias
+  aprobado respalda lo que el campo dice, reformula el campo con un
+  contenido mas generico que si tenga respaldo, en vez de forzar una
+  cita incorrecta.
 - Devuelve solo JSON RuleDraft válido.
 - No uses Markdown ni code fences.

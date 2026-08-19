@@ -32,6 +32,7 @@ from typing import Any
 
 from ..contracts.context_package import ContextPackage, EvidenceEntry
 from ..contracts.rule_draft import RuleDraft
+from .deterministic_guardrail import resolve_json_path
 
 _ALIAS_WIDTH = 3
 _PATH_SEGMENT_RE = re.compile(r"\.(?P<field>[A-Za-z_][A-Za-z0-9_]*)|\[(?P<index>\d+)\]")
@@ -146,6 +147,48 @@ def _describe_evidence(entry: EvidenceEntry | None) -> str:
     return f"{entry.kind} ({location})"
 
 
+def _classification_suffix(kind: str, path: str, context_dict: dict[str, Any]) -> str:
+    """Sufijo de clasificacion ACOTADO (checkpoint correctivo v1.18.3,
+    cierre del defecto de citacion table_effect -- ver
+    `retarget_unapproved_table_effect_citations` en
+    `deterministic_guardrail.py`): UNICAMENTE para
+    `kind in {"table_effects", "return_codes"}` -- nunca para ningun
+    otro contenedor, preservando la genericidad estructural de
+    `_kind_of_anchor_path`/`_describe_evidence` para todo lo demas.
+
+    Expone al modelo la MISMA metadata de clasificacion que ya existe en
+    el `ContextPackage` real (`table`/`operation`/`attribution_scope`/
+    `approved_for_rule_text` para `table_effects`; `code`/
+    `approved_for_rule_text` para `return_codes`) -- nunca un
+    `evidence_id`/`evidence_path` real, nunca un hecho de negocio
+    ausente del ContextPackage, nunca cambia la identidad del alias.
+    Antes de este checkpoint, tres entradas `table_effects[0..2]` de un
+    mismo candidato eran indistinguibles entre si en el catalogo salvo
+    por rango de lineas (`kind="table_effects"` identico, descripcion
+    generica identica) -- el modelo no podia distinguir la aprobada de
+    las que no lo estan sin ver el ContextPackage crudo."""
+    if kind not in ("table_effects", "return_codes"):
+        return ""
+    found, value = resolve_json_path(context_dict, path)
+    if not found or not isinstance(value, dict):
+        return ""
+    approved = value.get("approved_for_rule_text")
+    if kind == "table_effects":
+        table = value.get("table")
+        operation = value.get("operation")
+        attribution_scope = value.get("attribution_scope")
+        if not isinstance(table, str) or not isinstance(operation, str):
+            return ""
+        return (
+            f"[tabla={table}, operacion={operation}, "
+            f"attribution_scope={attribution_scope}, approved_for_rule_text={approved}]"
+        )
+    code = value.get("code")
+    if not isinstance(code, str):
+        return ""
+    return f"[codigo={code}, approved_for_rule_text={approved}]"
+
+
 def _collect_evidence_id_container_pairs(
     node: object, path: str, known_evidence_ids: frozenset[str]
 ) -> list[tuple[str, str]]:
@@ -192,15 +235,22 @@ def build_evidence_catalog(package: ContextPackage) -> EvidenceCatalog:
     pairs = _collect_evidence_id_container_pairs(context_dict, "$", known_evidence_ids)
     unique_pairs = sorted(set(pairs))
 
-    entries = tuple(
-        EvidenceCatalogEntry(
+    def _entry(index: int, evidence_id: str, path: str) -> EvidenceCatalogEntry:
+        kind = _kind_of_anchor_path(path)
+        description = _describe_evidence(evidence_by_id.get(evidence_id))
+        suffix = _classification_suffix(kind, path, context_dict)
+        if suffix:
+            description = f"{description} {suffix}"
+        return EvidenceCatalogEntry(
             alias=f"E{index + 1:0{_ALIAS_WIDTH}d}",
             evidence_id=evidence_id,
             evidence_path=path,
-            kind=_kind_of_anchor_path(path),
-            description=_describe_evidence(evidence_by_id.get(evidence_id)),
+            kind=kind,
+            description=description,
         )
-        for index, (evidence_id, path) in enumerate(unique_pairs)
+
+    entries = tuple(
+        _entry(index, evidence_id, path) for index, (evidence_id, path) in enumerate(unique_pairs)
     )
     return EvidenceCatalog(entries=entries)
 
