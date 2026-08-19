@@ -31,10 +31,12 @@ from altamira_extractor.contracts.enums import (
 )
 from altamira_extractor.contracts.semantic_graph import GraphNode, GraphRelationship, SemanticGraph
 from altamira_extractor.pipeline.enhanced_candidate_integration import (
+    _convert_unconditional_calculation,
     _ConvertedCandidate,
     _merge_candidates,
     detect_enhanced_candidates,
     functional_identity_key,
+    functional_identity_key_for_unconditional_calculation,
     suppress_superseded_v1_return_code_ghosts,
 )
 
@@ -109,7 +111,7 @@ def _data_item(qualified_name: str, *, level: int = 1) -> CanonicalDataItem:
 def _build_graph_with_source_file(
     *,
     program: CanonicalProgram,
-    decisions: Sequence[tuple[str, int, str]],
+    decisions: Sequence[tuple[str, int, str] | tuple[str, int, str, str | None]],
     data_item_tags: dict[str, str | None],
     paragraph_source_file: str | None | object = _UNSET,
 ) -> SemanticGraph:
@@ -122,7 +124,16 @@ def _build_graph_with_source_file(
     defecto usa `program.source_file` (comportamiento historico, sin
     cambios); pasar explicitamente `None` simula un Paragraph con
     `location_kind` != EXACT (COPY) para probar que ya no se descarta
-    el candidato solo por eso."""
+    el candidato solo por eso.
+
+    `decisions` (Fase 3 v1.18.3, checkpoint correctivo de limites de
+    token): cada entrada acepta un 4to elemento OPCIONAL,
+    `legacy_expression` (`None` si se omite -- EXACTAMENTE el
+    comportamiento previo a esta fase para todo test existente, que
+    sigue pasando 3-tuplas sin cambios), reflejado en la propiedad
+    `Decision.legacy_expression` -- unica forma de simular en un test el
+    dato que el generador Java ahora expone para IF/EVALUATE-subject/
+    COMPUTE (ver `enhanced_candidate_integration._convert_v2_candidate`)."""
     program_name = program.program_name
     prog_node_id = program_node_id(program_name)
     nodes: list[GraphNode] = [
@@ -154,7 +165,9 @@ def _build_graph_with_source_file(
         )
 
     ordinal_by_paragraph: dict[str, int] = {}
-    for paragraph_name, line_start, expression in decisions:
+    for entry in decisions:
+        paragraph_name, line_start, expression, *legacy_rest = entry
+        legacy_expression = legacy_rest[0] if legacy_rest else None
         ordinal_by_paragraph[paragraph_name] = ordinal_by_paragraph.get(paragraph_name, 0) + 1
         ordinal = ordinal_by_paragraph[paragraph_name]
         dec_id = decision_node_id_for(program_name, paragraph_name, line_start, ordinal)
@@ -166,6 +179,7 @@ def _build_graph_with_source_file(
                     "line_start": line_start,
                     "line_end": line_start,
                     "expression": expression,
+                    "legacy_expression": legacy_expression,
                     "outcome_code": None,
                     "rule_type": None,
                 },
@@ -563,6 +577,7 @@ def _converted(
     condition: str = "CONDICION",
     legacy_condition: str | None = None,
     outcome_code: str | None = "0005",
+    legacy_outcome_code: str | None = None,
     rule_family: UnifiedRuleFamily = UnifiedRuleFamily.RETURN_CODE,
     detector_id: str = "V2_RETURN_CODE_PROPAGATION",
     detector_version: str = "1.0",
@@ -578,7 +593,15 @@ def _converted(
     `key`==`legacy_key` reproduce exactamente el comportamiento anterior
     a `_finalize_collision_safe_keys`). Los tests de ese gate especifico
     pasan un `legacy_condition` distinto para simular una rama
-    corregida."""
+    corregida.
+
+    `legacy_outcome_code` (Fase 3 v1.18.3): analogo para `effect`,
+    por defecto igual a `outcome_code` -- ningun test preexistente a
+    Fase 3 necesitaba que `effect` divergiera entre `key`/`legacy_key`
+    (solo `condition` podia hacerlo bajo Ciclo 4). Los tests de
+    divergencia adversarial de `effect` (formula CALCULATION con
+    espaciado corregido) pasan un valor distinto para simular esa
+    divergencia sin necesitar un CanonicalStatement/grafo completo."""
     key = functional_identity_key(
         paragraph_id=paragraph_id,
         decision_id=decision_id,
@@ -590,7 +613,7 @@ def _converted(
         paragraph_id=paragraph_id,
         decision_id=decision_id,
         condition=legacy_condition if legacy_condition is not None else condition,
-        effect=outcome_code or "",
+        effect=legacy_outcome_code if legacy_outcome_code is not None else (outcome_code or ""),
         rule_family=rule_family,
     )
     return _ConvertedCandidate(
@@ -1313,7 +1336,10 @@ def test_result_is_deterministic_across_repeated_calls() -> None:
 
 
 def _run_detection(
-    program: CanonicalProgram, decisions: list[tuple[str, int, str]], *, tags: dict[str, str | None]
+    program: CanonicalProgram,
+    decisions: Sequence[tuple[str, int, str] | tuple[str, int, str, str | None]],
+    *,
+    tags: dict[str, str | None],
 ) -> tuple[list[RuleCandidate], list[str]]:
     graph = _build_graph_with_source_file(program=program, decisions=decisions, data_item_tags=tags)
     return detect_enhanced_candidates(
@@ -2656,3 +2682,551 @@ def test_state_transition_semantic_tags_match_qualification_adapter() -> None:
             f"gate diverge para tag={tag!r}: productivo={productive_result}, "
             f"qualification={qualification_result}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Fase 3 v1.18.3 (checkpoint correctivo de limites de token): matriz de
+# compatibilidad de candidate_id (seccion 10). El generador Java ahora
+# renderiza expresiones IF/EVALUATE-subject/COMPUTE respetando limites de
+# token ("SQLCODE NOT = 0" en vez de "SQLCODENOT=0") y expone
+# `Decision.legacy_expression` (el texto pegado que el getText() previo
+# habria producido) para que `legacy_condition`/`legacy_key` (Ciclo 4,
+# v1.18.2) sigan reproduciendo, byte a byte, el candidate_id que un grafo
+# generado por el parser ANTERIOR a esta fase ya habia calculado.
+#
+# Estrategia de prueba "antes/despues" (seccion 19): un run PRE-Fase-3
+# simula el grafo tal como lo habria producido el parser anterior (texto
+# pegado en `Decision.expression`, SIN `legacy_expression` -- el campo ni
+# existia); un run POST-Fase-3 usa el texto correctamente espaciado mas
+# `legacy_expression` (la reconstruccion pegada real). Ambos runs deben
+# producir el MISMO candidate_id -- unica forma de probar preservacion sin
+# depender de recalcular el hash esperado a mano en el test.
+# ---------------------------------------------------------------------------
+
+
+def test_10a_v1_q0_candidate_id_never_depends_on_condition_text() -> None:
+    """Seccion 10.A: V1/Q0 IF `SQLCODE NOT = 0` -- candidate_id V1/Q0 se
+    deriva unicamente de `source_package_hash`/`decision_id`
+    (`candidate_detector.candidate_id_for`), nunca de `condition`.
+    Estructuralmente invariante ante la correccion de espaciado: no hace
+    falta ningun mecanismo de compatibilidad para V1/Q0, a diferencia de
+    V2/enhanced."""
+    from altamira_extractor.pipeline.candidate_detector import _row_to_candidate
+
+    row_glued = {
+        "paragraph_id": "P1",
+        "paragraph_name": "A",
+        "decision_id": "DEC1",
+        "condition": "SQLCODENOT=0",
+        "outcome": "R001",
+        "rule_type": "RETURN_CODE",
+        "line_start": 10,
+        "source_file": "x.cbl",
+    }
+    row_spaced = {**row_glued, "condition": "SQLCODE NOT = 0"}
+
+    candidate_before = _row_to_candidate(row_glued, source_package_hash=HASH)
+    candidate_after = _row_to_candidate(row_spaced, source_package_hash=HASH)
+
+    assert candidate_before.candidate_id == candidate_after.candidate_id
+    assert candidate_before.condition == "SQLCODENOT=0"
+    assert candidate_after.condition == "SQLCODE NOT = 0"
+
+
+def _return_code_program_and_decisions(
+    *, condition: str
+) -> tuple[CanonicalProgram, list[tuple[str, int, str]]]:
+    if_stmt = make_stmt(
+        statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression=condition
+    )
+    s1 = make_stmt(
+        statement_id="P1::A::1::MOVE",
+        target_data_items=["WS-AUX"],
+        variables_written=["WS-AUX"],
+        assigned_literal="0005",
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    s2 = make_stmt(
+        statement_id="P1::A::2::MOVE",
+        target_data_items=["WS-COD-RETORNO"],
+        variables_written=["WS-COD-RETORNO"],
+        variables_read=["WS-AUX"],
+        parent_statement_id="P1::A::0::IF",
+        branch_kind="THEN",
+    )
+    paragraph = CanonicalParagraph(
+        name="A",
+        source_text="A.",
+        location_kind=LocationKind.UNKNOWN,
+        statements=[if_stmt, s1, s2],
+        variables_read=["WS-AUX"],
+        variables_written=["WS-AUX", "WS-COD-RETORNO"],
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-AUX"), _data_item("WS-COD-RETORNO")],
+        paragraphs=[paragraph],
+    )
+    return program, [("A", 10, condition)]
+
+
+def test_10b_return_code_condition_spacing_corrected_legacy_id_preserved() -> None:
+    """Seccion 10.B: V2_RETURN_CODE_PROPAGATION -- condition espaciado
+    corregido, legacy candidate_id preservado (sin colision: unico
+    candidato bajo este legacy_key en el run)."""
+    glued_condition = "WS-TIPONOT='X'"
+    spaced_condition = "WS-TIPO NOT = 'X'"
+
+    program_before, decisions_before = _return_code_program_and_decisions(
+        condition=glued_condition
+    )
+    candidates_before, warnings_before = _run_detection(
+        program_before, decisions_before, tags={"WS-AUX": None, "WS-COD-RETORNO": "return_code"}
+    )
+    assert_only_state_change_discard_warnings(warnings_before, targets=["WS-AUX"])
+    assert len(candidates_before) == 1
+
+    program_after, _ = _return_code_program_and_decisions(condition=spaced_condition)
+    candidates_after, warnings_after = _run_detection(
+        program_after,
+        [("A", 10, spaced_condition, glued_condition)],
+        tags={"WS-AUX": None, "WS-COD-RETORNO": "return_code"},
+    )
+    assert_only_state_change_discard_warnings(warnings_after, targets=["WS-AUX"])
+    assert len(candidates_after) == 1
+
+    assert candidates_after[0].condition == spaced_condition
+    assert candidates_before[0].condition == glued_condition
+    assert candidates_after[0].candidate_id == candidates_before[0].candidate_id, (
+        "el candidate_id debe permanecer identico al que un grafo PRE-Fase-3 "
+        "(texto pegado, sin legacy_expression) ya habria calculado"
+    )
+
+
+def test_10c_level88_return_code_legacy_condition_reversion_is_family_agnostic() -> None:
+    """Seccion 10.C: LEVEL_88_RETURN_CODE -- `_convert_v2_candidate`
+    calcula `legacy_condition` ANTES de ramificar por `rule_family` (ver
+    docstring), asi que la reversion a `legacy_key` funciona igual para
+    esta familia que para RETURN_CODE/STATE_TRANSITION/CALCULATION.
+    Prueba directa a nivel de `_ConvertedCandidate`/`_finalize_collision_
+    safe_keys` (mismo patron que los tests de Ciclo 4 ya existentes en
+    este archivo), sin necesidad de duplicar todo el pipeline de
+    deteccion end-to-end."""
+    spaced_condition = "WS-FLAG NOT = 'S'"
+    glued_condition = "WS-FLAGNOT='S'"
+    member = _converted(
+        rule_family=UnifiedRuleFamily.LEVEL_88_RETURN_CODE,
+        detector_id="V2_LEVEL_88_RETURN_CODE",
+        condition=spaced_condition,
+        legacy_condition=glued_condition,
+        outcome_code="D203",
+    )
+    candidates, warnings = _merge_candidates(
+        [member], _empty_v1_candidates(), source_package_hash=HASH
+    )
+    assert warnings == []
+    assert len(candidates) == 1
+    assert candidates[0].condition == spaced_condition
+    assert candidates[0].candidate_id == f"candidate::enhanced::{HASH}::{member.legacy_key}"
+
+
+def test_10d_state_transition_condition_spacing_corrected_legacy_id_preserved() -> None:
+    """Seccion 10.D: STATE_TRANSITION -- condition espaciado corregido,
+    legacy candidate_id preservado."""
+    glued_condition = "ANOT='S'"
+    spaced_condition = "A NOT = 'S'"
+
+    def _build(condition: str) -> CanonicalProgram:
+        if_stmt = make_stmt(
+            statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression=condition
+        )
+        move_stmt = make_stmt(
+            statement_id="P1::A::1::MOVE",
+            target_data_items=["WS-ESTADO"],
+            variables_written=["WS-ESTADO"],
+            assigned_literal="R",
+            parent_statement_id="P1::A::0::IF",
+            branch_kind="THEN",
+        )
+        paragraph = CanonicalParagraph(
+            name="A",
+            source_text="A.",
+            location_kind=LocationKind.UNKNOWN,
+            statements=[if_stmt, move_stmt],
+            variables_written=["WS-ESTADO"],
+        )
+        return _program(
+            program_name="PROG1", data_items=[_data_item("WS-ESTADO")], paragraphs=[paragraph]
+        )
+
+    candidates_before, warnings_before = _run_detection(
+        _build(glued_condition), [("A", 10, glued_condition)], tags={"WS-ESTADO": "status"}
+    )
+    assert warnings_before == []
+    assert len(candidates_before) == 1
+
+    candidates_after, warnings_after = _run_detection(
+        _build(spaced_condition),
+        [("A", 10, spaced_condition, glued_condition)],
+        tags={"WS-ESTADO": "status"},
+    )
+    assert warnings_after == []
+    assert len(candidates_after) == 1
+
+    assert candidates_after[0].condition == spaced_condition
+    assert candidates_after[0].candidate_id == candidates_before[0].candidate_id
+
+
+def test_10e_conditioned_calculation_spacing_corrected_legacy_id_preserved() -> None:
+    """Seccion 10.E: CALCULATION conditionada -- tanto el `condition` del
+    IF que la ampara COMO la `formula` del propio COMPUTE (parte de
+    `effect`, ver `_calculation_target_and_formula`) tienen su propia
+    correccion de espaciado; ambas deben preservar el candidate_id legacy
+    simultaneamente cuando no hay colision."""
+    glued_condition = "WS-TIPONOT='X'"
+    spaced_condition = "WS-TIPO NOT = 'X'"
+    glued_formula = "WS-MONTO*WS-TASA"
+    spaced_formula = "WS-MONTO * WS-TASA"
+
+    def _build(*, condition: str, formula: str, legacy_formula: str | None) -> CanonicalProgram:
+        if_stmt = make_stmt(
+            statement_id="P1::A::0::IF", kind=StatementKind.IF, line_start=10, expression=condition
+        )
+        compute_stmt = make_stmt(
+            statement_id="P1::A::1::COMPUTE",
+            kind=StatementKind.COMPUTE,
+            target_data_items=["WS-COMISION"],
+            variables_written=["WS-COMISION"],
+            variables_read=["WS-MONTO", "WS-TASA"],
+            expression=formula,
+            legacy_expression=legacy_formula,
+            parent_statement_id="P1::A::0::IF",
+            branch_kind="THEN",
+        )
+        paragraph = CanonicalParagraph(
+            name="A",
+            source_text="A.",
+            location_kind=LocationKind.UNKNOWN,
+            statements=[if_stmt, compute_stmt],
+            variables_read=["WS-MONTO", "WS-TASA"],
+            variables_written=["WS-COMISION"],
+        )
+        return _program(
+            program_name="PROG1",
+            data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+            paragraphs=[paragraph],
+        )
+
+    # "before": simula un grafo PRE-Fase-3 -- `expression` YA pegado
+    # (igual que produciria el parser anterior), `legacy_expression`
+    # tambien pegado e IGUAL a `expression` (el campo aun no distinguia
+    # nada: pre-Fase-3 no existia divergencia posible). Evita a proposito
+    # el fallback a `source_text` de `_calculation_target_and_formula`
+    # (solo relevante para ADD/SUBTRACT/MULTIPLY/DIVIDE, fuera de
+    # alcance de este caso).
+    candidates_before, warnings_before = _run_detection(
+        _build(condition=glued_condition, formula=glued_formula, legacy_formula=glued_formula),
+        [("A", 10, glued_condition, glued_condition)],
+        tags={},
+    )
+    assert warnings_before == []
+    assert len(candidates_before) == 1
+
+    candidates_after, warnings_after = _run_detection(
+        _build(condition=spaced_condition, formula=spaced_formula, legacy_formula=glued_formula),
+        [("A", 10, spaced_condition, glued_condition)],
+        tags={},
+    )
+    assert warnings_after == []
+    assert len(candidates_after) == 1
+
+    assert candidates_after[0].condition == spaced_condition
+    assert candidates_after[0].candidate_id == candidates_before[0].candidate_id, (
+        "condition Y formula corregidas simultaneamente deben seguir preservando "
+        "el candidate_id legacy cuando ninguna colisiona"
+    )
+
+
+def test_10f_unconditional_calculation_unchanged_when_formula_has_no_spacing_divergence() -> None:
+    """Seccion 10.F: CALCULATION incondicional -- cuando la formula NO
+    cambia por el fix de espaciado (formula de un solo token, o
+    `legacy_expression is None` porque el statement es ADD/SUBTRACT/
+    MULTIPLY/DIVIDE sin nodo de expresion dedicado -- ver docstring de
+    `_calculation_target_and_formula`), `legacy_key == key` exactamente
+    como antes de esta fase: comportamiento sin cambios."""
+    v2_candidate = _unconditional_calculation_candidate(
+        anchor_statement_id="P1::A::1::MULTIPLY", target_variable="WS-COMISION", formula=None
+    )
+    ctx = _unconditional_calculation_ctx(
+        anchor_statement_id="P1::A::1::MULTIPLY",
+        source_text="MULTIPLY WS-MONTO BY WS-TASA GIVING WS-COMISION",
+        expression=None,
+        legacy_expression=None,
+    )
+    converted, reason = _convert_unconditional_calculation(v2_candidate, ctx)
+    assert reason is None
+    assert converted is not None
+    assert converted.key == converted.legacy_key
+
+
+def test_10f_unconditional_calculation_diverges_when_formula_has_spacing_divergence() -> None:
+    """Complemento adversarial del caso F: cuando la formula SI cambia
+    (COMPUTE multi-token), `legacy_key` diverge de `key` -- probando que
+    el candidate_id sigue siendo recuperable via el mismo gate de
+    compatibilidad usado por el resto de familias (nunca un mecanismo
+    paralelo)."""
+    v2_candidate = _unconditional_calculation_candidate(
+        anchor_statement_id="P1::A::1::COMPUTE", target_variable="WS-COMISION", formula=None
+    )
+    ctx = _unconditional_calculation_ctx(
+        anchor_statement_id="P1::A::1::COMPUTE",
+        source_text="COMPUTE WS-COMISION = WS-MONTO * WS-TASA",
+        expression="WS-MONTO * WS-TASA",
+        legacy_expression="WS-MONTO*WS-TASA",
+    )
+    converted, reason = _convert_unconditional_calculation(v2_candidate, ctx)
+    assert reason is None
+    assert converted is not None
+    assert converted.key != converted.legacy_key
+
+    expected_legacy_key = functional_identity_key_for_unconditional_calculation(
+        program_id=program_node_id("PROG1"),
+        paragraph_id=paragraph_node_id("PROG1", "A"),
+        source_statement_id="P1::A::1::COMPUTE",
+        target="WS-COMISION",
+        formula="WS-MONTO*WS-TASA",
+    )
+    assert converted.legacy_key == expected_legacy_key
+
+
+def _unconditional_calculation_candidate(
+    *, anchor_statement_id: str, target_variable: str, formula: str | None
+) -> object:
+    del formula  # la formula real la aporta el CanonicalStatement en ctx, nunca el candidato
+    from altamira_extractor.contracts.v2_shadow_candidates import (
+        V2CandidateSourceReference,
+        V2CandidateSupport,
+        V2RuleType,
+        V2ShadowCandidate,
+    )
+
+    return V2ShadowCandidate(
+        candidate_id="v2::calc::1",
+        detector_id="V2_CALCULATION",
+        detector_version="1.0",
+        rule_type=V2RuleType.CALCULATION_RULE,
+        support=V2CandidateSupport.DETERMINISTIC,
+        detector_score=1.0,
+        program="PROG1",
+        paragraph="A",
+        anchor_statement_id=anchor_statement_id,
+        decision_id=None,
+        target_variable=target_variable,
+        target_qualified_name=target_variable,
+        # resolved_literal (Fase 15B3-C2-B1): SIEMPRE None de forma
+        # semantica para CALCULATION en el pipeline real -- pero el
+        # validador de V2ShadowCandidate exige un valor no-None para
+        # support=DETERMINISTIC de forma generica (sin excepcion por
+        # rule_type). Placeholder inerte: `_convert_unconditional_
+        # calculation`/`_calculation_target_and_formula` nunca lo leen.
+        resolved_literal="N/A",
+        semantic_effect_ids=["effect::1"],
+        propagation_fact_ids=["fact::1"],
+        source_references=[V2CandidateSourceReference(program="PROG1", paragraph="A")],
+        reason="calculo determinista para prueba de compatibilidad de candidate_id",
+    )
+
+
+def _unconditional_calculation_ctx(
+    *,
+    anchor_statement_id: str,
+    source_text: str,
+    expression: str | None,
+    legacy_expression: str | None,
+) -> object:
+    """`V2DetectorContext` minimo: solo `statement_by_id`/
+    `paragraph_node_by_key` son consultados por `_convert_unconditional_
+    calculation`/`_calculation_target_and_formula` -- el resto de campos
+    se dejan en su valor "vacio" valido, nunca fabricando datos que la
+    funcion bajo prueba no necesita."""
+    from dataclasses import replace
+
+    stmt = make_stmt(
+        statement_id=anchor_statement_id,
+        kind=StatementKind.COMPUTE,
+        source_text=source_text,
+        expression=expression,
+        legacy_expression=legacy_expression,
+        line_start=10,
+    )
+    program = _program(
+        program_name="PROG1",
+        data_items=[_data_item("WS-COMISION"), _data_item("WS-MONTO"), _data_item("WS-TASA")],
+        paragraphs=[
+            CanonicalParagraph(
+                name="A", source_text="A.", location_kind=LocationKind.UNKNOWN, statements=[stmt]
+            )
+        ],
+    )
+    base_ctx = build_ctx(program=program, decisions=(), data_item_tags={})
+    paragraph_node = base_ctx.paragraph_node_by_key[("PROG1", "A")]
+    patched_paragraph_node = paragraph_node.model_copy(
+        update={"properties": {**paragraph_node.properties, "source_file": SRC}}
+    )
+    return replace(
+        base_ctx,
+        statement_by_id={anchor_statement_id: stmt},
+        paragraph_node_by_key={("PROG1", "A"): patched_paragraph_node},
+    )
+
+
+def test_10g_calculation_effect_divergence_collision_uses_corrected_identity() -> None:
+    """Seccion 10.G / seccion 9 (adversarial): dos candidatos CALCULATION
+    que comparten `legacy_key` (misma formula PEGADA, ej. dos formulas
+    distintas que coinciden byte a byte una vez concatenadas sin
+    separador) pero tienen `key` (formula corregida, con espacios)
+    DISTINTO nunca deben fusionarse bajo `legacy_key` -- prueba
+    exactamente la razon por la que `_finalize_collision_safe_keys`
+    compara `key` completo (Fase 3) en vez de solo `condition` (Ciclo 4):
+    un chequeo que solo mirara `condition` NUNCA habria detectado esta
+    colision, porque ambos miembros comparten el MISMO `condition`
+    (ninguno tiene Decision/rama que lo distinga) y solo divergen por
+    `effect` (la formula)."""
+    shared_condition = "COND"
+    shared_legacy_effect = "target=X\x1fformula=GLUEDFORMULA"
+    member_a = _converted(
+        condition=shared_condition,
+        legacy_condition=shared_condition,
+        outcome_code="target=X\x1fformula=A * B",
+        legacy_outcome_code=shared_legacy_effect,
+        rule_family=UnifiedRuleFamily.CALCULATION,
+        source_v2_candidate_id="v2::calc::a",
+    )
+    member_b = _converted(
+        condition=shared_condition,
+        legacy_condition=shared_condition,
+        outcome_code="target=X\x1fformula=C / D",
+        legacy_outcome_code=shared_legacy_effect,
+        rule_family=UnifiedRuleFamily.CALCULATION,
+        source_v2_candidate_id="v2::calc::b",
+    )
+    # Construidos para compartir `condition`/`legacy_condition` (ninguna
+    # Decision/rama que los distinga, caso real de CALCULATION
+    # condicionada bajo la MISMA Decision) y el MISMO `legacy_outcome_code`
+    # (formula pegada compartida -- caso limite, nunca demostrado en el
+    # corpus real, pero cubierto aqui de forma sintetica/adversarial per
+    # seccion 9) mientras divergen en `outcome_code` (formula corregida,
+    # con espacios): exactamente el escenario que un chequeo de colision
+    # basado unicamente en `condition` NUNCA detectaria.
+    assert member_a.legacy_key == member_b.legacy_key, "fixture invalido: debe compartir legacy_key"
+    assert member_a.key != member_b.key, "fixture invalido: debe divergir en key (effect distinto)"
+
+    candidates, warnings = _merge_candidates(
+        [member_a, member_b], _empty_v1_candidates(), source_package_hash=HASH
+    )
+    assert warnings == []
+    assert len(candidates) == 2, "nunca deben fusionarse pese a compartir legacy_key"
+    assert {c.candidate_id for c in candidates} == {
+        f"candidate::enhanced::{HASH}::{member_a.key}",
+        f"candidate::enhanced::{HASH}::{member_b.key}",
+    }
+
+
+def test_10i_repeated_identical_execution_produces_byte_identical_candidate_ids() -> None:
+    """Seccion 10.I: dos ejecuciones identicas de deteccion sobre el
+    mismo programa/grafo producen exactamente la misma lista de
+    candidate_id, en el mismo orden -- el mecanismo de compatibilidad de
+    Fase 3 (lectura de `legacy_expression`, calculo de `legacy_key`) es
+    una funcion pura, sin estado global ni orden no determinista."""
+    program, decisions = _return_code_program_and_decisions(condition="WS-TIPO NOT = 'X'")
+    decisions_with_legacy = [("A", 10, "WS-TIPO NOT = 'X'", "WS-TIPONOT='X'")]
+
+    run1, warnings1 = _run_detection(
+        program, decisions_with_legacy, tags={"WS-AUX": None, "WS-COD-RETORNO": "return_code"}
+    )
+    run2, warnings2 = _run_detection(
+        program, decisions_with_legacy, tags={"WS-AUX": None, "WS-COD-RETORNO": "return_code"}
+    )
+
+    assert warnings1 == warnings2
+    assert [c.candidate_id for c in run1] == [c.candidate_id for c in run2]
+    assert run1 == run2
+
+
+def test_10j_legacy_key_reversion_never_breaks_v1_v2_merge_for_if_decision() -> None:
+    """Regresion real de corpus (Fase 3 v1.18.3, ejecucion
+    `20260819T144934918344-cf3934ac`, candidato PAGMST01::
+    1000-VALIDAR-CANAL): Q0/V1 NUNCA tuvo proteccion legacy sobre el
+    TEXTO de `condition` (solo sobre `candidate_id`, que no depende de
+    `condition`) -- `RuleCandidate.condition` de V1 SIEMPRE refleja
+    `Decision.expression` tal cual esta HOY en el grafo (espaciado
+    correcto desde esta fase). Si `_finalize_collision_safe_keys`
+    revirtiera el `key` de V2 a la forma legacy (pegada) para un
+    candidato IF (`condition == legacy_condition` siempre en Ciclo 4,
+    nunca hay branch_condition para IF) mientras V1 ya expone la forma
+    corregida (espaciada), `v1_by_key.get(key)` dejaria de encontrar el
+    candidato V1 -- la fusion se rompe y aparecen DOS candidatos
+    (V1 sin fusionar + V2 espurio) donde v1.18.2 y Fase 3 deben producir
+    UNO SOLO (el V1 original, enriquecido con evidencia V2, exactamente
+    como Regla D ya garantiza para el resto de casos). Confirmado
+    empiricamente: el corpus obligatorio pasaba de 48 a 64 candidatos
+    antes de esta correccion."""
+    program, decisions = _return_code_program_and_decisions(condition="WS-TIPO NOT = 'X'")
+    decision_id = decision_node_id_for("PROG1", "A", 10, 1)
+    v1_candidate = RuleCandidate(
+        candidate_id=f"candidate::q0-return-code-decision::1.0::{HASH}::{decision_id}",
+        paragraph_id=paragraph_node_id("PROG1", "A"),
+        paragraph_name="A",
+        decision_id=decision_id,
+        detector_id="q0-return-code-decision",
+        detector_version="1.0",
+        detector_score=1.0,
+        # V1/Q0 SIEMPRE lee Decision.expression directamente, sin ningun
+        # mecanismo de compatibilidad legacy sobre el texto -- exactamente
+        # la misma forma espaciada (Fase 3) que el grafo expone hoy.
+        condition="WS-TIPO NOT = 'X'",
+        outcome_code="0005",
+        rule_type=None,
+        line_start=10,
+        source_file=SRC,
+        source_package_hash=HASH,
+    )
+    v1_candidates = CandidateArtifact(
+        run_id=_RUN_ID,
+        source_package_hash=HASH,
+        semantic_graph_hash=HASH,
+        invariants_query_hash=HASH,
+        q0_query_hash=HASH,
+        candidates=[v1_candidate],
+    )
+    graph = _build_graph_with_source_file(
+        program=program,
+        # legacy_expression (Fase 3): la forma pegada que el parser
+        # ANTERIOR habria producido -- presente en el grafo (generado por
+        # el parser de ESTA fase) exactamente igual que en produccion,
+        # nunca ausente.
+        decisions=[("A", 10, "WS-TIPO NOT = 'X'", "WS-TIPONOT='X'")],
+        data_item_tags={"WS-AUX": None, "WS-COD-RETORNO": "return_code"},
+    )
+
+    result, warnings = detect_enhanced_candidates(
+        canonical_programs=[program],
+        semantic_graph=graph,
+        v1_candidates=v1_candidates,
+        run_id=_RUN_ID,
+        source_package_hash=HASH,
+    )
+
+    assert len(result) == 1, (
+        f"esperaba 1 candidato fusionado (V1+V2), obtuve {len(result)}: "
+        f"{[c.candidate_id for c in result]}"
+    )
+    merged = result[0]
+    assert merged.candidate_id == v1_candidate.candidate_id
+    assert merged.candidate_source == CandidateSource.V1
+    assert merged.condition == "WS-TIPO NOT = 'X'"
+    assert merged.evidence_ids != []
+    merge_warnings = [w for w in warnings if "V2_STATE_CHANGE" not in w]
+    assert len(merge_warnings) == 1
+    assert v1_candidate.candidate_id in merge_warnings[0]

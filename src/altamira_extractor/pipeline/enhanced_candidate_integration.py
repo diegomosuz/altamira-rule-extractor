@@ -352,12 +352,29 @@ def _convert_v2_candidate(
     # (nunca el dump ANTLR de la WhenPhrase completa) -- por eso preferir
     # branch_condition sin verificacion de forma es seguro: en el peor caso
     # coincide exactamente con el valor que ya se iba a usar.
-    # legacy_condition: el `condition` bare-subject tal como quedaba ANTES
-    # de esta correccion -- unica entrada usada para `legacy_key` (ver
-    # docstring de `_ConvertedCandidate.legacy_key` y
-    # `_finalize_collision_safe_keys`, gate de compatibilidad de
-    # candidate_id del Ciclo 4).
-    legacy_condition = condition
+    # legacy_condition (Fase 3 v1.18.3, checkpoint correctivo de limites
+    # de token, extiende -- nunca reemplaza -- el gate de compatibilidad
+    # de candidate_id del Ciclo 4 v1.18.2): el bare-subject `condition`
+    # ANTES tanto de la correccion de branch_condition (Ciclo 4) COMO de
+    # la correccion de espaciado de StatementExtractor (Fase 3). La unica
+    # fuente confiable de ese texto pegado (ej. "SQLCODENOT=0") es
+    # `Decision.legacy_expression`, calculado por el generador Java a
+    # partir de la MISMA lista de tokens que `expression` (ver
+    # StatementExtractor.renderTokenRangeLegacyGlued) -- nunca una
+    # reconstruccion posterior en Python sobre `condition` ya espaciado
+    # (no podria distinguir un espacio separador de un espacio interno a
+    # un literal entre comillas). Fallback a `condition` (bare-subject ya
+    # espaciado) unicamente si el grafo no expone `legacy_expression`
+    # (statement kind fuera del alcance de Fase 3, o grafo generado por
+    # un parser anterior a esta fase) -- en ese caso no hay divergencia
+    # de espaciado que compensar, asi que `condition` YA es la identidad
+    # legacy correcta.
+    legacy_expression_raw = decision_node.properties.get("legacy_expression")
+    legacy_condition = (
+        legacy_expression_raw
+        if isinstance(legacy_expression_raw, str) and legacy_expression_raw
+        else condition
+    )
     anchor_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
     branch_condition = anchor_statement.branch_condition if anchor_statement else None
     if isinstance(branch_condition, str) and branch_condition.strip():
@@ -416,10 +433,18 @@ def _convert_v2_candidate(
         # statement.source_text -- ADD/SUBTRACT/MULTIPLY/DIVIDE, sin nodo
         # de expresion dedicado) se incluye para que la MISMA Decision +
         # MISMO target + MISMA formula si deduplique correctamente.
-        target_key, formula_text = _calculation_target_and_formula(v2_candidate, ctx)
+        target_key, formula_text, legacy_formula_text = _calculation_target_and_formula(
+            v2_candidate, ctx
+        )
         effect = f"target={target_key}\x1fformula={formula_text}"
+        # legacy_effect (Fase 3 v1.18.3): contraparte de legacy_condition
+        # para `effect` -- CALCULATION es la unica familia cuyo `effect`
+        # puede divergir por el fix de espaciado (la formula del COMPUTE),
+        # ver docstring de `_calculation_target_and_formula`.
+        legacy_effect = f"target={target_key}\x1fformula={legacy_formula_text}"
     else:
         effect = v2_candidate.resolved_literal or ""
+        legacy_effect = effect
     key = functional_identity_key(
         paragraph_id=paragraph_node.id,
         decision_id=v2_candidate.decision_id,
@@ -431,7 +456,7 @@ def _convert_v2_candidate(
         paragraph_id=paragraph_node.id,
         decision_id=v2_candidate.decision_id,
         condition=legacy_condition,
-        effect=effect,
+        effect=legacy_effect,
         rule_family=rule_family,
     )
     return (
@@ -458,17 +483,35 @@ def _convert_v2_candidate(
 
 def _calculation_target_and_formula(
     v2_candidate: V2ShadowCandidate, ctx: V2DetectorContext
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Target/formula reales de un CALCULATION (compartido entre el
     camino condicionado y el incondicional -- unica fuente para no
     duplicar la logica de fallback `expression`/`source_text`, ver
-    docstring de `_convert_v2_candidate`)."""
+    docstring de `_convert_v2_candidate`).
+
+    Devuelve tambien `legacy_formula_text` (Fase 3 v1.18.3, checkpoint
+    correctivo de limites de token): la formula usa `statement.expression`
+    (COMPUTE) cuando existe, que desde Fase 3 respeta limites de token
+    (ej. "B * C" en vez de "B*C") -- sin una contraparte legacy, `effect`/
+    `formula` cambiarian para candidatos CALCULATION existentes,
+    rompiendo la compatibilidad de `candidate_id` que el gate de Ciclo 4
+    ya garantiza para `condition`. `legacy_formula_text` usa
+    `statement.legacy_expression` (el texto pegado que `getText()`
+    habria producido antes de esta correccion) con el MISMO fallback a
+    `source_text` que la formula corregida (ADD/SUBTRACT/MULTIPLY/DIVIDE
+    nunca tuvieron nodo de expresion dedicado ni el defecto de espaciado
+    que corrige esta fase -- `legacy_expression` es `None` para ellos,
+    asi que ambas formulas coinciden con `source_text` sin cambios)."""
     origin_statement = ctx.statement_by_id.get(v2_candidate.anchor_statement_id)
     formula_text = ""
+    legacy_formula_text = ""
     if origin_statement is not None:
         formula_text = (origin_statement.expression or origin_statement.source_text or "").strip()
+        legacy_formula_text = (
+            origin_statement.legacy_expression or origin_statement.source_text or ""
+        ).strip()
     target_key = v2_candidate.target_qualified_name or v2_candidate.target_variable
-    return target_key, formula_text
+    return target_key, formula_text, legacy_formula_text
 
 
 def _convert_unconditional_calculation(
@@ -508,7 +551,9 @@ def _convert_unconditional_calculation(
     source_file_raw = paragraph_node.properties.get("source_file")
     source_file: str | None = source_file_raw if isinstance(source_file_raw, str) else None
 
-    target_key, formula_text = _calculation_target_and_formula(v2_candidate, ctx)
+    target_key, formula_text, legacy_formula_text = _calculation_target_and_formula(
+        v2_candidate, ctx
+    )
     # source_statement_id: tomado DIRECTAMENTE del campo real
     # V2ShadowCandidate.anchor_statement_id (CanonicalStatement.
     # statement_id via detect_calculation) -- nunca parseado de un
@@ -524,17 +569,37 @@ def _convert_unconditional_calculation(
         target=target_key,
         formula=formula_text,
     )
+    # legacy_key (Fase 3 v1.18.3): diverge de `key` UNICAMENTE cuando el
+    # fix de espaciado cambio la formula de este COMPUTE
+    # (legacy_formula_text != formula_text) -- mismo criterio que
+    # `_convert_v2_candidate`, extendido aqui porque CALCULATION
+    # incondicional (sin Decision/condition) nunca pasaba antes por
+    # ninguna divergencia legacy/corregida. `_finalize_collision_safe_keys`
+    # (unico lector, sin cambios de comportamiento necesarios) decide
+    # despues si es seguro revertir.
+    legacy_key = (
+        key
+        if legacy_formula_text == formula_text
+        else functional_identity_key_for_unconditional_calculation(
+            program_id=_program_id_from_paragraph_id(paragraph_node.id),
+            paragraph_id=paragraph_node.id,
+            source_statement_id=v2_candidate.anchor_statement_id,
+            target=target_key,
+            formula=legacy_formula_text,
+        )
+    )
     evidence_ids = tuple(
         sorted({*v2_candidate.semantic_effect_ids, *v2_candidate.propagation_fact_ids})
     )
     return (
         _ConvertedCandidate(
             key=key,
-            # legacy_key=key (nunca diverge): esta funcion nunca pasa por
-            # el branch_condition del Ciclo 4 (CALCULATION incondicional
-            # no tiene Decision/condition en absoluto), asi que no existe
-            # una version "anterior" distinta que reconstruir.
-            legacy_key=key,
+            # legacy_key: igual a `key` salvo que el fix de espaciado de
+            # Fase 3 haya cambiado la formula (ver calculo arriba) --
+            # CALCULATION incondicional nunca pasa por el branch_condition
+            # del Ciclo 4 (sin Decision/condition en absoluto), asi que
+            # esa divergencia especifica sigue sin aplicar aqui.
+            legacy_key=legacy_key,
             paragraph_id=paragraph_node.id,
             paragraph_name=v2_candidate.paragraph,
             decision_id=None,
@@ -680,15 +745,19 @@ def _merge_into_v1(
 
 def _finalize_collision_safe_keys(
     converted: list[_ConvertedCandidate],
+    v1_keys: frozenset[str],
 ) -> list[_ConvertedCandidate]:
-    """Gate de compatibilidad de candidate_id (Ciclo 4, v1.18.2): decide,
-    por candidato, si `key` puede revertirse a `legacy_key` (identico al
-    que v1.18.1 habria calculado, byte a byte) o si debe conservar el
-    `key` branch-specific ya calculado en `_convert_v2_candidate`.
+    """Gate de compatibilidad de candidate_id (Ciclo 4, v1.18.2, extendido
+    en Fase 3 v1.18.3 -- checkpoint correctivo de limites de token):
+    decide, por candidato, si `key` puede revertirse a `legacy_key`
+    (identico al que v1.18.1 habria calculado, byte a byte) o si debe
+    conservar el `key` corregido ya calculado en `_convert_v2_candidate`/
+    `_convert_unconditional_calculation`.
 
-    Agrupa por `legacy_key` (paragraph_id/decision_id/CONDITION
-    BARE/effect/rule_family -- la formula exacta de v1.18.1). Dentro de
-    cada grupo:
+    Agrupa por `legacy_key` (paragraph_id/decision_id/CONDITION BARE
+    PEGADO/EFFECT PEGADO (formula CALCULATION incluida)/rule_family -- la
+    formula exacta de v1.18.1, ANTES tanto del branch_condition del
+    Ciclo 4 como del fix de espaciado de Fase 3). Dentro de cada grupo:
 
     - Un unico miembro: ningun otro candidato de este run comparte su
       identidad legacy, asi que no hay riesgo de colision -- revierte a
@@ -696,22 +765,52 @@ def _finalize_collision_safe_keys(
       corpus obligatorio (SQLCODE WHEN 0/WHEN +100/WHEN OTHER: `effect`
       ya difiere por rama -- A/N/E -- asi que `legacy_key` YA los
       distingue sin necesitar el `condition` corregido).
-    - Varios miembros con el MISMO `condition` (corregido): es
+    - Varios miembros con el MISMO `key` (identidad YA corregida --
+      condition/effect con espaciado y branch_condition correctos): es
       corroboracion legitima -- el MISMO hecho funcional, detectado mas
       de una vez (p.ej. mismo literal, misma rama, distintos detectores).
       v1.18.1 tambien los habria fusionado bajo `legacy_key`: se
-      preserva ese comportamiento.
-    - Varios miembros con `condition` (corregido) DISTINTO: son ramas
-      WHEN genuinamente diferentes que v1.18.1 solo distinguia por
-      `effect` -- si ademas comparten el mismo `effect` (nunca
-      demostrado en el corpus real, pero si en la matriz adversarial de
-      regresion, ver test_two_when_branches_with_same_assigned_literal_
-      stay_two_distinct_candidates), `legacy_key` los fusionaria
+      preserva ese comportamiento. (Fase 3: comparar `key` completo en
+      vez de solo `condition` es deliberado -- antes de esta fase
+      `effect` nunca podia divergir dentro de un mismo grupo de
+      `legacy_key` sin que `condition` tambien divergiera, asi que
+      ambas comparaciones eran equivalentes; desde que `effect` de
+      CALCULATION tambien puede tener una variante legacy/corregida
+      distinta, comparar unicamente `condition` dejaria de detectar una
+      colision genuina que solo difiere en `effect`.)
+    - Varios miembros con `key` (corregido) DISTINTO: son hechos
+      genuinamente diferentes que v1.18.1 solo distinguia por su
+      `condition`/`effect` bare-pegado -- si ademas comparten el mismo
+      `legacy_key` (nunca demostrado en el corpus real, pero si en la
+      matriz adversarial de regresion, ver
+      test_two_when_branches_with_same_assigned_literal_stay_two_distinct_
+      candidates), revertir a `legacy_key` los fusionaria
       incorrectamente en un unico candidato. La seguridad ante colision
       es obligatoria (Ciclo 4, seccion 6): estos miembros CONSERVAN su
-      `key` branch-specific ya calculado, divergiendo deliberadamente de
-      v1.18.1 solo para este subconjunto ambiguo -- nunca para el resto
-      del run."""
+      `key` ya calculado, divergiendo deliberadamente de v1.18.1 solo
+      para este subconjunto ambiguo -- nunca para el resto del run.
+
+    `v1_keys` (Fase 3 v1.18.3, checkpoint correctivo de limites de token
+    -- correccion real de corpus, candidato PAGMST01::1000-VALIDAR-CANAL,
+    ejecucion `20260819T144934918344-cf3934ac`): el conjunto de
+    `_v1_functional_key(...)` de TODOS los candidatos V1/Q0 del run.
+    NUNCA revertir a `legacy_key` cuando el `key` YA CORREGIDO de algun
+    miembro coincide con un candidato V1 -- V1 nunca tuvo proteccion de
+    identidad sobre el TEXTO de `condition` (solo sobre `candidate_id`,
+    que jamas depende de `condition`), asi que `Q0.condition` SIEMPRE
+    refleja `Decision.expression` tal cual esta HOY en el grafo (espaciado
+    correcto desde Fase 3, glued antes). Revertir el `key` de V2 a la
+    forma legacy (glued) mientras V1 ya expone la forma corregida
+    (espaciada) rompe la fusion `v1_by_key.get(key)` de `_merge_candidates`
+    -- el candidato V2, que v1.18.2 fusionaba silenciosamente dentro del
+    candidato V1 existente, pasa a emitirse como un SEGUNDO candidato
+    nuevo y espurio (confirmado empiricamente: 64 candidatos en vez de
+    48 para el corpus obligatorio). Cuando esto ocurre, el candidato YA
+    tiene una identidad estable por una via de MAYOR prioridad y
+    preexistente (el propio `candidate_id` de V1, ajeno a `condition`) --
+    la proteccion de Ciclo 4/Fase 3 sobre `key` es exclusivamente para
+    candidatos SIN equivalente V1, y nunca debe competir con la fusion
+    V1<->V2."""
     by_legacy_key: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
     for item in converted:
         by_legacy_key[item.legacy_key].append(item)
@@ -719,7 +818,10 @@ def _finalize_collision_safe_keys(
     finalized: list[_ConvertedCandidate] = []
     for legacy_key in sorted(by_legacy_key):
         members = by_legacy_key[legacy_key]
-        if len(members) == 1 or len({member.condition for member in members}) <= 1:
+        any_member_matches_v1 = any(member.key in v1_keys for member in members)
+        if not any_member_matches_v1 and (
+            len(members) == 1 or len({member.key for member in members}) <= 1
+        ):
             finalized.extend(replace(member, key=legacy_key) for member in members)
         else:
             finalized.extend(members)
@@ -746,17 +848,20 @@ def _merge_candidates(
     corre DESPUES de la corroboracion (sobre los candidatos que
     realmente sobreviven a agruparse/emitirse) y decide, candidato por
     candidato, si `key` puede revertirse a la identidad de v1.18.1 -- ver
-    su docstring."""
+    su docstring. `v1_by_key` se calcula ANTES de esa reversion
+    (Fase 3 v1.18.3): la reversion necesita conocer que candidatos ya
+    tienen equivalente V1 para nunca revertir un `key` que romperia esa
+    fusion (ver docstring de `_finalize_collision_safe_keys`)."""
     converted, corroboration_warnings = _corroborate_level88_return_code_pairs(converted)
-    converted = _finalize_collision_safe_keys(converted)
-
-    groups: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
-    for item in converted:
-        groups[item.key].append(item)
 
     v1_by_key: dict[str, RuleCandidate] = {
         _v1_functional_key(candidate): candidate for candidate in v1_candidates.candidates
     }
+    converted = _finalize_collision_safe_keys(converted, frozenset(v1_by_key))
+
+    groups: dict[str, list[_ConvertedCandidate]] = defaultdict(list)
+    for item in converted:
+        groups[item.key].append(item)
 
     result: dict[str, RuleCandidate] = {}
     warnings: list[str] = list(corroboration_warnings)

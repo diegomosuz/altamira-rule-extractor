@@ -161,7 +161,10 @@ def test_declared_value_provenance_reaches_return_code_rule_end_to_end(tmp_path:
     assert candidate.decision_id
 
     # --- (D) condition original, sin sustitucion por 3 -----------------------
-    assert candidate.condition == "WS-RIESGO>WS-RIESGO-MAXIMO"
+    # Fase 3 v1.18.3 (checkpoint correctivo de limites de token): el
+    # espaciado real de los operadores relacionales se preserva ahora
+    # (antes: "WS-RIESGO>WS-RIESGO-MAXIMO", getText() sin separador).
+    assert candidate.condition == "WS-RIESGO > WS-RIESGO-MAXIMO"
 
     # --- (E) effect original --------------------------------------------------
     assert candidate.outcome_code == "PE04"
@@ -173,7 +176,7 @@ def test_declared_value_provenance_reaches_return_code_rule_end_to_end(tmp_path:
     context_package = ContextPackage.model_validate_json(context_path.read_text(encoding="utf-8"))
     assert context_package.candidate.candidate_id == candidate.candidate_id
     assert context_package.decision is not None
-    assert context_package.decision.expression == "WS-RIESGO>WS-RIESGO-MAXIMO"
+    assert context_package.decision.expression == "WS-RIESGO > WS-RIESGO-MAXIMO"
 
     # --- (F) ContextPackageDecision.evidence_ids incluye declared_value_context --
     assert len(context_package.decision.evidence_ids) >= 2, context_package.decision.evidence_ids

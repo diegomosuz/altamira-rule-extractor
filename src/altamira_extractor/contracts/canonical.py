@@ -368,6 +368,22 @@ class CanonicalStatement(AltamiraBaseModel):
     branch_condition: str | None = None
     expression: str | None = None
     normalized_expression: str | None = None
+    # legacy_expression (Fase 3 v1.18.3, checkpoint correctivo de limites
+    # de token): poblado UNICAMENTE por el generador Java para kind=IF, el
+    # sujeto de kind=EVALUATE y kind=COMPUTE (ver StatementExtractor.
+    # renderTokenRangeLegacyGlued). Reconstruye el texto EXACTO que
+    # ParserRuleContext#getText() habria producido ANTES de la correccion
+    # de espaciado (concatenacion de tokens sin separador, p. ej.
+    # "SQLCODENOT=0") -- unica entrada confiable para preservar
+    # candidate_id de V2/enhanced via el mecanismo de dual-key ya
+    # existente (legacy_key/legacy_condition en
+    # enhanced_candidate_integration.py, Ciclo 4 v1.18.2, extendido en
+    # Fase 3, nunca reemplazado). NUNCA debe leerse para construir
+    # RuleCandidate.condition/ContextPackage.decision.expression/
+    # RuleDraft/evidencia de guardrail/render de UI -- es exclusivamente
+    # un dato de compatibilidad de identidad, consumido solo por
+    # enhanced_candidate_integration.py.
+    legacy_expression: str | None = None
     operands: list[str] = Field(default_factory=list)
     variables_read: list[str] = Field(default_factory=list)
     variables_written: list[str] = Field(default_factory=list)

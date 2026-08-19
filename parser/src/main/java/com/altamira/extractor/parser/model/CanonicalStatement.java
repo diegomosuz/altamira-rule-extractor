@@ -40,6 +40,27 @@ import java.util.List;
  * {@code null} exactamente como antes de la Fase 3 (ninguna anotacion
  * nueva los afecta).
  *
+ * <p>Campo de la Fase 3 v1.18.3 (correccion de limites de token en
+ * expresiones -- checkpoint correctivo, secciones 4/7-9): {@code
+ * legacyExpression}, poblado UNICAMENTE por los 3 sitios de riesgo ya
+ * corregidos ({@code kind=IF}, sujeto de {@code kind=EVALUATE}, {@code
+ * kind=COMPUTE}) via {@code StatementExtractor#renderTokenRangeLegacyGlued}.
+ * Reconstruye, a partir del MISMO rango de tokens que produce el {@code
+ * expression} ya corregido (con espacio de separacion real), el texto
+ * EXACTO que {@code ParserRuleContext#getText()} habria producido ANTES
+ * de esta correccion (concatenacion sin separador, p. ej. {@code
+ * "SQLCODENOT=0"}) -- unica entrada confiable para preservar
+ * {@code candidate_id} de V2/enhanced via el mecanismo de dual-key ya
+ * existente ({@code legacy_key}/{@code legacy_condition} en
+ * {@code enhanced_candidate_integration.py}, Ciclo 4 v1.18.2, extendido
+ * aqui, nunca reemplazado). Anotado {@code @JsonInclude(NON_EMPTY)}:
+ * ausente para todo programa/statement no afectado por el defecto de
+ * espaciado que corrige, produciendo JSON identico al de antes de esta
+ * fase para esos casos. NUNCA debe leerse para construir
+ * {@code RuleCandidate.condition}/{@code ContextPackage.decision.
+ * expression}/{@code RuleDraft}/evidencia de guardrail/render de UI --
+ * es exclusivamente un dato de compatibilidad de identidad.
+ *
  * <p>Campos de la Fase 6 de la ampliacion semantica (fundacion
  * interprocedural CALL/LINKAGE), poblados unicamente cuando
  * {@code kind=CALL} (ver {@code CanonicalProgramExtractor}); todos
@@ -88,6 +109,7 @@ public record CanonicalStatement(
         String branchCondition,
         String expression,
         String normalizedExpression,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) String legacyExpression,
         List<String> operands,
         List<String> variablesRead,
         List<String> variablesWritten,
@@ -141,9 +163,52 @@ public record CanonicalStatement(
             List<String> referencedConditionNames) {
         this(
                 statementId, kind, sourceText, sourceFile, lineStart, lineEnd, locationKind,
-                parentStatementId, branchKind, branchCondition, expression, normalizedExpression,
+                parentStatementId, branchKind, branchCondition, expression, normalizedExpression, null,
                 operands, variablesRead, variablesWritten, targetDataItems, assignedLiteral,
                 targetParagraphs, sqlAccess, conditionNameTarget, conditionSetValue,
+                referencedConditionNames, null, null, null, List.of(), null, null, null, null);
+    }
+
+    /**
+     * Constructor de compatibilidad IDENTICO al anterior (mismos 21
+     * campos), mas {@code legacyExpression} (Fase 3 v1.18.3, checkpoint
+     * correctivo secciones 4/7-9): UNICAMENTE los 3 sitios de riesgo ya
+     * corregidos ({@code convertIf}, sujeto de {@code convertEvaluate},
+     * {@code convertCompute}) usan este overload -- todo el resto de
+     * {@code StatementExtractor} sigue usando el de 21 argumentos sin
+     * cambios (legacyExpression queda {@code null}, ningun otro
+     * {@code kind} expone el defecto de {@code getText()} que este campo
+     * compensa).
+     */
+    public CanonicalStatement(
+            String statementId,
+            StatementKind kind,
+            String sourceText,
+            String sourceFile,
+            Integer lineStart,
+            Integer lineEnd,
+            LocationKind locationKind,
+            String parentStatementId,
+            BranchKind branchKind,
+            String branchCondition,
+            String expression,
+            String normalizedExpression,
+            List<String> operands,
+            List<String> variablesRead,
+            List<String> variablesWritten,
+            List<String> targetDataItems,
+            String assignedLiteral,
+            List<String> targetParagraphs,
+            List<CanonicalSqlAccess> sqlAccess,
+            String conditionNameTarget,
+            Boolean conditionSetValue,
+            List<String> referencedConditionNames,
+            String legacyExpression) {
+        this(
+                statementId, kind, sourceText, sourceFile, lineStart, lineEnd, locationKind,
+                parentStatementId, branchKind, branchCondition, expression, normalizedExpression,
+                legacyExpression, operands, variablesRead, variablesWritten, targetDataItems,
+                assignedLiteral, targetParagraphs, sqlAccess, conditionNameTarget, conditionSetValue,
                 referencedConditionNames, null, null, null, List.of(), null, null, null, null);
     }
 
@@ -180,7 +245,7 @@ public record CanonicalStatement(
             ProgramTerminationKind programTerminationKind) {
         this(
                 statementId, kind, sourceText, sourceFile, lineStart, lineEnd, locationKind,
-                parentStatementId, branchKind, branchCondition, expression, normalizedExpression,
+                parentStatementId, branchKind, branchCondition, expression, normalizedExpression, null,
                 operands, variablesRead, variablesWritten, targetDataItems, assignedLiteral,
                 targetParagraphs, sqlAccess, conditionNameTarget, conditionSetValue,
                 referencedConditionNames, null, null, null, List.of(), null, null, null,

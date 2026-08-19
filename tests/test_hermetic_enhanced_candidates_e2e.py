@@ -303,11 +303,10 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     compute_calc = compute_calc_candidates[0]
     assert compute_calc.rule_family == UnifiedRuleFamily.CALCULATION
     assert compute_calc.candidate_source == CandidateSource.V2
-    # ProLeap getText() no preserva espacios entre tokens (verificado
-    # empiricamente, ver docstring de _normalize_calculation) -- "WS-SALDO
-    # < -3000" en el COBOL fuente se refleja como "WS-SALDO<-3000" en la
-    # condition real de la Decision.
-    assert compute_calc.condition == "WS-SALDO<-3000"
+    # Fase 3 v1.18.3 (checkpoint correctivo de limites de token): el
+    # renderer de expresiones ahora respeta limites de token (antes:
+    # ProLeap getText() concatenaba sin separador, "WS-SALDO<-3000").
+    assert compute_calc.condition == "WS-SALDO < -3000"
     assert compute_calc.outcome_code is None, "CALCULATION nunca afirma un literal"
     assert compute_calc.evidence_ids != []
     assert compute_calc.decision_id
@@ -319,7 +318,7 @@ def test_enhanced_pipeline_end_to_end_reaches_completed_with_v1_and_v2_candidate
     multiply_calc = multiply_calc_candidates[0]
     assert multiply_calc.rule_family == UnifiedRuleFamily.CALCULATION
     assert multiply_calc.candidate_source == CandidateSource.V2
-    assert multiply_calc.condition == "WS-SALDO<-4000"
+    assert multiply_calc.condition == "WS-SALDO < -4000"
     assert multiply_calc.outcome_code is None
     assert multiply_calc.evidence_ids != []
     assert multiply_calc.decision_id

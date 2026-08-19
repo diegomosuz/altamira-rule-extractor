@@ -72,7 +72,8 @@ public final class CanonicalProgramExtractor {
                 programName,
                 programLocationKind,
                 programLocationKind == LocationKind.EXACT ? sourceFileIdentity : null,
-                parseResult.compilationUnit().getLines());
+                parseResult.compilationUnit().getLines(),
+                parseResult.compilationUnit().getTokens());
         ctx.warnings.addAll(parseResult.formatDetectionWarnings());
         if (copyDetected) {
             ctx.warnings.add(

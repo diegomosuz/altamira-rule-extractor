@@ -66,7 +66,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.ParserRuleContext;
+import org.antlr.v4.runtime.Token;
 
 /**
  * Camina la lista plana de statements de un Paragraph (Scope#getStatements)
@@ -143,9 +145,9 @@ final class StatementExtractor {
         List<String> operands = ifStmt.getCondition() != null
                 ? ValueReferences.collectVariableNames(ifStmt.getCondition())
                 : List.of();
-        String expression = ifStmt.getCondition() != null && ifStmt.getCondition().getCtx() != null
-                ? ifStmt.getCondition().getCtx().getText()
-                : null;
+        ParserRuleContext conditionCtx = ifStmt.getCondition() != null ? ifStmt.getCondition().getCtx() : null;
+        String expression = renderTokenRange(conditionCtx, ctx.tokens);
+        String legacyExpression = renderTokenRangeLegacyGlued(conditionCtx, ctx.tokens);
         List<String> referencedConditionNames = ifStmt.getCondition() != null
                 ? ConditionNameReferences.fromCondition(ifStmt.getCondition(), knownConditionNames)
                 : List.of();
@@ -153,7 +155,8 @@ final class StatementExtractor {
         collected.add(new CanonicalStatement(
                 id, StatementKind.IF, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), operands,
-                operands, List.of(), List.of(), null, List.of(), List.of(), null, null, referencedConditionNames));
+                operands, List.of(), List.of(), null, List.of(), List.of(), null, null, referencedConditionNames,
+                legacyExpression));
 
         if (ifStmt.getThen() != null) {
             walk(ifStmt.getThen().getStatements(), id, BranchKind.THEN);
@@ -168,39 +171,42 @@ final class StatementExtractor {
         List<String> operands = evaluateStmt.getSelect() != null
                 ? ValueReferences.collectVariableNames(evaluateStmt.getSelect().getSelectValueStmt())
                 : List.of();
-        // expression = texto crudo del sujeto EVALUATEd (mismo Select ya
-        // usado para operands arriba); antes quedaba siempre null aunque
-        // el dato estructural ya estaba disponible.
-        String expression = evaluateStmt.getSelect() != null && evaluateStmt.getSelect().getCtx() != null
-                ? evaluateStmt.getSelect().getCtx().getText()
-                : null;
+        // expression = texto del sujeto EVALUATEd respetando limites de
+        // token (mismo Select ya usado para operands arriba); antes
+        // quedaba siempre null aunque el dato estructural ya estaba
+        // disponible.
+        ParserRuleContext selectCtx = evaluateStmt.getSelect() != null ? evaluateStmt.getSelect().getCtx() : null;
+        String expression = renderTokenRange(selectCtx, ctx.tokens);
+        String legacyExpression = renderTokenRangeLegacyGlued(selectCtx, ctx.tokens);
         String id = nextId(StatementKind.EVALUATE);
         collected.add(new CanonicalStatement(
                 id, StatementKind.EVALUATE, loc.sourceText(), loc.sourceFile(), loc.lineStart(),
                 loc.lineEnd(), loc.kind(), parentId, branchKind, null, expression,
                 normalizeExpression(expression), operands, operands, List.of(), List.of(), null, List.of(),
-                List.of(), null, null, List.of()));
+                List.of(), null, null, List.of(), legacyExpression));
 
         for (WhenPhrase whenPhrase : evaluateStmt.getWhenPhrases()) {
             String cleanCondition = buildBranchCondition(expression, whenPhrase);
             // Fallback cuando la rama no es una comparacion directa contra un
             // literal puro (condition-name, EVALUATE ALSO, THRU, referencia a
-            // otra variable): el sujeto crudo del EVALUATE (`expression`,
-            // idem al que ya expone hoy el nodo Decision del grafo para esta
-            // misma rama antes de esta correccion) -- nunca el dump ANTLR
-            // crudo de toda la WhenPhrase (incluye el statement anidado
-            // completo sin espacios, ej. "WHEN+100MOVE'N'TOWS-ESTADO...":
-            // un consumidor downstream no puede distinguirlo de un predicado
-            // limpio por forma). `expression` deja de ser no-null solo si
-            // Select.getCtx() ya era null (ver arriba); en ese caso extremo
-            // se recurre al dump crudo unicamente para preservar
-            // branch_condition no-null (invariante de deteccion de limites
-            // de rama en semantic_propagation_analyzer.py).
+            // otra variable): el sujeto del EVALUATE (`expression`, idem al
+            // que ya expone hoy el nodo Decision del grafo para esta misma
+            // rama) -- nunca el dump de toda la WhenPhrase (incluye el
+            // statement anidado completo: un consumidor downstream no puede
+            // distinguirlo de un predicado limpio por forma). `expression`
+            // deja de ser no-null solo si Select.getCtx() ya era null (ver
+            // arriba); en ese caso extremo se recurre al dump de la
+            // WhenPhrase completa unicamente para preservar branch_condition
+            // no-null (invariante de deteccion de limites de rama en
+            // semantic_propagation_analyzer.py) -- desde Fase 3 v1.18.3 ese
+            // dump YA respeta limites de token (renderTokenRange), aunque
+            // sigue siendo un texto degenerado (statement anidado completo,
+            // nunca un predicado limpio) para este camino extremo.
             String condition = cleanCondition != null
                     ? cleanCondition
                     : expression != null
                             ? expression
-                            : (whenPhrase.getCtx() != null ? whenPhrase.getCtx().getText() : null);
+                            : renderTokenRange(whenPhrase.getCtx(), ctx.tokens);
             List<String> referencedConditionNames = evaluateWhenPhraseConditionNames(whenPhrase);
             walkBranchWithCondition(whenPhrase.getStatements(), id, BranchKind.WHEN, condition, referencedConditionNames);
         }
@@ -326,11 +332,12 @@ final class StatementExtractor {
                 statement.statementId(), statement.kind(), statement.sourceText(), statement.sourceFile(),
                 statement.lineStart(), statement.lineEnd(), statement.locationKind(),
                 statement.parentStatementId(), statement.branchKind(), condition, statement.expression(),
-                statement.normalizedExpression(), statement.operands(), statement.variablesRead(),
-                statement.variablesWritten(), statement.targetDataItems(), statement.assignedLiteral(),
-                statement.targetParagraphs(), statement.sqlAccess(), statement.conditionNameTarget(),
-                statement.conditionSetValue(), merged, statement.callTargetKind(),
-                statement.calledProgramName(), statement.calledProgramExpression(), statement.callArguments(),
+                statement.normalizedExpression(), statement.legacyExpression(), statement.operands(),
+                statement.variablesRead(), statement.variablesWritten(), statement.targetDataItems(),
+                statement.assignedLiteral(), statement.targetParagraphs(), statement.sqlAccess(),
+                statement.conditionNameTarget(), statement.conditionSetValue(), merged,
+                statement.callTargetKind(), statement.calledProgramName(),
+                statement.calledProgramExpression(), statement.callArguments(),
                 statement.callReturningDataItem(), statement.callHasOnException(),
                 statement.callHasNotOnException(), statement.programTerminationKind());
     }
@@ -455,10 +462,11 @@ final class StatementExtractor {
                 targets.add(store.getStoreCall().getName());
             }
         }
-        String expression = computeStmt.getArithmeticExpression() != null
-                && computeStmt.getArithmeticExpression().getCtx() != null
-                ? computeStmt.getArithmeticExpression().getCtx().getText()
+        ParserRuleContext arithmeticCtx = computeStmt.getArithmeticExpression() != null
+                ? computeStmt.getArithmeticExpression().getCtx()
                 : null;
+        String expression = renderTokenRange(arithmeticCtx, ctx.tokens);
+        String legacyExpression = renderTokenRangeLegacyGlued(arithmeticCtx, ctx.tokens);
         List<String> read = computeStmt.getArithmeticExpression() != null
                 ? ValueReferences.collectVariableNames(computeStmt.getArithmeticExpression())
                 : List.of();
@@ -468,7 +476,7 @@ final class StatementExtractor {
                 id, StatementKind.COMPUTE, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
                 loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
                 read, List.copyOf(targets), List.copyOf(targets), null, List.of(), List.of(), null, null,
-                List.of()));
+                List.of(), legacyExpression));
     }
 
     /**
@@ -974,10 +982,10 @@ final class StatementExtractor {
         String id = nextId(StatementKind.CALL);
         collected.add(new CanonicalStatement(
                 id, StatementKind.CALL, loc.sourceText(), loc.sourceFile(), loc.lineStart(), loc.lineEnd(),
-                loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), List.of(),
-                List.copyOf(read), List.of(), List.of(), null, List.of(), List.of(), null, null, List.of(),
-                targetKind, calledProgramName, calledProgramExpression, arguments, returningItem, hasOnException,
-                hasNotOnException, null));
+                loc.kind(), parentId, branchKind, null, expression, normalizeExpression(expression), null,
+                List.of(), List.copyOf(read), List.of(), List.of(), null, List.of(), List.of(), null, null,
+                List.of(), targetKind, calledProgramName, calledProgramExpression, arguments, returningItem,
+                hasOnException, hasNotOnException, null));
     }
 
     private List<CanonicalCallArgument> extractCallArguments(CallStatement callStmt, List<String> readAccumulator) {
@@ -1147,6 +1155,85 @@ final class StatementExtractor {
 
     private String nextId(StatementKind kind) {
         return ctx.programName + "::" + paragraphName + "::" + ctx.nextOrdinal() + "::" + kind.name();
+    }
+
+    /**
+     * Lista de tokens de canal por defecto (whitespace/comentarios
+     * excluidos, viven en el canal oculto de ANTLR) que cubre el rango
+     * {@code [parserCtx.getStart(), parserCtx.getStop()]} -- unica fuente
+     * compartida de {@link #renderTokenRange}/{@link
+     * #renderTokenRangeLegacyGlued} (Fase 3 v1.18.3, checkpoint
+     * correctivo de limites de token: nunca dos recorridos independientes
+     * del stream que podrian divergir). Devuelve {@code null} si
+     * {@code parserCtx}/{@code tokens} es null o el contexto no tiene
+     * start/stop resueltos (mismo criterio de guarda que ya usaban los
+     * sitios de llamada con {@code getText()} antes de esta correccion).
+     */
+    private static List<String> defaultChannelTokenTexts(ParserRuleContext parserCtx, CommonTokenStream tokens) {
+        if (parserCtx == null || tokens == null) {
+            return null;
+        }
+        Token start = parserCtx.getStart();
+        Token stop = parserCtx.getStop();
+        if (start == null || stop == null) {
+            return null;
+        }
+        List<String> texts = new ArrayList<>();
+        for (Token token : tokens.get(start.getTokenIndex(), stop.getTokenIndex())) {
+            if (token.getChannel() == Token.DEFAULT_CHANNEL) {
+                texts.add(token.getText());
+            }
+        }
+        return texts;
+    }
+
+    /**
+     * Renderiza el rango de tokens de {@code parserCtx} uniendo el texto
+     * EXACTO ({@link Token#getText()}, nunca alterado) de cada token de
+     * canal por defecto con un unico espacio ASCII como separador --
+     * corrige el defecto de representacion semantica de {@link
+     * ParserRuleContext#getText()} (Fase 3 v1.18.3, checkpoint
+     * correctivo): ANTLR concatena unicamente el texto de los tokens
+     * VISIBLES sin ningun separador (el espacio del COBOL fuente vive en
+     * el canal oculto), produciendo texto pegado como {@code
+     * "SQLCODENOT=0"} en vez de {@code "SQLCODE NOT = 0"}. Nunca
+     * reconstruye desde sourceText via regex, nunca sintetiza un
+     * operador, nunca colapsa ni inserta espacio DENTRO del texto propio
+     * de un token: un literal entre comillas con espacio interno (p. ej.
+     * {@code 'A B'}) es un UNICO token cuyo texto ya incluye ese espacio
+     * -- se preserva exactamente, nunca se le agrega ni se le quita nada
+     * (el espacio que esta funcion inserta es SIEMPRE un separador ENTRE
+     * dos tokens distintos, jamas dentro de uno). Devuelve {@code null}
+     * si el rango no produce ningun token de canal por defecto (mismo
+     * contrato que {@code getText()} devolviendo cadena vacia en ese
+     * caso, pero preservando la convencion existente de {@code null}
+     * para "sin expresion" en este modulo).
+     */
+    private static String renderTokenRange(ParserRuleContext parserCtx, CommonTokenStream tokens) {
+        List<String> texts = defaultChannelTokenTexts(parserCtx, tokens);
+        return texts == null || texts.isEmpty() ? null : String.join(" ", texts);
+    }
+
+    /**
+     * Contraparte de {@link #renderTokenRange} EXCLUSIVA para
+     * compatibilidad de identidad de candidato (Fase 3 v1.18.3,
+     * checkpoint correctivo secciones 7-9): reconstruye, a partir de la
+     * MISMA lista de tokens, el texto que {@link
+     * ParserRuleContext#getText()} habria producido ANTES de esta
+     * correccion (concatenacion sin separador) -- unica entrada confiable
+     * para {@code CanonicalStatement.legacyExpression}, nunca una
+     * aproximacion posterior sobre el texto ya espaciado (que no podria
+     * distinguir un espacio separador de un espacio interno a un
+     * literal). Consumido UNICAMENTE por el mecanismo de dual-key ya
+     * existente en {@code enhanced_candidate_integration.py}
+     * ({@code legacy_key}/{@code legacy_condition}, Ciclo 4 v1.18.2,
+     * extendido aqui, nunca reemplazado) -- nunca debe usarse para
+     * {@code expression}/{@code normalizedExpression} ni para ningun
+     * texto de negocio visible.
+     */
+    private static String renderTokenRangeLegacyGlued(ParserRuleContext parserCtx, CommonTokenStream tokens) {
+        List<String> texts = defaultChannelTokenTexts(parserCtx, tokens);
+        return texts == null || texts.isEmpty() ? null : String.join("", texts);
     }
 
     /**

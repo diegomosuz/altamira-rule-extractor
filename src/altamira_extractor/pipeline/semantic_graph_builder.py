@@ -581,6 +581,13 @@ def _build_decisions_and_leads_to(
                     properties={
                         "expression": statement.expression,
                         "normalized_expression": statement.normalized_expression,
+                        # legacy_expression (Fase 3 v1.18.3): dato de
+                        # compatibilidad de identidad UNICAMENTE, consumido
+                        # solo por enhanced_candidate_integration.py para
+                        # calcular legacy_key -- ver docstring de
+                        # CanonicalStatement.legacy_expression. Nunca leido
+                        # por context_package_builder.py/RuleCandidate.
+                        "legacy_expression": statement.legacy_expression,
                         "operands_json": _canonical_json(statement.operands),
                         "outcome_code": outcome_code,
                         "rule_type": None,
