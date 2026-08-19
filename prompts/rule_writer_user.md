@@ -50,6 +50,20 @@ Incluye:
   claim (un claim con evidence_refs vacío es siempre inválido y será
   rechazado).
 
+  EXCEPCIÓN OBLIGATORIA: si escribes en cualquier campo de texto libre
+  (title, context, statement, condition, effect, parameter_source,
+  parameters) un valor explícito gobernado -- un literal de negocio
+  entre comillas (por ejemplo 'API'), un número o una fecha -- que
+  aparece literalmente en `decision` (expression/normalized_expression/
+  outcome_code) o en un `effects.return_codes[i]` con
+  approved_for_rule_text=true, ESE campo DEBE tener al menos un claim
+  que cite el alias del catálogo correspondiente a esa evidencia. En
+  ese caso específico la creación del claim NO es opcional: omitirlo
+  hace que el borrador sea rechazado por completo. La regla general de
+  arriba ("crea un claim únicamente cuando exista evidencia que lo
+  respalde") sigue aplicando sin cambios para el resto del contenido no
+  gobernado por un valor explícito.
+
 No agregues claves fuera del schema. No incluyas evidence_ids ni
 evidence_paths en ningún claim.
 

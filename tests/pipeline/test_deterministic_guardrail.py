@@ -35,6 +35,7 @@ from altamira_extractor.contracts.enums import EvidenceValidationStatus, Inclusi
 from altamira_extractor.contracts.rule_draft import Claim, ClaimField, RuleDraft
 from altamira_extractor.pipeline.deterministic_guardrail import (
     CANONICAL_TRACEABILITY_SENTENCE,
+    _authoritative_anchor_for_literal,
     augment_claims_with_authoritative_anchors,
     evaluate_guardrail,
     reconstruct_traceability_deterministically,
@@ -2697,3 +2698,287 @@ def test_literal_case20_no_claim_no_governed_fact_remains_valid() -> None:
     )
     violations = evaluate_guardrail(draft, package)
     assert violations == []
+
+
+# ---------------------------------------------------------------------------
+# Fase 3B v1.18.3 (checkpoint correctivo de fiabilidad de reparacion de
+# hechos explicitos sin claim): matriz de regresion de la seccion 14. El
+# mensaje de una violacion `unsupported_explicit_number/_date/_literal`
+# ahora incluye, deterministicamente (misma busqueda ya usada por
+# `augment_claims_with_authoritative_anchors`, nunca una aproximacion
+# nueva), DONDE esta la evidencia autoritativa real (si existe) para el
+# token exacto que viola -- nunca crea un claim, nunca toca ningun campo
+# de RuleDraft. Regresion real: candidato PAGMST01::1000-VALIDAR-CANAL
+# (ejecucion v1.18.3 Fase 3 `20260819T150454102795-9d462eff`).
+# ---------------------------------------------------------------------------
+
+
+def _package_with_channel_literal_decision() -> ContextPackage:
+    """Reproduce el candidato real PAGMST01::1000-VALIDAR-CANAL: DOS
+    literales de negocio entre comillas en la MISMA decision
+    ('WEB'/'API') y un return_code aprobado ('M101') que no los
+    contiene."""
+    package = _package()
+    return package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-CANAL NOT = 'WEB' AND WS-CANAL NOT = 'API'",
+                    "normalized_expression": "WS-CANAL NOT = 'WEB' AND WS-CANAL NOT = 'API'",
+                }
+            ),
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        ReturnCodeEffect(
+                            code="M101", approved_for_rule_text=True, evidence_ids=["ev-decision"]
+                        ),
+                    ]
+                }
+            ),
+        }
+    )
+
+
+def _package_with_date_decision_and_return_code() -> ContextPackage:
+    """Analoga a `_package_with_numeric_decision_and_return_code`, pero
+    con una fecha ISO aislada en la decision (`WS-FECHA-ALTA>=2026-01-01`)
+    -- unica forma de probar la ancla autoritativa deterministica para
+    `unsupported_explicit_date` sin aproximar sobre parameter tables."""
+    package = _package()
+    return package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-FECHA-ALTA>=2026-01-01",
+                    "normalized_expression": "WS-FECHA-ALTA>=2026-01-01",
+                }
+            ),
+        }
+    )
+
+
+def test_14_2_repair_hint_not_needed_when_claim_already_supports_literal() -> None:
+    """Caso 14.2: el campo YA tiene un claim correcto que respalda ambos
+    literales -- sin violacion, ninguna reparacion necesaria."""
+    package = _package_with_channel_literal_decision()
+    draft = _draft(
+        statement="Se valida que el canal de pago utilizado sea 'WEB' o 'API'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.STATEMENT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert violations == []
+
+
+def test_14_3_fail_closed_when_literal_genuinely_unsupported_hint_explains_absence() -> None:
+    """Caso 14.3: `statement` afirma 'API', la decision solo respalda
+    'WEB' -- falla cerrado, y el mensaje explicita que ninguna evidencia
+    autoritativa respalda ese valor especifico (nunca sugiere una ancla
+    inexistente)."""
+    package = _package()
+    package = package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-CANAL = 'WEB'",
+                    "normalized_expression": "WS-CANAL = 'WEB'",
+                }
+            )
+        }
+    )
+    draft = _draft(
+        statement="Se valida que el canal de pago utilizado sea 'API'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    literal_violations = [v for v in violations if v.rule == "unsupported_explicit_literal"]
+    assert len(literal_violations) == 1
+    assert "'API'" in literal_violations[0].message
+    assert "Ninguna evidencia autoritativa" in literal_violations[0].message
+    assert "$.decision" not in literal_violations[0].message.split("Ninguna")[1]
+
+
+def test_14_4_additional_unsupported_fact_still_fails_even_with_supported_literal() -> None:
+    """Caso 14.4: `statement` tiene un claim REAL que cita `$.decision`
+    (respalda 'API'), pero el campo TAMBIEN afirma 'ZZZ' (no soportado
+    por nada) -- que 'API' SI este cubierto NUNCA vuelve valido el campo
+    completo: 'ZZZ' sigue fallando cerrado de forma independiente, nunca
+    'promediado' contra el resto del campo. Esto es exactamente por lo
+    que la creacion deterministica de claims a nivel de CAMPO completo
+    (seccion 8/9 del checkpoint) esta rechazada: un claim ya existente
+    que cubre parte del campo nunca implica que cubra el resto."""
+    package = _package_with_channel_literal_decision()
+    draft = _draft(
+        statement="El canal es 'API', codigo interno 'ZZZ'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.STATEMENT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    literal_violations = {
+        v.message.split("'")[1]: v
+        for v in violations
+        if v.rule == "unsupported_explicit_literal"
+    }
+    assert "ZZZ" in literal_violations
+    assert "Ninguna evidencia autoritativa" in literal_violations["ZZZ"].message
+    assert "API" not in literal_violations, (
+        "API SI esta cubierta por el claim real, nunca debe fallar"
+    )
+
+
+def test_14_5_supported_number_zero_claim_hint_points_to_decision() -> None:
+    """Caso 14.5: numero soportado por decision, cero claims -- el
+    mensaje apunta a $.decision como ancla real disponible."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        statement="El limite de mora es de 30 dias.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    number_violations = [v for v in violations if v.rule == "unsupported_explicit_number"]
+    assert len(number_violations) == 1
+    assert "$.decision" in number_violations[0].message
+    assert "Evidencia autoritativa real disponible" in number_violations[0].message
+
+
+def test_14_6_unsupported_number_zero_claim_fails_closed_no_anchor_suggested() -> None:
+    """Caso 14.6: numero NO soportado por ninguna evidencia autoritativa,
+    cero claims -- falla cerrado, el mensaje nunca sugiere una ancla
+    inexistente."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        statement="El limite de mora es de 45 dias.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    number_violations = [v for v in violations if v.rule == "unsupported_explicit_number"]
+    assert len(number_violations) == 1
+    assert "45" in number_violations[0].message
+    assert "Ninguna evidencia autoritativa" in number_violations[0].message
+
+
+def test_14_7_supported_date_zero_claim_hint_points_to_decision() -> None:
+    """Caso 14.7: fecha ISO soportada por decision, cero claims -- el
+    mensaje apunta a $.decision."""
+    package = _package_with_date_decision_and_return_code()
+    draft = _draft(
+        statement="La fecha de alta debe ser posterior al 2026-01-01.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    date_violations = [v for v in violations if v.rule == "unsupported_explicit_date"]
+    assert len(date_violations) == 1
+    assert "$.decision" in date_violations[0].message
+    assert "Evidencia autoritativa real disponible" in date_violations[0].message
+
+
+def test_14_8_unsupported_date_fails_closed_no_anchor_suggested() -> None:
+    """Caso 14.8: fecha ISO NO soportada, cero claims -- falla cerrado,
+    ninguna ancla sugerida."""
+    package = _package_with_date_decision_and_return_code()
+    draft = _draft(
+        statement="La fecha de alta debe ser posterior al 2027-06-30.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    date_violations = [v for v in violations if v.rule == "unsupported_explicit_date"]
+    assert len(date_violations) == 1
+    assert "Ninguna evidencia autoritativa" in date_violations[0].message
+
+
+def test_14_9_literal_supported_only_by_raw_code_slice_fails_closed() -> None:
+    """Caso 14.9: el literal aparece en code_slice (texto crudo) pero
+    NUNCA en $.decision ni en un return_code aprobado -- code_slice NUNCA
+    es ancla autoritativa (ver `_authoritative_anchor_for_literal`):
+    falla cerrado, sin ancla sugerida, exactamente igual que si el
+    literal no existiera en ningun lado."""
+    package = _package_with_extra_code_slice(
+        "OTRO-PARA.\n    IF WS-FLAG = 'ZQX'\n        CONTINUE\n    END-IF.",
+        evidence_id="ev-statement",
+    )
+    draft = _draft(
+        statement="El indicador es 'ZQX'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.STATEMENT,
+                evidence_paths=["$.code_slice[1]"],
+                evidence_ids=["ev-statement"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    literal_violations = [v for v in violations if v.rule == "unsupported_explicit_literal"]
+    assert len(literal_violations) == 1
+    assert "Ninguna evidencia autoritativa" in literal_violations[0].message
+
+
+def test_14_12_two_distinct_anchors_never_cross_contaminate() -> None:
+    """Caso 14.12: dos literales distintos, cada uno respaldado por una
+    ancla DIFERENTE (uno por $.decision, otro por un return_code
+    aprobado) -- cada busqueda (`_authoritative_anchor_for_literal`) es
+    independiente y exacta por token, nunca 'adivina' devolviendo la
+    ancla de un token distinto ni fusiona ambas en una sola respuesta."""
+    package = _package_with_literal_decision_and_return_code()
+    # _package_with_literal_decision_and_return_code: decision contiene
+    # 'S' (WS-FIRMA-VALIDANOT='S'), return_codes[0] aprobado es 'R103'.
+    anchor_s = _authoritative_anchor_for_literal("S", package)
+    anchor_r103 = _authoritative_anchor_for_literal("R103", package)
+    assert anchor_s is not None
+    assert anchor_r103 is not None
+    assert anchor_s[0] == "$.decision"
+    assert anchor_r103[0] == "$.effects.return_codes[0]"
+    assert anchor_s[0] != anchor_r103[0], (
+        "cada literal debe resolver a SU PROPIA ancla, nunca la del otro"
+    )
+    # Un tercer literal genuinamente ausente de ambas anclas nunca debe
+    # "tomar prestada" ninguna de las dos por cercania/adivinanza.
+    assert _authoritative_anchor_for_literal("ZZZ", package) is None

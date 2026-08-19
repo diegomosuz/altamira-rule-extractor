@@ -56,3 +56,8 @@ REGLAS:
       explícitamente esa mutación).
     Esta prioridad es específica de la familia RETURN_CODE/Q0: no la
     apliques a otras familias de candidatos.
+16. Si un campo de texto libre contiene un literal de negocio entre
+    comillas, un número o una fecha que aparece literalmente en
+    `decision` o en un `effects.return_codes[i]` aprobado, ese campo
+    DEBE tener un claim que cite el alias correspondiente: en ese caso
+    el claim no es opcional (ver detalle en el prompt de usuario).

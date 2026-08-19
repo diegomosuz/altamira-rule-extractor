@@ -162,3 +162,36 @@ def test_structure_repair_system_never_teaches_bare_alias_placement_outside_evid
     assert (
         'SOLO puede\n  aparecer dentro de evidence_refs' in _STRUCTURE_REPAIR_SYSTEM
     )
+
+
+# ---------------------------------------------------------------------------
+# Fase 3B v1.18.3 (checkpoint correctivo de fiabilidad de reparacion de
+# hechos explicitos sin claim): regresion real candidato PAGMST01::
+# 1000-VALIDAR-CANAL (ejecucion v1.18.3 Fase 3
+# `20260819T150454102795-9d462eff`) -- `statement` afirmaba literales
+# 'API'/'WEB' (ambos respaldados por $.decision) sin ningun claim,
+# porque el prompt del writer solo describia los claims como opcionales
+# ("crea un claim UNICAMENTE cuando..."), sin ninguna excepcion que
+# volviera obligatorio un claim cuando el campo afirma un hecho
+# explicito ya gobernado por el guardrail determinista.
+# ---------------------------------------------------------------------------
+
+
+def test_writer_user_makes_claim_mandatory_for_governed_explicit_facts() -> None:
+    assert "EXCEPCIÓN OBLIGATORIA" in _WRITER_USER
+    assert "NO es opcional" in _WRITER_USER
+
+
+def test_writer_system_rule_16_points_to_mandatory_claim_exception() -> None:
+    assert "16." in _WRITER_SYSTEM
+    assert "no es opcional" in _WRITER_SYSTEM.lower()
+
+
+def test_writer_user_general_optional_claim_rule_still_present_unchanged() -> None:
+    # Guardia de no-regresion: la regla general (claims opcionales para
+    # contenido NO gobernado) sigue intacta, la excepcion nunca la
+    # reemplaza.
+    assert (
+        "crea un claim UNICAMENTE\n  cuando exista al menos un alias real del "
+        "catálogo que respalde ese\n  campo" in _WRITER_USER
+    )

@@ -447,6 +447,48 @@ def _literal_evidence_blob_for_claim(
     return " ".join(parts)
 
 
+def _explicit_fact_repair_hint(anchor: tuple[str, list[str]] | None) -> str:
+    """checkpoint correctivo Fase 3B v1.18.3 (cierre de fiabilidad de
+    reparacion de hechos explicitos sin claim): enriquece el MENSAJE de
+    una violacion `unsupported_explicit_number/_date/_literal` con la
+    MISMA busqueda deterministica ya usada por `augment_claims_with_
+    authoritative_anchors` (`_authoritative_anchor_for_token`/
+    `_authoritative_anchor_for_literal`, sin cambios) -- nunca crea un
+    claim, nunca toca ningun campo de `RuleDraft`: unicamente hace
+    explicito en el TEXTO que recibe el modelo de reparacion DONDE esta
+    la evidencia autoritativa real (si existe), en vez de exigir que el
+    modelo cruce por su cuenta el EVIDENCE_CATALOG completo contra el
+    ContextPackage para encontrarla.
+
+    Confirmado necesario por evidencia real (checkpoint de cierre de
+    Fase 3, seccion 7): candidato real PAGMST01::1000-VALIDAR-CANAL
+    (ejecucion v1.18.3 Fase 3 `20260819T150454102795-9d462eff`) -- 2
+    intentos reales de reparacion con `gpt-4o-mini` devolvieron la
+    MISMA respuesta byte a byte (mismo response_hash) sin agregar el
+    claim faltante, pese a que `rule_repair_system.md` ya instruye
+    explicitamente agregar un claim para este caso exacto ("el campo no
+    tiene ningun claim que lo respalde") y `$.decision` respaldaba
+    ambos literales de forma autoritativa. La guia generica
+    ("$.decision o un return_code aprobado", sin indicar CUAL de los
+    dos ni si alguno aplica realmente) exige que el modelo repita todo
+    el trabajo de busqueda que este guardrail ya hizo para detectar la
+    violacion -- este mensaje se lo entrega resuelto."""
+    if anchor is None:
+        return (
+            " Ninguna evidencia autoritativa (decision o return_code aprobado) "
+            "respalda este valor: si el hecho es correcto pero no citable, la "
+            "unica correccion valida es eliminar unicamente este valor "
+            "especifico del texto -- nunca sustituirlo por otro valor."
+        )
+    anchor_path, _evidence_ids = anchor
+    return (
+        f" Evidencia autoritativa real disponible en {anchor_path}: agrega (o "
+        "amplia) un claim para este campo citando el alias del EVIDENCE_CATALOG "
+        "de tipo 'decision' o 'return_codes' que representa esa ruta -- nunca "
+        "inventes un alias ni cambies el valor del campo."
+    )
+
+
 def _check_explicit_facts(
     claims: list[Claim],
     rule_draft: RuleDraft,
@@ -515,13 +557,15 @@ def _check_explicit_facts(
         iso_dates = set(_ISO_DATE_TOKEN_RE.findall(text))
         for date_token in sorted(iso_dates):
             if date_token not in evidence_blob:
+                date_anchor = _authoritative_anchor_for_token(date_token, package)
                 violations.append(
                     _violation(
                         f"unsupported_explicit_date::{representative_claim_id}::{date_token}",
                         "unsupported_explicit_date",
                         field.value,
                         f"la fecha {date_token!r} no aparece en la evidencia citada "
-                        f"por los claims de este campo{no_claim_suffix}",
+                        f"por los claims de este campo{no_claim_suffix}."
+                        f"{_explicit_fact_repair_hint(date_anchor)}",
                         Severity.ERROR,
                     )
                 )
@@ -545,13 +589,15 @@ def _check_explicit_facts(
         numbers = set(_NUMBER_TOKEN_RE.findall(text_without_dates))
         for number_token in sorted(numbers):
             if number_token not in evidence_blob:
+                number_anchor = _authoritative_anchor_for_token(number_token, package)
                 violations.append(
                     _violation(
                         f"unsupported_explicit_number::{representative_claim_id}::{number_token}",
                         "unsupported_explicit_number",
                         field.value,
                         f"el numero {number_token!r} no aparece en la evidencia citada "
-                        f"por los claims de este campo{no_claim_suffix}",
+                        f"por los claims de este campo{no_claim_suffix}."
+                        f"{_explicit_fact_repair_hint(number_anchor)}",
                         Severity.ERROR,
                     )
                 )
@@ -565,6 +611,7 @@ def _check_explicit_facts(
                 )
                 for literal_value in sorted(literal_values):
                     if not _bare_value_present(literal_evidence_blob, literal_value):
+                        literal_anchor = _authoritative_anchor_for_literal(literal_value, package)
                         violations.append(
                             _violation(
                                 f"unsupported_explicit_literal::"
@@ -573,7 +620,8 @@ def _check_explicit_facts(
                                 field.value,
                                 f"el literal {literal_value!r} no aparece en evidencia "
                                 "autoritativa ($.decision o un return_code aprobado) "
-                                f"citada por los claims de este campo{no_claim_suffix}",
+                                f"citada por los claims de este campo{no_claim_suffix}."
+                                f"{_explicit_fact_repair_hint(literal_anchor)}",
                                 Severity.ERROR,
                             )
                         )

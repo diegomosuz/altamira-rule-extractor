@@ -2039,3 +2039,203 @@ def test_repair_diagnostics_rebuilt_from_scratch_never_appended_across_runs(
     assert len(second_attempt) == 1
     assert second_attempt[0]["final_evidence_validation_status"] == "EVIDENCE_VALIDATED"
     assert second_attempt[0]["repair_attempts_used"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Fase 3B v1.18.3 (checkpoint correctivo de fiabilidad de reparacion de
+# hechos explicitos sin claim): caso 14.1 de principio a fin -- un campo
+# con hechos explicitos gobernados y CERO claims, reparado por un modelo
+# (fake) que SI agrega el claim correcto usando el alias real de
+# EVIDENCE_CATALOG que el mensaje de violacion enriquecido (Fase 3B)
+# ahora identifica explicitamente. Regresion real: candidato
+# PAGMST01::1000-VALIDAR-CANAL (ejecucion v1.18.3 Fase 3
+# `20260819T150454102795-9d462eff`).
+# ---------------------------------------------------------------------------
+
+
+def _package_with_channel_literal_decision(candidate_id: str) -> ContextPackage:
+    """Reproduce el candidato real PAGMST01::1000-VALIDAR-CANAL: DOS
+    literales de negocio entre comillas en la decision ('WEB'/'API')."""
+    decision_evidence = EvidenceEntry(
+        evidence_id="ev-decision",
+        kind="decision",
+        source_file="cobol/PROG1.cbl",
+        line_start=10,
+        line_end=10,
+        source_package_hash=_HASH_A,
+    )
+    return ContextPackage(
+        schema_version="2.0",
+        candidate=ContextPackageCandidate(
+            candidate_id=candidate_id,
+            decision_id="dec-1",
+            detector_id="det",
+            detector_version="1.0",
+            detector_score=1.0,
+        ),
+        scope=ContextPackageScope(
+            country="AR",
+            application="Pagos",
+            operation=ContextPackageOperation(logical_name="OP1", description=None),
+            program="PROG1",
+            program_version="1",
+            paragraph="MAIN",
+            source_file="cobol/PROG1.cbl",
+            line_start=10,
+            line_end=10,
+            source_package_hash=_HASH_A,
+        ),
+        code_slice=[
+            CodeSliceEntry(
+                paragraph_id="p1",
+                paragraph="MAIN",
+                source_file="cobol/PROG1.cbl",
+                source_text="IF WS-CANAL NOT = 'WEB' AND WS-CANAL NOT = 'API'",
+                line_start=10,
+                line_end=10,
+                inclusion_reason=InclusionReason.CANDIDATE,
+                evidence_ids=["ev-decision"],
+            )
+        ],
+        data_context=DataContext(parameter_tables=[], transactional_tables_read=[]),
+        decision=ContextPackageDecision(
+            expression="WS-CANAL NOT = 'WEB' AND WS-CANAL NOT = 'API'",
+            normalized_expression="WS-CANAL NOT = 'WEB' AND WS-CANAL NOT = 'API'",
+            operands=["WS-CANAL"],
+            rule_type=None,
+            outcome_code="M101",
+            evidence_ids=["ev-decision"],
+        ),
+        effects=Effects(return_codes=[], table_effects=[]),
+        batch_context=BatchContext(status=BatchContextStatus.NOT_AVAILABLE, downstream_jobs=[]),
+        domain_glossary=[],
+        evidence=[decision_evidence],
+        completeness=Completeness(
+            D1=CompletenessStatus.COMPLETE,
+            D2=CompletenessStatus.COMPLETE,
+            D3=CompletenessStatus.NOT_AVAILABLE,
+            D4=CompletenessStatus.COMPLETE,
+            D5=CompletenessStatus.NOT_AVAILABLE,
+            D6=CompletenessStatus.NOT_AVAILABLE,
+            D7=CompletenessStatus.NOT_AVAILABLE,
+        ),
+    )
+
+
+def test_14_1_zero_claim_governed_literals_repaired_by_adding_claim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Caso 14.1: `statement` afirma 'API'/'WEB' (ambos soportados por
+    $.decision) sin ningun claim propio -- el guardrail lo detecta
+    (mensaje enriquecido con la ancla real, Fase 3B), un unico intento de
+    reparacion (fake) agrega el claim correcto citando el alias real de
+    'decision', y el candidato converge a EVIDENCE_VALIDATED. Ningun
+    valor de negocio se toca; el claim de `condition` (ya correcto)
+    permanece intacto."""
+    package = _package_with_channel_literal_decision("cand-1")
+    catalog = build_evidence_catalog(package)
+    decision_alias = catalog.find_alias("ev-decision", "$.decision")
+    assert decision_alias is not None
+
+    draft = RuleDraft(
+        schema_version="2.0",
+        title="Validacion del canal de pago",
+        context="Operacion de autorizacion de pagos para empresas.",
+        statement="Se valida que el canal de pago utilizado sea 'WEB' o 'API'.",
+        condition="El canal de pago no es 'WEB' ni 'API'.",
+        parameters=[],
+        effect="Se asigna el codigo de retorno M101.",
+        parameter_source=None,
+        traceability=["Basado en la decision implementada en el parrafo de validacion de canal."],
+        limitations=["Requiere revision funcional."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+        evidence_validation_status=EvidenceValidationStatus.PENDING,
+    )
+
+    repaired_payload = _valid_repair_payload(
+        statement="Se valida que el canal de pago utilizado sea 'WEB' o 'API'.",
+        condition="El canal de pago no es 'WEB' ni 'API'.",
+        effect="Se asigna el codigo de retorno M101.",
+        claims=[
+            {"claim_id": "c1", "field": "condition", "evidence_refs": [decision_alias]},
+            {"claim_id": "c2", "field": "statement", "evidence_refs": [decision_alias]},
+        ],
+    )
+    _install_fake_client(monkeypatch, [repaired_payload])
+
+    kwargs = _base_kwargs(tmp_path, packages=[package], drafts={"cand-1": draft})
+    warnings = run_guardrails_applied_stage(**kwargs)
+
+    assert warnings == ["1 guardrail(s)"]
+    manifest = GuardrailDirectoryManifest.model_validate_json(
+        (kwargs["guardrail_dir"] / "guardrail-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest.records[0].repair_attempts_used == 1
+    final = _read_final_draft(kwargs)
+    assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+    assert final.statement == draft.statement
+    assert final.condition == draft.condition
+    statement_claim = next(c for c in final.claims if c.field == ClaimField.STATEMENT)
+    assert "$.decision" in statement_claim.evidence_paths
+
+
+def test_14_1b_violation_message_reaches_repair_prompt_with_anchor_hint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Complemento del caso 14.1: confirma que el texto que el modelo de
+    reparacion REALMENTE recibe (GUARDRAIL_VIOLATIONS_JSON del prompt)
+    incluye la pista de ancla autoritativa enriquecida (Fase 3B) -- no
+    solo que la reparacion converja, sino que la informacion nueva
+    efectivamente viaje hasta el prompt real."""
+    package = _package_with_channel_literal_decision("cand-1")
+    catalog = build_evidence_catalog(package)
+    decision_alias = catalog.find_alias("ev-decision", "$.decision")
+    assert decision_alias is not None
+
+    draft = RuleDraft(
+        schema_version="2.0",
+        title="Validacion del canal de pago",
+        context="Operacion de autorizacion de pagos para empresas.",
+        statement="Se valida que el canal de pago utilizado sea 'WEB' o 'API'.",
+        condition="El canal de pago no es 'WEB' ni 'API'.",
+        parameters=[],
+        effect="Se asigna el codigo de retorno M101.",
+        parameter_source=None,
+        traceability=["Basado en la decision implementada en el parrafo de validacion de canal."],
+        limitations=["Requiere revision funcional."],
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+        evidence_validation_status=EvidenceValidationStatus.PENDING,
+    )
+    repaired_payload = _valid_repair_payload(
+        statement="Se valida que el canal de pago utilizado sea 'WEB' o 'API'.",
+        condition="El canal de pago no es 'WEB' ni 'API'.",
+        effect="Se asigna el codigo de retorno M101.",
+        claims=[
+            {"claim_id": "c1", "field": "condition", "evidence_refs": [decision_alias]},
+            {"claim_id": "c2", "field": "statement", "evidence_refs": [decision_alias]},
+        ],
+    )
+    calls = _install_fake_client(monkeypatch, [repaired_payload])
+
+    kwargs = _base_kwargs(tmp_path, packages=[package], drafts={"cand-1": draft})
+    run_guardrails_applied_stage(**kwargs)
+
+    assert len(calls) == 1
+    user_message = next(m.content for m in calls[0] if m.role == "user")
+    assert "Evidencia autoritativa real disponible en $.decision" in user_message
+    assert "API" in user_message
+    assert "WEB" in user_message
