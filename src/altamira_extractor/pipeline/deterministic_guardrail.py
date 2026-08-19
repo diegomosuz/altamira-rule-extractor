@@ -28,7 +28,7 @@ from ..contracts.enums import BatchContextStatus, ClaimField, Severity
 from ..contracts.guardrail import GuardrailViolation
 from ..contracts.rule_draft import Claim, RuleDraft
 
-GUARDRAIL_VERSION = "1.3"
+GUARDRAIL_VERSION = "1.4"
 
 _PATH_TOKEN_RE = re.compile(r"\.(?P<field>[A-Za-z_][A-Za-z0-9_]*)|\[(?P<index>\d+)\]")
 
@@ -84,6 +84,41 @@ def _violation(
     return GuardrailViolation(
         violation_id=violation_id, rule=rule, field=field, message=message, severity=severity
     )
+
+
+def _parse_claim_scoped_violation_id(violation_id: str) -> tuple[str, str, str] | None:
+    """Analiza un `violation_id` con formato `{rule}::{claim_id}::{token}`
+    (checkpoint correctivo v1.18.3 Fase 2 -- bug preexistente descubierto
+    via prueba de corpus real: candidato PAGAUX01::1300-PROPAGAR-04,
+    `claim_id` real generado por el modelo = "claim::6", que contiene `::`
+    dentro de si mismo). Un `violation_id.split("::")` ingenuo asumiendo
+    exactamente 3 partes rompe (silenciosamente, `len(parts) != 3`) tanto
+    `augment_claims_with_authoritative_anchors` como
+    `retarget_unapproved_table_effect_citations` cada vez que el modelo
+    genera un `claim_id` con este patron -- confirmado NO es un caso raro
+    (es la convencion de nombrado mas comun observada en candidatos V2
+    reales).
+
+    Estrategia robusta: `rule` (prefijo fijo, nunca contiene `::`) se
+    toma hasta el PRIMER separador; `token` (numero/fecha/literal/indice,
+    nunca contiene `::` por construccion de sus propios tokenizadores) se
+    toma desde el ULTIMO separador; todo lo que queda en medio -- sin
+    importar cuantos `::` internos tenga -- es `claim_id`. Devuelve
+    `None` unicamente si falta un separador o si algun componente
+    resultante queda vacio (violation_id genuinamente malformado)."""
+    first_sep = violation_id.find("::")
+    if first_sep == -1:
+        return None
+    rule = violation_id[:first_sep]
+    rest = violation_id[first_sep + 2 :]
+    last_sep = rest.rfind("::")
+    if last_sep == -1:
+        return None
+    claim_id = rest[:last_sep]
+    token = rest[last_sep + 2 :]
+    if not rule or not claim_id or not token:
+        return None
+    return rule, claim_id, token
 
 
 def _check_evidence_paths_and_ids(
@@ -278,6 +313,38 @@ _ISO_DATE_TOKEN_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _AMBIGUOUS_DATE_TOKEN_RE = re.compile(r"\b\d{1,2}[/.]\d{1,2}[/.]\d{2,4}\b")
 _NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
 
+# checkpoint correctivo v1.18.3 Fase 2: literal de codigo citado
+# explicitamente entre comillas simples o dobles (MISMA comilla en
+# ambos lados via el backreference `(?P=quote)` -- nunca acepta
+# comillas desparejadas como `'A"`), 1-8 caracteres, UNICAMENTE
+# mayusculas A-Z y digitos 0-9. Deliberadamente NUNCA gobierna
+# minusculas, espacios, guiones, guiones bajos ni codigos sin comillas
+# (`ACT`/`PYM`/`USD` sueltos): alcance angosto explicito de Fase 2, ver
+# docs de cierre de preflight v1.18.3 seccion 9 ("comenzar con el
+# alcance mas defendible").
+_QUOTED_LITERAL_TOKEN_RE = re.compile(r"(?P<quote>['\"])(?P<value>[A-Z0-9]{1,8})(?P=quote)")
+
+# Campos de negocio donde el descubrimiento de hechos explicitos (numero/
+# fecha/literal) es FIELD-FIRST (Fase 2): se evaluan SIEMPRE, incluso sin
+# ningun Claim -- cierra el bypass documentado en el cierre de preflight
+# v1.18.3 ("un campo sin ningun claim queda invisible"). NUNCA incluye
+# traceability (mecanismo dedicado propio, comportamiento v1.18.2 sin
+# cambios) ni limitations (texto de advertencia deliberadamente libre,
+# ver rule_writer_system.md regla 13: la limitacion de "revision
+# funcional" nunca lleva claim a proposito). Documentado tambien en
+# tests/pipeline/test_deterministic_guardrail.py.
+_EXPLICIT_FACT_FIELD_FIRST_FIELDS: frozenset[ClaimField] = frozenset(
+    {
+        ClaimField.TITLE,
+        ClaimField.CONTEXT,
+        ClaimField.STATEMENT,
+        ClaimField.CONDITION,
+        ClaimField.EFFECT,
+        ClaimField.PARAMETER_SOURCE,
+        ClaimField.PARAMETERS,
+    }
+)
+
 _CLAIM_FIELD_TO_DRAFT_ATTR: dict[ClaimField, str] = {
     ClaimField.TITLE: "title",
     ClaimField.CONTEXT: "context",
@@ -328,34 +395,122 @@ def _claims_by_field(claims: list[Claim]) -> dict[ClaimField, list[Claim]]:
     return grouped
 
 
-def _check_numbers_and_dates(
-    claims: list[Claim], rule_draft: RuleDraft, context_dict: dict[str, Any]
+def _quoted_literal_values(text: str) -> set[str]:
+    return {match.group("value") for match in _QUOTED_LITERAL_TOKEN_RE.finditer(text)}
+
+
+def _bare_value_present(text: str, value: str) -> bool:
+    """Coincidencia EXACTA por limite de palabra de un valor literal
+    (`A`, `D203`) dentro de texto SIN comillas -- MISMA disciplina que
+    `_table_identifier_present` (Fase 1 v1.18.3): nunca substring. El
+    valor entre comillas del propio campo de negocio (`'A'`) se compara
+    contra el valor BARE de la ancla autoritativa (`decision.
+    normalized_expression`/`return_codes[i].code`, ninguno de los
+    cuales lleva comillas propias en este contrato)."""
+    return re.search(r"\b" + re.escape(value) + r"\b", text) is not None
+
+
+def _is_literal_authoritative_path(path: str, package: ContextPackage) -> bool:
+    """Alcance EXACTO y ACOTADO de anclas autoritativas para
+    `unsupported_explicit_literal` (Fase 2 v1.18.3, seccion 6 del cierre
+    de preflight): UNICAMENTE `$.decision` (o cualquier sub-path bajo
+    el, p. ej. `$.decision.normalized_expression`) y
+    `$.effects.return_codes[i]` con `approved_for_rule_text=true`.
+    Deliberadamente NUNCA code_slice, domain_glossary, table_effects,
+    parameter_tables ni ningun otro contenedor -- aunque un claim los
+    cite, nunca respaldan un literal de negocio (una coincidencia
+    textual ahi podria ser casualidad de codigo fuente crudo, nunca un
+    hecho verificado). Distinto, deliberadamente mas angosto, que la
+    evidencia general que SI acepta `_evidence_blob_for_claim` para
+    numeros/fechas (ver CLAUDE.md/docstring de
+    `_authoritative_anchor_for_token`, mismo principio)."""
+    if path == "$.decision" or path.startswith("$.decision."):
+        return True
+    match = _RETURN_CODE_PATH_RE.match(path)
+    if match:
+        index = int(match.group(1))
+        if index < len(package.effects.return_codes):
+            return package.effects.return_codes[index].approved_for_rule_text
+    return False
+
+
+def _literal_evidence_blob_for_claim(
+    claim: Claim, context_dict: dict[str, Any], package: ContextPackage
+) -> str:
+    parts: list[str] = []
+    for path in claim.evidence_paths:
+        if not _is_literal_authoritative_path(path, package):
+            continue
+        found, value = resolve_json_path(context_dict, path)
+        if found:
+            parts.append(_flatten_to_text(value))
+    return " ".join(parts)
+
+
+def _check_explicit_facts(
+    claims: list[Claim],
+    rule_draft: RuleDraft,
+    context_dict: dict[str, Any],
+    package: ContextPackage,
 ) -> list[GuardrailViolation]:
-    """checkpoint correctivo (paquete multiprograma, candidato CE10):
-    un `field` de `RuleDraft` puede estar respaldado por MAS DE UN claim
-    a la vez (p. ej. uno cita la evidencia de control-flow que llega al
-    paragraph, otro cita el statement exacto con el literal numerico) --
-    eso es una estructura de claims perfectamente valida, nunca prohibida
-    por el contrato. La version anterior de este check evaluaba cada
-    claim de forma AISLADA contra el texto COMPLETO del field, lo que
-    producia un falso positivo cuando el numero/fecha del field estaba
-    respaldado por la evidencia de OTRO claim del mismo field: el
-    `RuleDraft` quedaba indefinidamente irreparable (el modelo no puede
-    satisfacer una expectativa incorrecta sin borrar un claim
-    legitimo). La correccion agrega la evidencia de TODOS los claims que
-    comparten el mismo field antes de exigir que el numero/fecha
-    aparezca LITERALMENTE en ese conjunto -- nunca se relaja la exigencia
-    de aparicion literal, solo se corrige el alcance de "la evidencia
-    citada" de un unico claim al del field completo."""
+    """checkpoint correctivo (paquete multiprograma, candidato CE10, sin
+    cambios): un `field` de `RuleDraft` puede estar respaldado por MAS
+    DE UN claim a la vez (p. ej. uno cita la evidencia de control-flow
+    que llega al paragraph, otro cita el statement exacto con el
+    literal numerico) -- eso es una estructura de claims perfectamente
+    valida, nunca prohibida por el contrato. Se agrega la evidencia de
+    TODOS los claims que comparten el mismo field antes de exigir que
+    el numero/fecha aparezca LITERALMENTE en ese conjunto -- nunca se
+    relaja la exigencia de aparicion literal, solo se corrige el
+    alcance de "la evidencia citada" de un unico claim al del field
+    completo.
+
+    checkpoint correctivo v1.18.3 Fase 2 (cierre del hueco de
+    validacion claim-driven documentado en el cierre de preflight de
+    v1.18.3): para los campos en `_EXPLICIT_FACT_FIELD_FIRST_FIELDS`
+    (title/context/statement/condition/effect/parameter_source/
+    parameters -- NUNCA traceability, que conserva su mecanismo propio
+    y su comportamiento v1.18.2 sin cambios; NUNCA limitations,
+    deliberadamente texto libre), el descubrimiento de hechos
+    explicitos es FIELD-FIRST: el campo SIEMPRE se evalua, exista o no
+    al menos un claim que lo referencie. Un campo SIN ningun claim
+    produce un `evidence_blob`/`literal_evidence_blob` vacios, asi que
+    CUALQUIER numero/fecha/literal encontrado en su texto viola de
+    inmediato -- la ausencia de un claim nunca vuelve invisible un
+    hecho explicito gobernado (nunca requiere una rama especial: la
+    MISMA comparacion "el token no aparece en la evidencia" ya lo
+    cubre). traceability/limitations conservan el comportamiento
+    claims-first anterior sin cambios: solo se evaluan cuando YA tienen
+    al menos un claim (ver `_claims_by_field`).
+
+    El nuevo check `unsupported_explicit_literal` (literales entre
+    comillas, `_QUOTED_LITERAL_TOKEN_RE`) NUNCA se aplica a
+    traceability/limitations, y usa `_literal_evidence_blob_for_claim`
+    (NUNCA `_evidence_blob_for_claim`): su ancla autoritativa esta
+    deliberadamente acotada a `$.decision`/`return_codes[i]` aprobado
+    (ver `_is_literal_authoritative_path`), nunca a code_slice ni
+    cualquier otra evidencia que un claim pudiera citar."""
     violations: list[GuardrailViolation] = []
-    for field, field_claims in _claims_by_field(claims).items():
+    claims_by_field = _claims_by_field(claims)
+    fields_to_check = set(_EXPLICIT_FACT_FIELD_FIRST_FIELDS)
+    for legacy_field in (ClaimField.TRACEABILITY, ClaimField.LIMITATIONS):
+        if legacy_field in claims_by_field:
+            fields_to_check.add(legacy_field)
+
+    for field in fields_to_check:
         text = _draft_text_for_claim_field(rule_draft, field)
         if not text:
             continue
+        field_claims = claims_by_field.get(field, [])
         evidence_blob = " ".join(
             _evidence_blob_for_claim(claim, context_dict) for claim in field_claims
         )
-        representative_claim_id = min(claim.claim_id for claim in field_claims)
+        representative_claim_id = (
+            min(claim.claim_id for claim in field_claims) if field_claims else "<sin-claim>"
+        )
+        no_claim_suffix = (
+            "" if field_claims else " (el campo no tiene ningun claim que lo respalde)"
+        )
 
         iso_dates = set(_ISO_DATE_TOKEN_RE.findall(text))
         for date_token in sorted(iso_dates):
@@ -366,7 +521,7 @@ def _check_numbers_and_dates(
                         "unsupported_explicit_date",
                         field.value,
                         f"la fecha {date_token!r} no aparece en la evidencia citada "
-                        "por los claims de este campo",
+                        f"por los claims de este campo{no_claim_suffix}",
                         Severity.ERROR,
                     )
                 )
@@ -396,16 +551,38 @@ def _check_numbers_and_dates(
                         "unsupported_explicit_number",
                         field.value,
                         f"el numero {number_token!r} no aparece en la evidencia citada "
-                        "por los claims de este campo",
+                        f"por los claims de este campo{no_claim_suffix}",
                         Severity.ERROR,
                     )
                 )
+
+        if field in _EXPLICIT_FACT_FIELD_FIRST_FIELDS:
+            literal_values = _quoted_literal_values(text)
+            if literal_values:
+                literal_evidence_blob = " ".join(
+                    _literal_evidence_blob_for_claim(claim, context_dict, package)
+                    for claim in field_claims
+                )
+                for literal_value in sorted(literal_values):
+                    if not _bare_value_present(literal_evidence_blob, literal_value):
+                        violations.append(
+                            _violation(
+                                f"unsupported_explicit_literal::"
+                                f"{representative_claim_id}::{literal_value}",
+                                "unsupported_explicit_literal",
+                                field.value,
+                                f"el literal {literal_value!r} no aparece en evidencia "
+                                "autoritativa ($.decision o un return_code aprobado) "
+                                f"citada por los claims de este campo{no_claim_suffix}",
+                                Severity.ERROR,
+                            )
+                        )
     return violations
 
 
 def _text_contains_token(text: str, token: str) -> bool:
     """Reutiliza EXACTAMENTE la misma tokenizacion que
-    `_check_numbers_and_dates` (nunca una comparacion de substring
+    `_check_explicit_facts` (nunca una comparacion de substring
     ingenua, que podria confundir '01' dentro de '4001' con el token
     real): un elemento "contiene" el token unicamente si la MISMA
     extraccion regex que genero la violacion tambien lo encuentra ahi."""
@@ -605,6 +782,41 @@ def _authoritative_anchor_for_token(
     return None
 
 
+def _authoritative_anchor_for_literal(
+    value: str, package: ContextPackage
+) -> tuple[str, list[str]] | None:
+    """checkpoint correctivo v1.18.3 Fase 2 (extension real, no
+    planeada originalmente: candidato real PAGRIE01::1200-FIRMA de
+    PAQUETE_SINTETICO_ALTAMIRA_PAGOS_EMPRESAS_EXHAUSTIVO_48_REGLAS_
+    v1.18.2_v2_E2E.zip -- `decision.expression`
+    "WS-FIRMA-VALIDANOT='S'" contiene 'S' autoritativamente, el claim
+    de `condition` citaba UNICAMENTE `$.code_slice[1]` -- MISMA busqueda
+    que `_authoritative_anchor_for_token` (decision + return_codes
+    aprobado, NUNCA code_slice/domain_glossary/table_effects, ver su
+    docstring), pero usando `_bare_value_present` (limite de palabra
+    exacto) en vez de `_text_contains_token`: un valor literal
+    alfanumerico (`S`, `D203`) no necesita ni debe pasar por el
+    stripping de fechas de `_text_contains_token` (irrelevante para un
+    codigo de negocio, nunca una fecha)."""
+    decision = package.decision
+    if decision is not None:
+        decision_text = " ".join(
+            text
+            for text in (decision.expression, decision.normalized_expression, decision.outcome_code)
+            if text is not None
+        )
+        if _bare_value_present(decision_text, value):
+            return "$.decision", list(decision.evidence_ids)
+
+    for index, return_code in enumerate(package.effects.return_codes):
+        if not return_code.approved_for_rule_text:
+            continue
+        if _bare_value_present(return_code.code, value):
+            return f"$.effects.return_codes[{index}]", list(return_code.evidence_ids)
+
+    return None
+
+
 def augment_claims_with_authoritative_anchors(
     rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
 ) -> RuleDraft | None:
@@ -647,15 +859,20 @@ def augment_claims_with_authoritative_anchors(
     candidato completo sigue su ciclo de reparacion LLM existente sin
     cambios (nunca amplia unos claims mientras deja otros con una
     afirmacion potencialmente no soportada sin resolver en el mismo
-    paso). Esto NUNCA relaja `_check_numbers_and_dates`: el token debe
+    paso). Esto NUNCA relaja `_check_explicit_facts`: el token debe
     seguir apareciendo LITERALMENTE en la evidencia (ahora ampliada,
     nunca inventada) para que la revalidacion posterior del llamador
     pase."""
+    _augmentable_rules = (
+        "unsupported_explicit_number",
+        "unsupported_explicit_date",
+        "unsupported_explicit_literal",
+    )
     error_violations = [
         v
         for v in violations
         if v.severity == Severity.ERROR
-        and v.rule in ("unsupported_explicit_number", "unsupported_explicit_date")
+        and v.rule in _augmentable_rules
         and v.field != ClaimField.TRACEABILITY.value
     ]
     if not error_violations:
@@ -671,14 +888,23 @@ def augment_claims_with_authoritative_anchors(
     anchor_paths_by_claim_id: dict[str, list[str]] = {}
     anchor_ids_by_claim_id: dict[str, list[str]] = {}
     for violation in error_violations:
-        parts = violation.violation_id.split("::")
-        if len(parts) != 3:
+        parsed = _parse_claim_scoped_violation_id(violation.violation_id)
+        if parsed is None:
             return None
-        _rule, claim_id, token = parts
+        rule, claim_id, token = parsed
         claim = claims_by_id.get(claim_id)
         if claim is None:
             return None
-        anchor = _authoritative_anchor_for_token(token, package)
+        # checkpoint correctivo v1.18.3 Fase 2: unsupported_explicit_literal
+        # usa _authoritative_anchor_for_literal (limite de palabra exacto,
+        # sin el stripping de fechas de _text_contains_token -- irrelevante
+        # para un valor literal alfanumerico); number/date conservan
+        # exactamente su busqueda original, sin cambios.
+        anchor = (
+            _authoritative_anchor_for_literal(token, package)
+            if rule == "unsupported_explicit_literal"
+            else _authoritative_anchor_for_token(token, package)
+        )
         if anchor is None:
             return None
         anchor_path, anchor_evidence_ids = anchor
@@ -797,7 +1023,7 @@ def retarget_unapproved_table_effect_citations(
     `min_length=1` del contrato `Claim`, y reabriria el hueco de
     validacion claim-driven documentado en el cierre de preflight de
     v1.18.3: un campo sin ningun claim queda invisible para
-    `_check_numbers_and_dates`/`_check_approved_for_rule_text`)."""
+    `_check_explicit_facts`/`_check_approved_for_rule_text`)."""
     table_effect_violations = [
         v
         for v in violations
@@ -818,10 +1044,10 @@ def retarget_unapproved_table_effect_citations(
     ids_to_add_by_claim_id: dict[str, list[str]] = {}
 
     for violation in table_effect_violations:
-        parts = violation.violation_id.split("::")
-        if len(parts) != 3:
+        parsed = _parse_claim_scoped_violation_id(violation.violation_id)
+        if parsed is None:
             return None
-        _rule, claim_id, index_text = parts
+        _rule, claim_id, index_text = parsed
         claim = claims_by_id.get(claim_id)
         if claim is None:
             return None
@@ -904,7 +1130,7 @@ def evaluate_guardrail(rule_draft: RuleDraft, package: ContextPackage) -> list[G
     violations: list[GuardrailViolation] = []
     violations.extend(_check_evidence_paths_and_ids(rule_draft.claims, context_dict, evidence_ids))
     violations.extend(_check_approved_for_rule_text(rule_draft.claims, package))
-    violations.extend(_check_numbers_and_dates(rule_draft.claims, rule_draft, context_dict))
+    violations.extend(_check_explicit_facts(rule_draft.claims, rule_draft, context_dict, package))
     violations.extend(_check_prompt_injection(rule_draft))
     violations.extend(_check_batch_structured_evidence_when_unavailable(rule_draft.claims, package))
     violations.extend(_check_batch_mentioned_without_evidence(rule_draft, package))

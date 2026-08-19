@@ -343,11 +343,30 @@ class RuleDraftGenerationError(PipelineError):
     `validation_errors` (opcional, vacio por defecto) expone los mismos
     detalles estructurados loc/type/msg de `RuleDraftAssemblyError` para
     quien necesite inspeccionarlos programaticamente (p. ej. tests) sin
-    parsear el mensaje de texto."""
+    parsear el mensaje de texto.
 
-    def __init__(self, message: str, *, validation_errors: tuple[Any, ...] = ()) -> None:
+    `diagnostics` (checkpoint correctivo v1.18.3 Fase 2, opcional, `None`
+    por defecto) expone el resumen sanitizado de reparacion estructural
+    del candidato que agoto `llm_repair_attempts` -- mismo proposito que
+    `GuardrailError.diagnostics`. `all_candidate_diagnostics` (tambien
+    opcional, `None` por defecto, NUNCA pasado al constructor) lo
+    completa `_generate_all_drafts` DESPUES de capturar la excepcion, con
+    el diagnostico de TODOS los candidatos procesados antes del fallo
+    (no solo el ultimo) -- el llamador (`run_rule_drafts_generated_stage`)
+    lo persiste en un artefacto NO contractual, fuera de
+    `artifacts/08-rule-drafts/`."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        validation_errors: tuple[Any, ...] = (),
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.validation_errors = validation_errors
+        self.diagnostics = diagnostics
+        self.all_candidate_diagnostics: list[dict[str, Any]] | None = None
 
 
 class GuardrailError(PipelineError):
@@ -375,13 +394,33 @@ class GuardrailError(PipelineError):
     hashes de respuesta ya calculados -- del ULTIMO candidato que agoto
     `LLM_REPAIR_ATTEMPTS`. Nunca incluye prompts completos, respuestas
     crudas ni credenciales: el llamador (`guardrails_applied_stage.
-    run_guardrails_applied_stage`) lo persiste en un artefacto NO
-    contractual, fuera de `artifacts/09-guardrails/`, para que un fallo
-    sea diagnosticable sin depender unicamente de este mensaje de texto."""
+    run_guardrails_applied_stage`) lo persiste en `guardrails-failure-
+    diagnostics.json` (artefacto NO contractual, fuera de
+    `artifacts/09-guardrails/`), SIN CAMBIOS desde v1.18.2, para
+    compatibilidad hacia atras.
 
-    def __init__(self, message: str, *, diagnostics: dict[str, Any] | None = None) -> None:
+    `candidate_diagnostics` (checkpoint correctivo v1.18.3 Fase 2,
+    opcional, `None` por defecto) expone la MISMA forma generalizada de
+    `_build_candidate_repair_diagnostics` para este candidato
+    especifico (el que agoto la reparacion). `all_candidate_diagnostics`
+    (tambien opcional, `None` por defecto, NUNCA pasado al constructor)
+    lo completa `_resolve_all_candidates` DESPUES de capturar la
+    excepcion, con el diagnostico de TODOS los candidatos resueltos
+    antes del fallo (EVIDENCE_VALIDATED o no) -- el llamador lo persiste
+    en `guardrail-repair-diagnostics.json`, artefacto NUEVO y separado,
+    nunca mezclado con `guardrails-failure-diagnostics.json`."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: dict[str, Any] | None = None,
+        candidate_diagnostics: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.diagnostics = diagnostics
+        self.candidate_diagnostics = candidate_diagnostics
+        self.all_candidate_diagnostics: list[dict[str, Any]] | None = None
 
 
 class MarkdownRenderError(PipelineError):

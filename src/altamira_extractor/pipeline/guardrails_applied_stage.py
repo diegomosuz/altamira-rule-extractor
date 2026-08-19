@@ -91,6 +91,18 @@ _FAILURE_SUMMARY_MAX_LENGTH = 500
 # limpia al comienzo de cada corrida y se reescribe unicamente si esa
 # corrida vuelve a fallar.
 _FAILURE_DIAGNOSTICS_FILENAME = "guardrails-failure-diagnostics.json"
+# checkpoint correctivo v1.18.3 Fase 2: artefacto de diagnostico NO
+# contractual SEPARADO y ADICIONAL (nunca reemplaza ni cambia la forma
+# de `_FAILURE_DIAGNOSTICS_FILENAME`, preservado sin cambios para
+# compatibilidad hacia atras) -- registra el veredicto de reparacion de
+# TODOS los candidatos resueltos, no solo el ultimo que fallo. A
+# diferencia del archivo de fallo (que solo existe tras un fallo), este
+# se escribe SIEMPRE (exito o fallo): su proposito es medir la
+# distribucion real de intervenciones (deterministicas + LLM) incluso
+# en corridas 48/48 exitosas. Se limpia al comienzo de cada corrida y
+# se reescribe deterministicamente desde cero -- nunca se acumula entre
+# corridas/reanudaciones.
+_REPAIR_DIAGNOSTICS_FILENAME = "guardrail-repair-diagnostics.json"
 
 _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
 _REJECTED_DRAFT_PLACEHOLDER = "{{REJECTED_RULE_DRAFT_JSON}}"
@@ -389,6 +401,84 @@ def _build_failure_diagnostics(
     }
 
 
+def _build_candidate_repair_diagnostics(
+    *,
+    candidate_id: str,
+    package: ContextPackage,
+    current_draft: RuleDraft,
+    violations: list[GuardrailViolation],
+    repair_history: list[RepairAttemptRecord],
+    final_status: str,
+) -> dict[str, Any]:
+    """checkpoint correctivo v1.18.3 Fase 2 (diagnostico per-candidato,
+    seccion 16 del cierre de preflight): MISMA forma sanitizada que
+    `_build_failure_diagnostics` (nunca el prompt efectivo, el body
+    crudo de ninguna respuesta ni credenciales; `claims` expone
+    UNICAMENTE evidence_ids/evidence_paths, NUNCA el texto de negocio
+    title/context/statement/condition/effect/parameters/traceability/
+    limitations -- nunca contenido promocionable de RuleDraft) pero
+    GENERALIZADA a CUALQUIER candidato (EVIDENCE_VALIDATED o REJECTED,
+    no solo el que agoto la reparacion) y con el desglose por intento
+    (`initial`/`repair_attempt_1`/`repair_attempt_2`) que pide la
+    seccion 16, en vez de solo el ultimo estado. Deliberadamente una
+    funcion SEPARADA de `_build_failure_diagnostics` (nunca la
+    reemplaza ni cambia su forma): preserva `guardrails-failure-
+    diagnostics.json` intacto para compatibilidad hacia atras (seccion
+    17), esta es la fuente de `guardrail-repair-diagnostics.json`,
+    artefacto NUEVO y adicional."""
+    deterministic_interventions = sum(
+        1 for attempt in repair_history if attempt.response_hash is None
+    )
+    llm_attempts = [attempt for attempt in repair_history if attempt.response_hash is not None]
+    record: dict[str, Any] = {
+        "candidate_id": candidate_id,
+        "program": package.scope.program,
+        "paragraph": package.scope.paragraph,
+        "initial_evidence_validation_status": (
+            "EVIDENCE_VALIDATED" if not llm_attempts and final_status == "EVIDENCE_VALIDATED"
+            else None
+        ),
+        "deterministic_interventions_applied": deterministic_interventions,
+        "repair_attempt_1_verdict": None,
+        "repair_attempt_1_violation_codes": [],
+        "repair_attempt_2_verdict": None,
+        "repair_attempt_2_violation_codes": [],
+        "final_evidence_validation_status": final_status,
+        "repair_attempts_used": len(llm_attempts),
+    }
+    labels = ("repair_attempt_1", "repair_attempt_2")
+    for index, attempt in enumerate(llm_attempts):
+        if index >= len(labels):
+            continue
+        label = labels[index]
+        record[f"{label}_verdict"] = "ACCEPTED" if attempt.structurally_valid else "REJECTED"
+        error_count_after = attempt.error_count_after
+        record[f"{label}_violation_codes"] = (
+            ["structural_validation_failed"] if not attempt.structurally_valid
+            else (["unresolved"] if error_count_after and error_count_after > 0 else [])
+        )
+    record["final_violations"] = [
+        {
+            "violation_id": violation.violation_id,
+            "rule": violation.rule,
+            "field": violation.field,
+            "message": violation.message,
+            "severity": violation.severity.value,
+        }
+        for violation in violations
+    ]
+    record["claims"] = [
+        {
+            "claim_id": claim.claim_id,
+            "field": claim.field.value,
+            "evidence_ids": list(claim.evidence_ids),
+            "evidence_paths": list(claim.evidence_paths),
+        }
+        for claim in current_draft.claims
+    ]
+    return record
+
+
 def _apply_deterministic_guardrail_corrections(
     rule_draft: RuleDraft, package: ContextPackage, violations: list[GuardrailViolation]
 ) -> tuple[RuleDraft, list[GuardrailViolation]]:
@@ -592,10 +682,19 @@ async def _resolve_one_candidate(
                 violations=violations,
                 repair_history=repair_history,
             )
+            candidate_diagnostics = _build_candidate_repair_diagnostics(
+                candidate_id=candidate_id,
+                package=package,
+                current_draft=current_draft,
+                violations=violations,
+                repair_history=repair_history,
+                final_status="REJECTED",
+            )
             raise GuardrailError(
                 f"candidato {candidate_id!r} agoto LLM_REPAIR_ATTEMPTS "
                 f"({llm_repair_attempts}) sin alcanzar EVIDENCE_VALIDATED",
                 diagnostics=diagnostics,
+                candidate_diagnostics=candidate_diagnostics,
             )
 
         error_count_before = sum(1 for v in violations if v.severity == Severity.ERROR)
@@ -716,8 +815,17 @@ async def _resolve_all_candidates(
     llm_repair_attempts: int,
     source_package_hash: str,
     temp_dir: Path,
-) -> list[GuardrailRecord]:
+) -> tuple[list[GuardrailRecord], list[dict[str, Any]]]:
+    """checkpoint correctivo v1.18.3 Fase 2: TAMBIEN acumula el
+    diagnostico per-candidato (`_build_candidate_repair_diagnostics`) de
+    CADA candidato resuelto (EVIDENCE_VALIDATED o no), en el MISMO
+    orden deterministico en que se procesan. Si un candidato agota la
+    reparacion, su propio diagnostico (`exc.candidate_diagnostics`) se
+    agrega a la lista acumulada ANTES de relanzar -- `exc.
+    all_candidate_diagnostics` expone entonces el diagnostico de TODOS
+    los candidatos resueltos hasta el fallo (no solo el ultimo)."""
     records: list[GuardrailRecord] = []
+    diagnostics: list[dict[str, Any]] = []
     async with OpenAICompatibleChatClient(profile) as client:
         for candidate_id, package, initial_draft, context_hash in candidates:
             # Construido UNA vez por candidato, antes de cualquier intento
@@ -725,18 +833,35 @@ async def _resolve_all_candidates(
             # estable durante todo el ciclo de reparacion de este
             # candidato.
             catalog = build_evidence_catalog(package)
-            artifact = await _resolve_one_candidate(
-                candidate_id=candidate_id,
-                package=package,
-                catalog=catalog,
-                initial_draft=initial_draft,
-                client=client,
-                repair_system_text=repair_system_text,
-                repair_user_template_text=repair_user_template_text,
-                schema_validator=schema_validator,
-                llm_repair_attempts=llm_repair_attempts,
-                source_package_hash=source_package_hash,
-                context_hash=context_hash,
+            try:
+                artifact = await _resolve_one_candidate(
+                    candidate_id=candidate_id,
+                    package=package,
+                    catalog=catalog,
+                    initial_draft=initial_draft,
+                    client=client,
+                    repair_system_text=repair_system_text,
+                    repair_user_template_text=repair_user_template_text,
+                    schema_validator=schema_validator,
+                    llm_repair_attempts=llm_repair_attempts,
+                    source_package_hash=source_package_hash,
+                    context_hash=context_hash,
+                )
+            except GuardrailError as exc:
+                if exc.candidate_diagnostics is not None:
+                    diagnostics.append(exc.candidate_diagnostics)
+                exc.all_candidate_diagnostics = list(diagnostics)
+                raise
+
+            diagnostics.append(
+                _build_candidate_repair_diagnostics(
+                    candidate_id=candidate_id,
+                    package=package,
+                    current_draft=artifact.final_rule_draft,
+                    violations=artifact.guardrail_report.violations,
+                    repair_history=artifact.repair_history,
+                    final_status="EVIDENCE_VALIDATED",
+                )
             )
             filename = _guardrail_filename(candidate_id)
             (temp_dir / filename).write_text(artifact.to_stable_json(), encoding="utf-8")
@@ -768,7 +893,7 @@ async def _resolve_all_candidates(
                     ],
                 )
             )
-    return records
+    return records, diagnostics
 
 
 def run_guardrails_applied_stage(
@@ -792,6 +917,10 @@ def run_guardrails_applied_stage(
     # reescribe si ESTA corrida tambien falla (ver el `except GuardrailError`
     # mas abajo).
     (artifacts_dir / _FAILURE_DIAGNOSTICS_FILENAME).unlink(missing_ok=True)
+    # v1.18.3 Fase 2: mismo criterio de limpieza que el archivo de
+    # fallo, pero este SIEMPRE se reescribe (exito o fallo) mas abajo,
+    # nunca solo cuando la corrida falla.
+    (artifacts_dir / _REPAIR_DIAGNOSTICS_FILENAME).unlink(missing_ok=True)
 
     context_manifest = _load_context_manifest(context_dir, source_package_hash=source_package_hash)
     context_records_by_id = {
@@ -870,7 +999,7 @@ def run_guardrails_applied_stage(
 
     temp_dir = new_temp_directory(artifacts_dir, _DIR_NAME)
     try:
-        records = asyncio.run(
+        records, candidate_diagnostics = asyncio.run(
             _resolve_all_candidates(
                 candidates=candidates,
                 profile=profile,
@@ -896,11 +1025,26 @@ def run_guardrails_applied_stage(
                 json.dumps(exc.diagnostics, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
                 encoding="utf-8",
             )
+        # v1.18.3 Fase 2: artefacto SEPARADO y ADICIONAL, nunca mezclado
+        # con el de arriba -- registra TODOS los candidatos resueltos
+        # antes del fallo (no solo el ultimo).
+        if exc.all_candidate_diagnostics is not None:
+            (artifacts_dir / _REPAIR_DIAGNOSTICS_FILENAME).write_text(
+                json.dumps(
+                    exc.all_candidate_diagnostics, ensure_ascii=False, sort_keys=True, indent=2
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         raise
     except BaseException:
         discard_temp_directory(temp_dir)
         raise
 
+    (artifacts_dir / _REPAIR_DIAGNOSTICS_FILENAME).write_text(
+        json.dumps(candidate_diagnostics, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
     records.sort(key=lambda record: record.candidate_id)
 
     if {record.candidate_id for record in records} != set(rule_draft_records_by_id):

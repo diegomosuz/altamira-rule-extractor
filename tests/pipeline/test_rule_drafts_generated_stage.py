@@ -1318,3 +1318,119 @@ def test_structure_repair_prompt_mentions_every_current_functional_field() -> No
     text = REAL_STRUCTURE_REPAIR_SYSTEM_PATH.read_text(encoding="utf-8")
     for field_name in functional_fields:
         assert field_name in text, f"campo funcional {field_name!r} no mencionado en el prompt"
+
+
+# --- diagnostico de reparacion estructural (v1.18.3 Fase 2, NO
+# contractual: nunca se consume aguas abajo, nunca cambia semantica de
+# exito/fallo de la etapa) ---
+
+_DIAGNOSTICS_FILENAME = "rule-draft-repair-diagnostics.json"
+
+
+def _read_diagnostics(tmp_path: Path) -> list[dict[str, Any]]:
+    path = tmp_path / "08-rule-drafts" / _DIAGNOSTICS_FILENAME
+    # 08-rule-drafts/ NUNCA existe como directorio canonico aqui: el
+    # diagnostico vive como hermano de el (mismo nivel que el
+    # directorio), no dentro -- ver rule_draft_dir.parent en
+    # run_rule_drafts_generated_stage.
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_diagnostics_written_on_zero_repair_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_client(monkeypatch, [_valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    run_rule_drafts_generated_stage(**kwargs)
+
+    diagnostics_path = kwargs["rule_draft_dir"].parent / _DIAGNOSTICS_FILENAME
+    assert diagnostics_path.is_file()
+    records = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert len(records) == 1
+    record = records[0]
+    assert record["candidate_id"] == "cand-1"
+    assert record["initial_verdict"] == "ACCEPTED"
+    assert record["initial_violation_codes"] == []
+    assert record["repair_attempt_1_verdict"] is None
+    assert record["repair_attempt_2_verdict"] is None
+    assert record["final_structural_status"] == "ACCEPTED"
+    assert record["repair_attempts_used"] == 0
+
+
+def test_diagnostics_records_one_structural_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing_field_payload = _valid_payload()
+    del missing_field_payload["title"]
+    _install_fake_client(monkeypatch, [missing_field_payload, _valid_payload()])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+
+    run_rule_drafts_generated_stage(**kwargs)
+
+    diagnostics_path = kwargs["rule_draft_dir"].parent / _DIAGNOSTICS_FILENAME
+    record = json.loads(diagnostics_path.read_text(encoding="utf-8"))[0]
+    assert record["initial_verdict"] == "REJECTED"
+    assert "missing" in record["initial_violation_codes"]
+    assert any(issue["loc"] == "title" for issue in record["initial_violation_details"])
+    assert record["repair_attempt_1_verdict"] == "ACCEPTED"
+    assert record["repair_attempt_2_verdict"] is None
+    assert record["final_structural_status"] == "ACCEPTED"
+    assert record["repair_attempts_used"] == 1
+
+
+def test_diagnostics_survive_stage_failure_for_all_processed_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Diagnostico NO contractual: sobrevive incluso cuando la etapa
+    COMPLETA aborta (candidato que agota la reparacion) -- a diferencia
+    de `08-rule-drafts/`, que nunca se promueve parcialmente. Incluye el
+    diagnostico de candidatos YA procesados exitosamente antes del
+    fallo, no solo el que fallo (orden deterministico por candidate_id:
+    cand-1 antes que cand-2)."""
+    always_invalid = {"not": "the expected shape"}
+    calls = _install_fake_client(
+        monkeypatch,
+        [_valid_payload(), always_invalid, always_invalid, always_invalid],
+    )
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1"), _package("cand-2")])
+
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+
+    assert len(calls) == 4
+    diagnostics_path = kwargs["rule_draft_dir"].parent / _DIAGNOSTICS_FILENAME
+    assert diagnostics_path.is_file()
+    records = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert [r["candidate_id"] for r in records] == ["cand-1", "cand-2"]
+    assert records[0]["final_structural_status"] == "ACCEPTED"
+    assert records[1]["final_structural_status"] == "FAILED"
+    assert records[1]["repair_attempts_used"] == 2
+    assert not kwargs["rule_draft_dir"].exists()  # atomicidad de 08-rule-drafts/ preservada
+
+
+def test_diagnostics_rebuilt_from_scratch_never_appended_across_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Semantica de resume/reintento (seccion 15/18 del alcance de Fase
+    2): un diagnostico de una corrida ANTERIOR fallida NUNCA sobrevive
+    mezclado con el de la corrida actual -- se limpia y se reescribe
+    deterministicamente desde cero en cada intento real."""
+    always_invalid = {"not": "the expected shape"}
+    _install_fake_client(monkeypatch, [always_invalid, always_invalid, always_invalid])
+    kwargs = _base_kwargs(tmp_path, packages=[_package("cand-1")])
+    with pytest.raises(RuleDraftGenerationError):
+        run_rule_drafts_generated_stage(**kwargs)
+    diagnostics_path = kwargs["rule_draft_dir"].parent / _DIAGNOSTICS_FILENAME
+    first_attempt = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert first_attempt[0]["final_structural_status"] == "FAILED"
+
+    # Reintento real: esta vez el candidato tiene exito de inmediato.
+    # El diagnostico debe reflejar UNICAMENTE este segundo intento --
+    # nunca acumular el REJECTED del intento anterior.
+    _install_fake_client(monkeypatch, [_valid_payload()])
+    run_rule_drafts_generated_stage(**kwargs)
+    second_attempt = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert len(second_attempt) == 1
+    assert second_attempt[0]["final_structural_status"] == "ACCEPTED"
+    assert second_attempt[0]["repair_attempts_used"] == 0

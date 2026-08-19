@@ -35,7 +35,16 @@ from ..e2e_support import (
 pytestmark = pytest.mark.integration
 
 SAME_ORIGIN = "http://testserver"
-MALICIOUS_TITLE = "<script>alert(1)</script> Regla de saldo negativo"
+# v1.18.3 Fase 2: "alert('xss')" en vez de "alert(1)" -- un digito
+# suelto en un campo de negocio SIN claim (title nunca tiene claim en
+# este fixture, solo condition/effect) ahora es gobernado field-first
+# por unsupported_explicit_number (cierre del bypass claim-free, ver
+# deterministic_guardrail._EXPLICIT_FACT_FIELD_FIRST_FIELDS): el "1" de
+# alert(1) disparaba una violacion real y correcta, ajena al proposito
+# de este test (verificar escapado HTML/XSS, nunca validacion de
+# hechos explicitos). El literal 'xss' es minuscula: tampoco activa el
+# nuevo check de literales entre comillas (solo A-Z/0-9 mayusculas).
+MALICIOUS_TITLE = "<script>alert('xss')</script> Regla de saldo negativo"
 # Modernizacion UI: candidate_id ahora se muestra como texto tecnico
 # secundario dentro de la celda "Programa" (nunca su unico contenido) --
 # se extrae por PATRON del ID en si, ya no por posicion exacta en el
@@ -106,8 +115,8 @@ def test_ui_end_to_end_upload_polling_navigation_and_download(
 
         rule_response = client.get(f"/ui/runs/{run_id}/candidates/{candidate_id}/rule")
         assert rule_response.status_code == 200
-        assert "<script>alert(1)</script>" not in rule_response.text
-        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rule_response.text
+        assert "<script>alert('xss')</script>" not in rule_response.text
+        assert "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;" in rule_response.text
         # Modernizacion UI: el aviso alarmista de prototipo ya no se
         # muestra (reemplazado por una redaccion profesional
         # equivalente en `.notice`).

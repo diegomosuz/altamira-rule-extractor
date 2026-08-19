@@ -1204,7 +1204,12 @@ def test_multiple_candidates_have_independent_evidence_catalogs(
         title="Titulo",
         context="Contexto",
         statement="Enunciado",
-        condition="WS-COD = 'R001'",
+        # v1.18.3 Fase 2: sin literal entre comillas -- este test verifica
+        # el flujo de reparacion de unknown_evidence_id (catalogos de
+        # evidencia independientes por candidato), nunca soporte de
+        # literal ($.code_slice[1] nunca es ancla autoritativa para
+        # unsupported_explicit_literal, ver _is_literal_authoritative_path).
+        condition="WS-COD = R001",
         parameters=[],
         effect="Efecto",
         parameter_source=None,
@@ -1230,6 +1235,7 @@ def test_multiple_candidates_have_independent_evidence_catalogs(
         [
             _valid_repair_payload(),
             _valid_repair_payload(
+                condition="WS-COD = R001",
                 claims=[
                     {"claim_id": "c1", "field": "condition", "evidence_refs": [extra_alias]}
                 ]
@@ -1731,6 +1737,7 @@ def test_regression_real_run_clientes_effect_anchor_augmentation_without_llm_cal
     monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
     draft = _valid_draft().model_copy(
         update={
+            "condition": "WS-DIAS-MORA > 30",
             "effect": (
                 "Se asigna el codigo de retorno CE13 si el cliente tiene mas de "
                 "30 dias de mora."
@@ -1825,6 +1832,7 @@ def test_genuinely_unsupported_number_in_effect_still_fails_closed_via_llm_repai
     relaja, exige reparacion LLM real exactamente como antes."""
     draft = _valid_draft().model_copy(
         update={
+            "condition": "WS-DIAS-MORA > 30",
             "effect": "Se rechaza la operacion por superar el limite de 654321 pesos.",
             "claims": [
                 Claim(
@@ -1843,7 +1851,12 @@ def test_genuinely_unsupported_number_in_effect_still_fails_closed_via_llm_repai
         }
     )
     calls = _install_fake_client(
-        monkeypatch, [_valid_repair_payload(effect="Se rechaza la operacion.")]
+        monkeypatch,
+        [
+            _valid_repair_payload(
+                condition="WS-DIAS-MORA > 30", effect="Se rechaza la operacion."
+            )
+        ],
     )
     kwargs = _base_kwargs(
         tmp_path,
@@ -1886,6 +1899,7 @@ def test_unapproved_return_code_never_used_as_anchor(
     )
     draft = _valid_draft().model_copy(
         update={
+            "condition": "WS-DIAS-MORA > 30",
             "effect": "Se asigna el codigo especial 1234 al resultado.",
             "claims": [
                 Claim(
@@ -1904,7 +1918,12 @@ def test_unapproved_return_code_never_used_as_anchor(
         }
     )
     calls = _install_fake_client(
-        monkeypatch, [_valid_repair_payload(effect="Se rechaza la operacion.")]
+        monkeypatch,
+        [
+            _valid_repair_payload(
+                condition="WS-DIAS-MORA > 30", effect="Se rechaza la operacion."
+            )
+        ],
     )
     kwargs = _base_kwargs(tmp_path, packages=[package], drafts={"cand-1": draft})
 
@@ -1913,3 +1932,110 @@ def test_unapproved_return_code_never_used_as_anchor(
     assert len(calls) == 1
     final = _read_final_draft(kwargs)
     assert final.evidence_validation_status == EvidenceValidationStatus.EVIDENCE_VALIDATED
+
+
+# --- guardrail-repair-diagnostics.json (v1.18.3 Fase 2: diagnostico
+# per-candidato, NUEVO y SEPARADO de guardrails-failure-diagnostics.json,
+# que permanece sin cambios -- ver test_exhausted_repair_persists_
+# failure_diagnostics_without_promoting_guardrail_dir arriba) ---
+
+
+def _repair_diagnostics_path(kwargs: dict[str, Any]) -> Path:
+    return kwargs["guardrail_dir"].parent / "guardrail-repair-diagnostics.json"
+
+
+def test_repair_diagnostics_written_on_zero_repair_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": _valid_draft()}
+    )
+
+    run_guardrails_applied_stage(**kwargs)
+
+    diagnostics_path = _repair_diagnostics_path(kwargs)
+    assert diagnostics_path.is_file()
+    records = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert len(records) == 1
+    record = records[0]
+    assert record["candidate_id"] == "cand-1"
+    assert record["final_evidence_validation_status"] == "EVIDENCE_VALIDATED"
+    assert record["repair_attempts_used"] == 0
+    assert record["repair_attempt_1_verdict"] is None
+    assert record["repair_attempt_2_verdict"] is None
+    assert record["deterministic_interventions_applied"] == 0
+    # nunca contenido promocionable de RuleDraft (title/context/statement/
+    # condition/effect/parameters/traceability/limitations) -- solo
+    # claims (evidence_ids/evidence_paths reales) y violations.
+    raw = json.dumps(record)
+    assert "Titulo" not in raw
+    assert "Contexto" not in raw
+    assert "Enunciado" not in raw
+
+
+def test_repair_diagnostics_survive_failure_for_all_processed_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """El diagnostico NUEVO (a diferencia del de fallo v1.18.2, que solo
+    describe el ULTIMO candidato) incluye TAMBIEN cand-1, que ya habia
+    alcanzado EVIDENCE_VALIDATED antes de que cand-2 agotara la
+    reparacion y detuviera la etapa (fail-fast) -- orden deterministico
+    por candidate_id."""
+    valid_draft_1 = _valid_draft()
+    bad_draft_2 = _valid_draft(evidence_id="ev-nonexistent")
+    still_bad_payload = _still_bad_repair_payload()
+    _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
+    kwargs = _base_kwargs(
+        tmp_path,
+        packages=[_package("cand-1"), _package("cand-2", decision_id="dec-2")],
+        drafts={"cand-1": valid_draft_1, "cand-2": bad_draft_2},
+    )
+
+    with pytest.raises(GuardrailError):
+        run_guardrails_applied_stage(**kwargs)
+
+    assert not kwargs["guardrail_dir"].exists()  # 09-guardrails/ sigue atomico
+    diagnostics_path = _repair_diagnostics_path(kwargs)
+    assert diagnostics_path.is_file()
+    records = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert [r["candidate_id"] for r in records] == ["cand-1", "cand-2"]
+    assert records[0]["final_evidence_validation_status"] == "EVIDENCE_VALIDATED"
+    assert records[0]["repair_attempts_used"] == 0
+    assert records[1]["final_evidence_validation_status"] == "REJECTED"
+    assert records[1]["repair_attempts_used"] == 2
+    # _still_bad_repair_payload() cita un alias inexistente (E999):
+    # RuleDraftAssemblyError en ambos intentos -> structurally_valid=False.
+    assert records[1]["repair_attempt_1_verdict"] == "REJECTED"
+    assert records[1]["repair_attempt_1_violation_codes"] == ["structural_validation_failed"]
+    assert records[1]["repair_attempt_2_verdict"] == "REJECTED"
+
+
+def test_repair_diagnostics_rebuilt_from_scratch_never_appended_across_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Semantica de resume/reintento: un diagnostico de una corrida
+    ANTERIOR fallida nunca sobrevive mezclado con el de la corrida
+    actual."""
+    bad_draft = _valid_draft(evidence_id="ev-nonexistent")
+    still_bad_payload = _still_bad_repair_payload()
+    _install_fake_client(monkeypatch, [still_bad_payload, still_bad_payload])
+    kwargs = _base_kwargs(
+        tmp_path, packages=[_package("cand-1")], drafts={"cand-1": bad_draft}
+    )
+    with pytest.raises(GuardrailError):
+        run_guardrails_applied_stage(**kwargs)
+    diagnostics_path = _repair_diagnostics_path(kwargs)
+    first_attempt = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert first_attempt[0]["final_evidence_validation_status"] == "REJECTED"
+
+    # Reintento real: esta vez el candidato es valido de inmediato.
+    monkeypatch.setattr(stage_module, "OpenAICompatibleChatClient", _PoisonClient)
+    _write_rule_draft_directory(
+        kwargs["rule_draft_dir"], kwargs["context_dir"], {"cand-1": _valid_draft()}
+    )
+    run_guardrails_applied_stage(**kwargs)
+    second_attempt = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert len(second_attempt) == 1
+    assert second_attempt[0]["final_evidence_validation_status"] == "EVIDENCE_VALIDATED"
+    assert second_attempt[0]["repair_attempts_used"] == 0

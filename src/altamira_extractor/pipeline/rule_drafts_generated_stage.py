@@ -56,6 +56,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 
@@ -88,6 +89,16 @@ logger = logging.getLogger("altamira_extractor.pipeline.rule_drafts_generated_st
 
 _DIR_NAME = "08-rule-drafts"
 _MANIFEST_FILENAME = "rule-draft-manifest.json"
+# checkpoint correctivo v1.18.3 Fase 2: artefacto de diagnostico NO
+# contractual (mide la distribucion REAL de reparacion estructural por
+# candidato) -- hermano de `08-rule-drafts/` pero fuera de el, igual que
+# `guardrails-failure-diagnostics.json` en GUARDRAILS_APPLIED. Se
+# escribe SIEMPRE (exito o fallo, a diferencia del archivo de
+# GUARDRAILS_APPLIED que solo existe tras un fallo) porque su proposito
+# es medir la distribucion real incluso en corridas exitosas. Se limpia
+# al comienzo de cada corrida y se reescribe deterministicamente desde
+# cero -- nunca se acumula entre corridas/reanudaciones.
+_STRUCTURAL_DIAGNOSTICS_FILENAME = "rule-draft-repair-diagnostics.json"
 _CONTEXT_PACKAGE_PLACEHOLDER = "{{CONTEXT_PACKAGE_JSON}}"
 # Checkpoint correctivo (Fase 15B4-HOTFIX-1): claims[].field es un
 # ClaimField (enum). Single source of truth para el prompt inicial y el
@@ -401,6 +412,51 @@ class _AcceptedDraft:
     response_hash: str
     writer_user_effective_hash: str
     repair_attempts_used: int
+    diagnostics: dict[str, Any]
+
+
+def _issues_payload(issues: tuple[ValidationIssue, ...]) -> list[dict[str, str]]:
+    return [{"loc": issue.loc, "type": issue.type, "msg": issue.msg} for issue in issues]
+
+
+def _build_structural_diagnostics(
+    candidate_id: str,
+    *,
+    attempts: list[dict[str, Any]],
+    final_status: str,
+    repair_attempts_used: int,
+) -> dict[str, Any]:
+    """Resumen sanitizado por candidato (checkpoint correctivo v1.18.3
+    Fase 2): `attempts[i]` es `{"attempt_number": int, "verdict": str,
+    "issues": [...]}`, uno por intento REAL de escritura/reparacion
+    (nunca incluye el payload crudo del modelo, el prompt efectivo ni
+    credenciales -- solo loc/type/msg, igual que
+    `_structural_failure_message`/`_log_structural_failure`). Forma
+    fija de a lo sumo 3 intentos (inicial + 2 reparaciones, ver
+    `settings.llm_repair_attempts`), expuesta tambien como campos
+    `initial_*`/`repair_attempt_1_*`/`repair_attempt_2_*` para
+    corresponder exactamente con la forma pedida en el cierre de
+    preflight de v1.18.3 Fase 2 (seccion 14)."""
+    record: dict[str, Any] = {
+        "candidate_id": candidate_id,
+        "final_structural_status": final_status,
+        "repair_attempts_used": repair_attempts_used,
+    }
+    labels = ("initial", "repair_attempt_1", "repair_attempt_2")
+    for label in labels:
+        record[f"{label}_verdict"] = None
+        record[f"{label}_violation_codes"] = []
+        record[f"{label}_violation_details"] = []
+    for attempt in attempts:
+        index = int(attempt["attempt_number"])
+        if index >= len(labels):
+            continue
+        label = labels[index]
+        issues = attempt["issues"]
+        record[f"{label}_verdict"] = attempt["verdict"]
+        record[f"{label}_violation_codes"] = sorted({issue["type"] for issue in issues})
+        record[f"{label}_violation_details"] = issues
+    return record
 
 
 def _stable_payload_json(payload: dict[str, object]) -> str:
@@ -473,6 +529,7 @@ async def _generate_one_draft(
         ) from exc
 
     repair_attempts_used = 0
+    diagnostics_attempts: list[dict[str, Any]] = []
     while True:
         try:
             rule_draft = assemble_rule_draft_with_evidence_catalog(
@@ -482,7 +539,20 @@ async def _generate_one_draft(
             _log_structural_failure(
                 candidate_id, attempt=repair_attempts_used, issues=exc.validation_errors
             )
+            diagnostics_attempts.append(
+                {
+                    "attempt_number": repair_attempts_used,
+                    "verdict": "REJECTED",
+                    "issues": _issues_payload(exc.validation_errors),
+                }
+            )
             if repair_attempts_used >= llm_repair_attempts:
+                diagnostics = _build_structural_diagnostics(
+                    candidate_id,
+                    attempts=diagnostics_attempts,
+                    final_status="FAILED",
+                    repair_attempts_used=repair_attempts_used,
+                )
                 raise RuleDraftGenerationError(
                     _structural_failure_message(
                         candidate_id,
@@ -490,6 +560,7 @@ async def _generate_one_draft(
                         issues=exc.validation_errors,
                     ),
                     validation_errors=exc.validation_errors,
+                    diagnostics=diagnostics,
                 ) from exc
 
             repair_attempts_used += 1
@@ -519,11 +590,20 @@ async def _generate_one_draft(
                 ) from exc2
             continue
 
+        diagnostics_attempts.append(
+            {"attempt_number": repair_attempts_used, "verdict": "ACCEPTED", "issues": []}
+        )
         return _AcceptedDraft(
             rule_draft=rule_draft,
             response_hash=response_hash,
             writer_user_effective_hash=rendered.effective_hash,
             repair_attempts_used=repair_attempts_used,
+            diagnostics=_build_structural_diagnostics(
+                candidate_id,
+                attempts=diagnostics_attempts,
+                final_status="ACCEPTED",
+                repair_attempts_used=repair_attempts_used,
+            ),
         )
 
 
@@ -539,7 +619,7 @@ async def _generate_all_drafts(
     max_context_package_json_chars: int,
     context_records_by_id: dict[str, str],
     temp_dir: Path,
-) -> tuple[list[RuleDraftRecord], list[str]]:
+) -> tuple[list[RuleDraftRecord], list[str], list[dict[str, Any]]]:
     """Genera, en una unica corrida de evento asyncio, el draft final
     (inicial o reparado) de TODOS los candidatos, secuencialmente (sin
     concurrencia). Por cada candidato exitoso escribe el draft UNICAMENTE
@@ -550,9 +630,21 @@ async def _generate_all_drafts(
     de esta corrida se promueve). Devuelve tambien un resumen legible por
     candidato con reparaciones consumidas (se agrega a `warnings` del
     manifest -- unico lugar donde `rule-draft-manifest.json`, sin ganar
-    ningun campo nuevo, deja evidencia de que hubo reparacion)."""
+    ningun campo nuevo, deja evidencia de que hubo reparacion).
+
+    checkpoint correctivo v1.18.3 Fase 2: TAMBIEN acumula el diagnostico
+    de reparacion estructural de CADA candidato (exitoso o no) en
+    `diagnostics`, en el MISMO orden deterministico en que se procesan
+    (`candidates` ya viene ordenado por `candidate_id`). Si un candidato
+    agota la reparacion, su propio diagnostico (`exc.diagnostics`) se
+    agrega a la lista acumulada ANTES de relanzar -- `exc.
+    all_candidate_diagnostics` expone entonces el diagnostico de TODOS
+    los candidatos procesados hasta el fallo (no solo el ultimo), para
+    que el llamador lo persista fuera del directorio atomico incluso
+    cuando la etapa completa aborta."""
     records: list[RuleDraftRecord] = []
     repair_summaries: list[str] = []
+    diagnostics: list[dict[str, Any]] = []
     async with OpenAICompatibleChatClient(profile) as client:
         for candidate_id, package in candidates:
             # Construido UNA vez por candidato, antes de la llamada
@@ -560,19 +652,26 @@ async def _generate_all_drafts(
             # reparacion de ese candidato: la numeracion de alias debe
             # permanecer estable durante todo su ciclo de vida.
             catalog = build_evidence_catalog(package)
-            accepted = await _generate_one_draft(
-                candidate_id=candidate_id,
-                package=package,
-                catalog=catalog,
-                client=client,
-                system_text=system_text,
-                user_template_text=user_template_text,
-                repair_prompts=repair_prompts,
-                schema_validator=schema_validator,
-                llm_repair_attempts=llm_repair_attempts,
-                max_context_package_json_chars=max_context_package_json_chars,
-            )
+            try:
+                accepted = await _generate_one_draft(
+                    candidate_id=candidate_id,
+                    package=package,
+                    catalog=catalog,
+                    client=client,
+                    system_text=system_text,
+                    user_template_text=user_template_text,
+                    repair_prompts=repair_prompts,
+                    schema_validator=schema_validator,
+                    llm_repair_attempts=llm_repair_attempts,
+                    max_context_package_json_chars=max_context_package_json_chars,
+                )
+            except RuleDraftGenerationError as exc:
+                if exc.diagnostics is not None:
+                    diagnostics.append(exc.diagnostics)
+                exc.all_candidate_diagnostics = list(diagnostics)
+                raise
 
+            diagnostics.append(accepted.diagnostics)
             filename = _rule_draft_filename(candidate_id)
             (temp_dir / filename).write_text(
                 accepted.rule_draft.to_stable_json(), encoding="utf-8"
@@ -592,7 +691,7 @@ async def _generate_all_drafts(
                     f"{candidate_id}: reparado tras {accepted.repair_attempts_used} "
                     "intento(s) estructural(es)"
                 )
-    return records, sorted(repair_summaries)
+    return records, sorted(repair_summaries), diagnostics
 
 
 async def _complete_and_hash(
@@ -682,8 +781,14 @@ def run_rule_drafts_generated_stage(
 
     candidates = sorted(packages_by_id.items(), key=lambda item: item[0])
     temp_dir = new_temp_directory(artifacts_dir, _DIR_NAME)
+    # checkpoint correctivo v1.18.3 Fase 2: un diagnostico de una corrida
+    # ANTERIOR queda obsoleto en cuanto se intenta generar de nuevo
+    # (exitosa o no) -- se limpia aqui, INMEDIATAMENTE antes del unico
+    # intento real de esta invocacion, y se reescribe deterministicamente
+    # desde cero abajo (exito o fallo), nunca se acumula entre corridas.
+    (artifacts_dir / _STRUCTURAL_DIAGNOSTICS_FILENAME).unlink(missing_ok=True)
     try:
-        records, repair_summaries = asyncio.run(
+        records, repair_summaries, diagnostics = asyncio.run(
             _generate_all_drafts(
                 candidates=candidates,
                 profile=profile,
@@ -697,13 +802,36 @@ def run_rule_drafts_generated_stage(
                 temp_dir=temp_dir,
             )
         )
-    except BaseException:
+    except RuleDraftGenerationError as exc:
         # Cualquier fallo (candidato que agoto la reparacion estructural,
         # o un fallo de infraestructura en cualquier intento) descarta
         # TODO el directorio temporal: la etapa es atomica, nunca hay
-        # promocion parcial.
+        # promocion parcial. El diagnostico de TODOS los candidatos
+        # procesados hasta el fallo (nunca solo el ultimo) sobrevive en
+        # un artefacto NO contractual, fuera de `08-rule-drafts/`, para
+        # que el fallo sea diagnosticable sin depender unicamente del
+        # mensaje de texto -- igual que `guardrails-failure-
+        # diagnostics.json` en GUARDRAILS_APPLIED, pero SIEMPRE (no solo
+        # cuando falla) porque su proposito es medir la distribucion
+        # real incluso en corridas exitosas.
+        discard_temp_directory(temp_dir)
+        if exc.all_candidate_diagnostics is not None:
+            (artifacts_dir / _STRUCTURAL_DIAGNOSTICS_FILENAME).write_text(
+                json.dumps(
+                    exc.all_candidate_diagnostics, ensure_ascii=False, sort_keys=True, indent=2
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        raise
+    except BaseException:
         discard_temp_directory(temp_dir)
         raise
+
+    (artifacts_dir / _STRUCTURAL_DIAGNOSTICS_FILENAME).write_text(
+        json.dumps(diagnostics, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     records.sort(key=lambda record: record.candidate_id)
     if {record.candidate_id for record in records} != set(context_records_by_id):

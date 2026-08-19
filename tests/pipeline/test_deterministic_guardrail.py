@@ -212,7 +212,16 @@ def _draft(**overrides: object) -> RuleDraft:
         "context": "Transferencias en Argentina",
         "statement": "Si el monto supera el limite, se rechaza",
         "condition": "WS-MONTO > WS-LIMITE",
-        "parameters": ["limite=1000"],
+        # v1.18.3 Fase 2: vacio por defecto -- `parameters` ahora se evalua
+        # field-first (ver _EXPLICIT_FACT_FIELD_FIRST_FIELDS), asi que un
+        # valor numerico por defecto sin claim propio en un test que
+        # sobreescribe `claims` para otro proposito produciria una
+        # violacion espuria no relacionada con lo que ese test verifica.
+        # Los tests que SI necesitan probar el soporte numerico de
+        # parameters lo declaran explicitamente junto con su propio claim
+        # (ver test_explicit_number_matching_evidence_is_not_flagged /
+        # test_explicit_number_not_in_evidence_is_error).
+        "parameters": [],
         "effect": "Se actualiza CUENTAS",
         "parameter_source": "PARM01",
         "traceability": ["ev-decision"],
@@ -535,6 +544,244 @@ def test_augment_is_idempotent_and_deterministic() -> None:
                 claim_id="c1",
                 field=ClaimField.EFFECT,
                 evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    first = augment_claims_with_authoritative_anchors(draft, package, violations)
+    second = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert first is not None and second is not None
+    assert first.to_stable_json() == second.to_stable_json()
+
+
+# --- augment_claims_with_authoritative_anchors extendido a
+# unsupported_explicit_literal (v1.18.3 Fase 2, extension real no
+# planeada originalmente): regresion forense exacta PAGRIE01::
+# 1200-FIRMA de PAQUETE_SINTETICO_ALTAMIRA_PAGOS_EMPRESAS_EXHAUSTIVO_
+# 48_REGLAS_v1.18.2_v2_E2E.zip (real run 3x, ver informe de cierre de
+# Fase 2) -- `decision.expression` "WS-FIRMA-VALIDANOT='S'" contiene
+# 'S' autoritativamente, el claim de `condition` citaba UNICAMENTE
+# `$.code_slice[1]` (nunca autoritativo para un literal, ver
+# `_is_literal_authoritative_path`): dos intentos reales de reparacion
+# LLM devolvieron la MISMA respuesta (mismo response_hash) sin
+# corregirlo -- exactamente el mismo patron que motivo el retarget de
+# table_effect en Fase 1, ahora para el nuevo check de literales.
+
+
+def _package_with_literal_decision_and_return_code() -> ContextPackage:
+    """Variante con un literal de codigo entre comillas AISLADO en la
+    decision (`WS-FIRMA-VALIDANOT='S'`, mismo patron real
+    PAGRIE01::1200-FIRMA) y un return_code aprobado (`R103`)."""
+    package = _package()
+    return package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-FIRMA-VALIDANOT='S'",
+                    "normalized_expression": "WS-FIRMA-VALIDANOT='S'",
+                }
+            ),
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        ReturnCodeEffect(
+                            code="R103", approved_for_rule_text=True, evidence_ids=["ev-decision"]
+                        ),
+                    ]
+                }
+            ),
+        }
+    )
+
+
+def test_augment_adds_decision_anchor_for_unsupported_literal_in_condition() -> None:
+    """Regresion forense exacta PAGRIE01::1200-FIRMA: 'S' en `condition`
+    es un hecho autoritativo real (`decision.expression`), el claim
+    solo citaba `$.code_slice[0]` -- se amplia con `$.decision`,
+    `condition` NUNCA se toca."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        condition="Cuando WS-FIRMA-VALIDA no es 'S'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is not None
+    assert augmented.condition == draft.condition
+    assert evaluate_guardrail(augmented, package) == []
+    claim = next(c for c in augmented.claims if c.field == ClaimField.CONDITION)
+    assert "$.decision" in claim.evidence_paths
+    assert "$.code_slice[0]" in claim.evidence_paths  # nunca se elimina evidencia real existente
+
+
+def test_augment_adds_return_code_anchor_for_unsupported_literal_in_effect() -> None:
+    """Simetrico: un literal de retorno mencionado en `effect` se ancla
+    contra `$.effects.return_codes[i]` aprobado cuando `decision` no lo
+    respalda."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        effect="Se establece el codigo de retorno 'R103'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is not None
+    assert augmented.effect == draft.effect
+    assert evaluate_guardrail(augmented, package) == []
+    claim = next(c for c in augmented.claims if c.field == ClaimField.EFFECT)
+    assert "$.effects.return_codes[0]" in claim.evidence_paths
+
+
+def test_augment_handles_claim_id_containing_double_colon() -> None:
+    """Regresion forense exacta PAGAUX01::1300-PROPAGAR-04 (prueba de
+    corpus real v1.18.3 Fase 2, ejecucion `20260819T113802217933-9b3f710f`):
+    el `claim_id` generado por el modelo real es `"claim::6"` (contiene
+    `::` dentro de si mismo), condicion `WS-PRIORIDAD='Z'` y efecto
+    `"Se asigna el codigo de retorno A104 cuando la prioridad del pago
+    es 'Z'."` -- el claim de `effect` solo citaba
+    `$.effects.return_codes[0]` (respalda 'A104' pero no 'Z'). Un
+    `violation_id.split('::')` ingenuo que asume exactamente 3 partes
+    rompe silenciosamente contra `"unsupported_explicit_literal::claim::6::Z"`
+    (4 partes), devolviendo `None` sin ampliar nada -- el candidato
+    fallaba cerrado via 2 intentos reales de reparacion LLM sin
+    progreso. Este test fija que la ampliacion SI ocurre con un
+    `claim_id` de este patron."""
+    package = _package_with_literal_decision_and_return_code()
+    package = package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-PRIORIDAD='Z'",
+                    "normalized_expression": "WS-PRIORIDAD='Z'",
+                }
+            ),
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        ReturnCodeEffect(
+                            code="A104", approved_for_rule_text=True, evidence_ids=["ev-decision"]
+                        ),
+                    ]
+                }
+            ),
+        }
+    )
+    draft = _draft(
+        condition="La prioridad del pago es igual a 'Z'.",
+        effect="Se asigna el codigo de retorno A104 cuando la prioridad del pago es 'Z'.",
+        claims=[
+            Claim(
+                claim_id="claim::4",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="claim::6",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(
+        v.rule == "unsupported_explicit_literal" and v.field == "effect" for v in violations
+    )
+
+    augmented = augment_claims_with_authoritative_anchors(draft, package, violations)
+    assert augmented is not None
+    assert augmented.effect == draft.effect
+    assert evaluate_guardrail(augmented, package) == []
+    claim = next(c for c in augmented.claims if c.claim_id == "claim::6")
+    assert "$.decision" in claim.evidence_paths
+    assert "$.effects.return_codes[0]" in claim.evidence_paths
+
+
+def test_augment_never_anchors_literal_against_unapproved_return_code() -> None:
+    """CLAUDE.md: un literal que coincide con un return_code NO aprobado
+    nunca se usa como ancla, aunque coincida literalmente."""
+    package = _package_with_literal_decision_and_return_code()
+    package = package.model_copy(
+        update={
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        ReturnCodeEffect(
+                            code="R999",
+                            approved_for_rule_text=False,
+                            evidence_ids=["ev-decision"],
+                        ),
+                    ]
+                }
+            )
+        }
+    )
+    draft = _draft(
+        effect="Se establece el codigo de retorno 'R999'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unsupported_explicit_literal" for v in violations)
+    assert augment_claims_with_authoritative_anchors(draft, package, violations) is None
+
+
+def test_augment_returns_none_for_genuinely_unsupported_literal() -> None:
+    """Afirmacion de negocio genuinamente no soportada: un literal que
+    no aparece en NINGUNA ancla autoritativa nunca se amplia -- sigue
+    fallando cerrado via el ciclo de reparacion LLM existente."""
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        effect="El estado cambia a 'Z'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert any(v.rule == "unsupported_explicit_literal" for v in violations)
+    assert augment_claims_with_authoritative_anchors(draft, package, violations) is None
+
+
+def test_augment_literal_is_idempotent_and_deterministic() -> None:
+    package = _package_with_literal_decision_and_return_code()
+    draft = _draft(
+        condition="Cuando WS-FIRMA-VALIDA no es 'S'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.code_slice[1]"],
                 evidence_ids=["ev-decision"],
             )
         ],
@@ -2035,3 +2282,418 @@ def test_regression_pagdb201_3000_update_operacion_table_grounded_field_retarget
     assert title_claim.evidence_ids == ["ev-effect-pag-operacion"]
     assert retargeted.title == draft.title
     assert evaluate_guardrail(retargeted, package) == []
+
+
+# --- unsupported_explicit_literal + cierre del bypass claim-free
+# (v1.18.3 Fase 2) ---
+#
+# Ancla autoritativa EXACTA y ACOTADA (seccion 6 del alcance de Fase 2):
+# UNICAMENTE $.decision y $.effects.return_codes[i] con
+# approved_for_rule_text=true -- NUNCA code_slice (ver
+# `_is_literal_authoritative_path`). Alcance de campos gobernados
+# FIELD-FIRST: title/context/statement/condition/effect/parameter_source/
+# parameters (`_EXPLICIT_FACT_FIELD_FIRST_FIELDS`) -- NUNCA traceability
+# (mecanismo propio, comportamiento v1.18.2 sin cambios) ni limitations
+# (texto libre deliberado).
+
+
+def _package_with_quoted_literal_decision() -> ContextPackage:
+    """Variante de `_package()` con un literal de codigo entre comillas
+    en la decision (`WS-ESTADO = 'A'`, mismo patron real COBOL/SQLCODE
+    que PAGDB201::3000-UPDATE-OPERACION) y dos return_codes: `D203`
+    aprobado, `D204` NO aprobado -- fixture dedicada para
+    `unsupported_explicit_literal`."""
+    package = _package()
+    return package.model_copy(
+        update={
+            "decision": package.decision.model_copy(
+                update={
+                    "expression": "WS-ESTADO = 'A'",
+                    "normalized_expression": "WS-ESTADO = 'A'",
+                }
+            ),
+            "effects": package.effects.model_copy(
+                update={
+                    "return_codes": [
+                        ReturnCodeEffect(
+                            code="D203", approved_for_rule_text=True, evidence_ids=["ev-decision"]
+                        ),
+                        ReturnCodeEffect(
+                            code="D204",
+                            approved_for_rule_text=False,
+                            evidence_ids=["ev-decision"],
+                        ),
+                    ]
+                }
+            ),
+        }
+    )
+
+
+def _draft_with_field_claim(
+    *, field: ClaimField, text: str, evidence_paths: list[str], evidence_ids: list[str]
+) -> RuleDraft:
+    """Construye un `_draft()` con un UNICO claim para `field`, cuyo
+    texto es `text` -- helper para los casos del catalogo de regresion
+    de literales entre comillas (seccion 12 del alcance de Fase 2)."""
+    scalar_fields = {
+        ClaimField.TITLE: "title",
+        ClaimField.CONTEXT: "context",
+        ClaimField.STATEMENT: "statement",
+        ClaimField.CONDITION: "condition",
+        ClaimField.EFFECT: "effect",
+    }
+    overrides: dict[str, object] = {
+        "claims": [
+            Claim(
+                claim_id="c1", field=field, evidence_paths=evidence_paths, evidence_ids=evidence_ids
+            )
+        ]
+    }
+    overrides[scalar_fields[field]] = text
+    return _draft(**overrides)
+
+
+def test_literal_case1_quoted_single_char_supported_by_decision_passes() -> None:
+    """Caso 1: 'A' respaldado por $.decision -> PASS."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft_with_field_claim(
+        field=ClaimField.CONDITION,
+        text="Cuando el estado es 'A'",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case2_double_quoted_supported_by_decision_passes() -> None:
+    """Caso 2: "A" (comillas dobles) respaldado por $.decision -> PASS."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft_with_field_claim(
+        field=ClaimField.CONDITION,
+        text='Cuando el estado es "A"',
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case3_supported_by_approved_return_code_passes() -> None:
+    """Caso 3: 'D203' respaldado por un return_code aprobado -> PASS."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="Se devuelve 'D203'.",
+        evidence_paths=["$.effects.return_codes[0]"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case4_unsupported_quoted_value_is_error() -> None:
+    """Caso 4: 'A' sin ningun ancla autoritativa que lo respalde -> ERROR."""
+    package = _package()  # decision sin literales, sin return_codes
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="El estado cambia a 'A'.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_literal"]
+    assert len(matches) == 1
+    assert matches[0].violation_id.endswith("::A")
+    assert matches[0].severity == Severity.ERROR
+
+
+def test_literal_case5_wrong_return_code_is_error() -> None:
+    """Caso 5: 'D204' citado contra return_codes[0] (D203 aprobado) --
+    D204 en si mismo NO esta aprobado (approved_for_rule_text=False) --
+    nunca se usa como ancla, aunque exista en el ContextPackage."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="Se devuelve 'D204'.",
+        evidence_paths=["$.effects.return_codes[0]"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_literal"]
+    assert len(matches) == 1
+    assert matches[0].violation_id.endswith("::D204")
+
+
+def test_literal_case6_lowercase_word_not_governed() -> None:
+    """Caso 6: 'aprobado' (minusculas) -- nunca gobernado por este check."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="El estado queda 'aprobado'.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case7_quoted_phrase_with_space_not_governed() -> None:
+    """Caso 7: "estado activo" (espacio) -- nunca gobernado."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text='El estado queda "estado activo".',
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case8_nine_character_code_not_governed() -> None:
+    """Caso 8: codigo de 9 caracteres -- fuera del alcance angosto de
+    Fase 2 (1-8 caracteres)."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="Se asigna el codigo 'ABCDEFGHI'.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case9_hyphenated_value_not_governed() -> None:
+    """Caso 9: 'A-B' (guion) -- nunca gobernado."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="Se asigna el codigo 'A-B'.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case10_mismatched_quotes_not_governed() -> None:
+    """Caso 10: 'A" (comillas desparejadas) -- nunca coincide con el
+    patron (el backreference `(?P=quote)` exige la MISMA comilla en
+    ambos lados), nunca gobernado ni malinterpretado."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="Se asigna el codigo 'A\".",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case11_bare_uppercase_letter_deferred() -> None:
+    """Caso 11: A suelto (sin comillas) -- diferido explicitamente,
+    nunca gobernado en Fase 2."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="El estado cambia a A.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case12_bare_code_like_token_deferred() -> None:
+    """Caso 12: PYM suelto (sin comillas) -- diferido explicitamente."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="Se acredita en la cuenta PYM.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case13_quoted_all_digit_code_exact_preservation() -> None:
+    """Caso 13: '9999' (checkpoint de integridad v1.17, ver
+    `_package_with_numeric_decision_and_return_code`) entre comillas --
+    respaldado por un return_code aprobado, nunca se pierde ni se
+    mangla; pasa limpio tanto el check de numeros (evidencia amplia)
+    como el nuevo check de literales (ancla acotada), sin conflicto
+    entre ambos."""
+    package = _package_with_numeric_decision_and_return_code()
+    draft = _draft(
+        effect="Se asigna el codigo '9999' si el cliente tiene mas de 30 dias de mora.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.effects.return_codes[1]", "$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert violations == []
+
+
+def test_literal_case14_repeated_literal_produces_single_deterministic_finding() -> None:
+    """Caso 14: el mismo literal no soportado repetido dos veces en el
+    mismo campo -- una unica violacion deduplicada (via `set()`), nunca
+    una por aparicion; resultado deterministico entre invocaciones
+    repetidas."""
+    package = _package()
+    draft = _draft_with_field_claim(
+        field=ClaimField.EFFECT,
+        text="El estado cambia a 'A'. Se confirma que el estado es 'A'.",
+        evidence_paths=["$.decision"],
+        evidence_ids=["ev-decision"],
+    )
+    first = evaluate_guardrail(draft, package)
+    second = evaluate_guardrail(draft, package)
+    matches = [v for v in first if v.rule == "unsupported_explicit_literal"]
+    assert len(matches) == 1
+    assert [v.violation_id for v in first] == [v.violation_id for v in second]
+
+
+def test_literal_case15_multiple_claims_only_one_supports_token_passes() -> None:
+    """Caso 15: dos claims en el mismo campo, solo uno cita $.decision
+    (que respalda 'A') -- PASS, sin importar que el otro claim cite
+    evidencia irrelevante."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft(
+        effect="El estado cambia a 'A'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+            Claim(
+                claim_id="c2",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert not any(v.rule == "unsupported_explicit_literal" for v in violations)
+
+
+def test_literal_case16_claims_exist_but_none_supports_token_is_error() -> None:
+    """Caso 16: el campo tiene claims, pero NINGUNO cita una ancla
+    autoritativa (decision/return_codes aprobado) que contenga el valor
+    -- ERROR, incluso si algun claim cita evidencia real (code_slice)."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft(
+        effect="El estado cambia a 'A'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.EFFECT,
+                evidence_paths=["$.code_slice[0]"],
+                evidence_ids=["ev-decision"],
+            ),
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_literal"]
+    assert len(matches) == 1
+    assert matches[0].violation_id.endswith("::A")
+
+
+def test_literal_case17_no_claim_with_quoted_literal_is_error() -> None:
+    """Caso 17: campo SIN ningun claim que contiene un literal
+    gobernado -- ERROR (cierre del bypass claim-free, seccion 7-8 del
+    alcance de Fase 2): la ausencia de un claim nunca vuelve invisible
+    el hecho explicito."""
+    package = _package_with_quoted_literal_decision()
+    draft = _draft(
+        effect="El estado cambia a 'A'.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_literal"]
+    assert len(matches) == 1
+    assert "no tiene ningun claim" in matches[0].message
+
+
+def test_literal_case18_no_claim_with_explicit_number_is_error() -> None:
+    """Caso 18: campo SIN ningun claim que contiene un numero -- ERROR
+    (mismo cierre de bypass, aplicado a unsupported_explicit_number)."""
+    package = _package()
+    draft = _draft(
+        effect="Se rechaza por superar el limite de 88888 pesos.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_number"]
+    assert len(matches) == 1
+    assert matches[0].violation_id.endswith("::88888")
+    assert "no tiene ningun claim" in matches[0].message
+
+
+def test_literal_case19_no_claim_with_explicit_date_is_error() -> None:
+    """Caso 19: campo SIN ningun claim que contiene una fecha ISO --
+    ERROR (mismo cierre de bypass, aplicado a unsupported_explicit_date)."""
+    package = _package()
+    draft = _draft(
+        context="Vigente desde 2099-01-01",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    matches = [v for v in violations if v.rule == "unsupported_explicit_date"]
+    assert len(matches) == 1
+    assert matches[0].violation_id.endswith("::2099-01-01")
+    assert "no tiene ningun claim" in matches[0].message
+
+
+def test_literal_case20_no_claim_no_governed_fact_remains_valid() -> None:
+    """Caso 20: campo SIN ningun claim, pero SIN ningun hecho explicito
+    gobernado (numero/fecha/literal) -- sigue sin violacion, exactamente
+    como en v1.18.2: el cierre del bypass NUNCA exige un claim para un
+    campo que no afirma nada que requiera evidencia."""
+    package = _package()
+    draft = _draft(
+        context="Este proceso se aplica en el contexto de transferencias.",
+        claims=[
+            Claim(
+                claim_id="c1",
+                field=ClaimField.CONDITION,
+                evidence_paths=["$.decision"],
+                evidence_ids=["ev-decision"],
+            )
+        ],
+    )
+    violations = evaluate_guardrail(draft, package)
+    assert violations == []

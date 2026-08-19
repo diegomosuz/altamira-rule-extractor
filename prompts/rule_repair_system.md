@@ -44,6 +44,43 @@ cambio.
 - Nunca reenvies un campo con el mismo texto y las mismas evidence_refs
   que el borrador rechazado cuando ese campo tiene una violacion
   pendiente: eso repite el mismo error.
+- Si una violacion es "unsupported_explicit_literal" (un valor entre
+  comillas del campo, p. ej. 'A' o 'D203', no aparece en evidencia
+  autoritativa) -- SOLO cuentan como ancla autoritativa los alias del
+  EVIDENCE_CATALOG de tipo "decision" o "return_codes" (nunca
+  code_slice, domain_glossary, table_effects ni ningun otro tipo,
+  aunque contengan el mismo texto): tienes EXACTAMENTE dos
+  correcciones validas -- elige una, nunca dejes el campo sin cambios:
+  (a) agrega al evidence_refs del claim de ese campo un alias de tipo
+      "decision" o "return_codes" (aprobado) cuya descripcion muestre
+      EXACTAMENTE ese valor (mismo literal, sin aproximar); o
+  (b) si ningun alias de esos dos tipos respalda ese valor exacto,
+      elimina UNICAMENTE ese valor especifico del texto (conserva el
+      resto del contenido sin cambios) -- nunca lo sustituyas por otro
+      valor "parecido" o "mas probable" (p. ej. nunca cambies 'D204' a
+      'D203' para que coincida: si el valor que el campo afirma es
+      incorrecto o no esta soportado, el campo debe dejar de afirmarlo,
+      nunca afirmar en su lugar un valor distinto que el borrador
+      original nunca menciono).
+- Si el mensaje de una violacion indica que el campo "no tiene ningun
+  claim que lo respalde" (unsupported_explicit_number/_date/_literal
+  sobre un campo sin ningun claim): el campo SI tiene un hecho
+  explicito (numero/fecha/literal) que exige evidencia, aunque el
+  borrador rechazado nunca le haya asignado un claim. Tienes las MISMAS
+  dos correcciones validas de arriba -- agregar un claim nuevo para ese
+  campo citando un alias autoritativo real que respalde el hecho
+  exacto, o eliminar UNICAMENTE ese hecho del texto -- nunca dejar el
+  campo sin claim mientras el hecho explicito sigue presente en el
+  texto: eso repite exactamente la misma violacion.
+- Nunca reemplaces un valor de negocio no soportado por otro valor
+  "cercano" o "probable" que si tenga soporte, nunca inventes evidencia
+  ni fabriques un alias que no exista en el EVIDENCE_CATALOG, nunca
+  copies un alias del catalogo dentro de un campo de texto libre (regla
+  ya existente arriba), y nunca elimines un hecho de negocio
+  AUTORITATIVO (uno que SI tiene un alias real que lo respalda)
+  unicamente para simplificar la reparacion: la correccion debe
+  preservar el significado de condition/effect/outcome tal como el
+  ContextPackage lo respalda, nunca debilitarlo.
 - Si una violacion es "unapproved_table_effect" (un claim cita un efecto
   de tabla sin approved_for_rule_text=true), el EVIDENCE_CATALOG indica,
   para cada alias de tipo table_effects, su tabla, operacion,
