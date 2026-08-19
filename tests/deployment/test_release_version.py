@@ -19,14 +19,14 @@ def test_pyproject_pom_and_package_versions_match() -> None:
     assert pyproject_version == pom_version == package_version
 
 
-def test_current_release_version_is_1_18_2() -> None:
-    """Hotfix v1.18.2 (production bugfix sobre v1.18.1 ya publicado):
-    PATCH, no MINOR -- reemplaza la dependencia de reintentos LLM para
-    la fuga de identificadores tecnicos en traceability por una
-    correccion deterministica (sin cambios de contrato/schema: el
-    unico campo nuevo en RepairAttemptRecord.response_hash ya era
-    opcional), no agrega funcionalidad nueva. El tag `v1.18.2` se crea
-    recien en la fase final de release, nunca aqui. (Anteriormente
-    `test_current_release_version_is_1_18_1`, ver historial de v1.18.1,
+def test_current_release_version_is_1_18_3() -> None:
+    """Hotfix v1.18.3 (endurecimiento de confiabilidad sobre v1.18.2 ya
+    publicado): PATCH, no MINOR -- fiabilidad de Claims de evidencia del
+    guardrail (literales de negocio, gobernanza field-first, completitud
+    por campo/multi-campo) y normalizacion de limites de token en el
+    parser, sin cambios de contrato/schema persistido ni de deteccion de
+    candidatos. El tag `v1.18.3` se crea recien en la fase final de
+    release, nunca aqui. (Anteriormente
+    `test_current_release_version_is_1_18_2`, ver historial de v1.18.2,
     ya publicado e inmutable.)"""
-    assert _read_pyproject_version() == "1.18.2"
+    assert _read_pyproject_version() == "1.18.3"

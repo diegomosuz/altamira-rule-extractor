@@ -69,9 +69,35 @@ evidencia citada por el `claim` correspondiente de ese campo.
 
 Misma regla, para fechas explícitas.
 
-Ambas violaciones son de severidad ERROR y bloquean
+### `unsupported_explicit_literal`
+
+Un literal de negocio entre comillas (p. ej. `'API'`, `'D203'`) en el
+texto del campo que no aparece, literalmente, en evidencia
+**autoritativa acotada**: únicamente `$.decision`
+(`expression`/`normalized_expression`) o un `$.effects.return_codes[i]`
+con `approved_for_rule_text=true` — nunca `code_slice`,
+`domain_glossary`, `table_effects` ni ningún otro tipo de evidencia,
+aunque contengan el mismo texto.
+
+Las tres violaciones son de severidad ERROR y bloquean
 `EVIDENCE_VALIDATED` — nunca se degradan a warning para ningún campo
 de negocio.
+
+### Gobernanza field-first (campos gobernados)
+
+Para `title`/`context`/`statement`/`condition`/`effect`/
+`parameter_source`/`parameters` (nunca `traceability`/`limitations`,
+que conservan su mecanismo propio), la evaluación es **field-first**:
+el campo siempre se evalúa exista o no un `claim` que lo referencie. Un
+campo sin ningún `claim` produce una evidencia vacía, así que cualquier
+número/fecha/literal gobernado en su texto viola de inmediato — la
+ausencia de un `claim` nunca vuelve invisible un hecho explícito
+gobernado.
+
+Esta evaluación es **por campo, de forma independiente**: un `claim`
+que respalda `statement` nunca satisface una violación sobre
+`condition`, `effect` ni ningún otro campo — cada campo con un hecho
+gobernado necesita su propio `claim`.
 
 ## Alias de evidencia
 
@@ -151,6 +177,32 @@ Reglas estrictas:
 - Nunca inventa una evidencia: el token debe existir literalmente en
   el ancla candidata.
 
+## Guía de reparación con ancla explícita
+
+Cuando una violación `unsupported_explicit_number`/`_date`/`_literal`
+no puede resolverse por el aumento determinístico anterior (porque el
+campo no tiene ningún `claim` que ampliar), el **mensaje** de la
+violación que recibe el modelo de reparación LLM incluye la misma
+búsqueda de ancla autoritativa ya resuelta: indica explícitamente la
+ruta (`$.decision` o `$.effects.return_codes[i]`) cuando existe, o
+declara explícitamente que ninguna evidencia autoritativa respalda el
+valor cuando no existe — en ese caso la única corrección válida es
+eliminar el valor, nunca sustituirlo. Esto es enriquecimiento de
+**texto del mensaje** únicamente: nunca crea ni modifica un `claim` por
+sí mismo, nunca toca ningún campo de `RuleDraft`.
+
+## Creación determinística de `Claim`: explícitamente rechazada
+
+Ningún mecanismo determinístico de este guardrail **crea** un `claim`
+donde no existía ninguno — únicamente puede **ampliar** las citas de
+evidencia de un `claim` ya existente (ver arriba). Aunque una sola
+ancla autoritativa (p. ej. `$.decision`) respalde un token gobernado
+específico, atribuir automáticamente todo el campo a esa ancla podría
+afirmar falsamente que el resto del contenido del campo también está
+respaldado. Por eso la responsabilidad de crear el `claim` inicial
+sigue siendo exclusivamente del modelo (writer o reparación) — el
+guardrail solo valida y, cuando es seguro, amplía.
+
 ## Qué pueden cambiar las intervenciones determinísticas
 
 - El contenido de `traceability` (únicamente los dos mecanismos
@@ -160,10 +212,12 @@ Reglas estrictas:
 
 ## Qué NO pueden cambiar
 
-- El valor de `condition`, `effect`, `parameters`, `outcome_code`,
-  `parameter_source`.
+- El valor de `title`, `context`, `statement`, `condition`, `effect`,
+  `parameters`, `parameter_source`, `outcome_code`.
 - El `outcome_code` o cualquier hecho estructural derivado del
   `ContextPackage`.
+- Ningún `claim` no puede crearse desde cero (ver "Creación
+  determinística de `Claim`" arriba).
 - La severidad de `unsupported_explicit_number`/
   `unsupported_explicit_date` para ningún campo de negocio — nunca se
   degrada a warning ni se desactiva.

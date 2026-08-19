@@ -4,10 +4,14 @@
 > deliberadamente históricos (fijan la edición en que este manifiesto se
 > cerró, Fase 15B4-CANDIDATE-QUALITY-5D/5D-SAFETY) — no se renombra en
 > cada release. La matriz permanece vigente sin cambios a través de
-> v1.18.0/v1.18.1/v1.18.2: ninguna de esas correcciones agregó, quitó ni
-> reclasificó una capacidad de esta lista (todas fueron correcciones de
-> confiabilidad del guardrail/LLM o de fidelidad de un campo ya
-> existente, nunca de qué candidato se detecta). La fila `STATE_TRANSITION`
+> v1.18.0/v1.18.1/v1.18.2/v1.18.3: ninguna de esas correcciones agregó,
+> quitó ni reclasificó una capacidad de esta lista (todas fueron
+> correcciones de confiabilidad del guardrail/LLM o de fidelidad de un
+> campo ya existente, nunca de qué candidato se detecta). v1.18.3
+> endureció exclusivamente la fiabilidad de Claims de evidencia del
+> guardrail (campos gobernados, incluido `effect`, y completitud
+> multi-campo) -- cero cambio de deteccion de candidatos, ver
+> `docs/release/RELEASE_NOTES_1.18.3.md`. La fila `STATE_TRANSITION`
 > (case `gt-positive-sqlcode-evaluate-state-transition`) tiene una nota
 > específica sobre la mejora de v1.18.2 — ver más abajo. Si una futura
 > capacidad realmente nueva lo justifica, evaluar un manifiesto v1.18.x

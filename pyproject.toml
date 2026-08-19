@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "altamira-rule-extractor"
-version = "1.18.2"
+version = "1.18.3"
 description = "Extractor de reglas de negocio Altamira sobre paquetes COBOL y grafo semantico Neo4j"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

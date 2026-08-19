@@ -13,7 +13,7 @@ from altamira_extractor.logging_setup import configure_logging, redact_text
 
 
 def test_package_has_version() -> None:
-    assert __version__ == "1.18.2"
+    assert __version__ == "1.18.3"
 
 
 def test_settings_load_with_defaults(monkeypatch) -> None:

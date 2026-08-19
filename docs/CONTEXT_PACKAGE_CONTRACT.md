@@ -126,6 +126,19 @@ EVALUATE/WHEN", para el defecto real que motivó esta distinción.
 
 No afirmar como efecto directo un elemento `PROGRAM_CONTEXT`.
 
+### Preservación de `return_code_effect`
+
+Cuando `RuleCandidate.outcome_code` está definido, la construcción del
+`ContextPackage` garantiza de forma **incondicional** que
+`effects.return_codes` contiene ese código — nunca lo pierde ni lo
+sustituye silenciosamente por un valor secundario (p. ej. una
+heurística V1-only del grafo, que puede diferir legítimamente para
+candidatos V2 sin que eso sea un defecto). Esto asegura que un
+candidato con `outcome_code` conocido siempre tenga evidencia
+`kind='return_code_effect'` disponible en `evidence` — un
+`ContextPackage` que perdiera ese hecho no se construye (falla
+explícitamente antes de persistirse).
+
 ## D6 - Batch
 
 En V1:
